@@ -24,11 +24,36 @@
 (defgeneric send-request (provider request))
 (defgeneric stream-request (provider request event-handler))
 
+(defun provider-summary-content (content &key (limit 240))
+  (cond
+    ((stringp content)
+     (if (> (length content) limit)
+         (concatenate 'string (subseq content 0 limit) "...")
+         content))
+    (t
+     content)))
+
+(defun provider-transcript-entry (entry)
+  (list :role (getf entry :role)
+        :content (provider-summary-content (getf entry :content))))
+
+(defun provider-session-summary (session)
+  (list :id (agent-session-id session)
+        :cwd (agent-session-cwd session)
+        :package (agent-session-package session)
+        :plan (agent-session-plan session)
+        :approved-policies (session-approved-policies session)
+        :pending-action-count (length (agent-session-pending-actions session))
+        :active-worker-count (active-worker-count session)
+        :transcript-count (length (agent-session-transcript session))
+        :recent-transcript (mapcar #'provider-transcript-entry
+                                   (recent-session-transcript session))))
+
 (defun make-provider-request-from-session (prompt session)
   (let ((active-session (or session (ignore-errors (ensure-session)))))
     (make-provider-request :prompt prompt
                            :session-summary (when active-session
-                                              (session-summary active-session)))))
+                                              (provider-session-summary active-session)))))
 
 (defun assistant-response->string (response)
   (assistant-response-message response))
@@ -100,19 +125,51 @@
                   (json-object->keyword-plist payload)
                   (normalize-json-derived-value payload)))))
 
+(defun valid-assistant-action-p (action)
+  (case (assistant-action-type action)
+    (:EVAL
+     (let ((payload (assistant-action-payload action)))
+       (or (stringp payload)
+           (and (listp payload)
+                (or (getf payload :FORM)
+                    (getf payload :form)
+                    (getf payload :CODE)
+                    (getf payload :code)
+                    (getf payload :EXPRESSION)
+                    (getf payload :expression))))))
+    (:TOOL
+     (let ((payload (assistant-action-payload action)))
+       (keywordp (or (getf payload :TOOL-ID)
+                     (getf payload :tool-id)
+                     (getf payload :TOOL_ID)))))
+    (:PATCH t)
+    (t nil)))
+
 (defun decode-assistant-response-object (object)
   (make-assistant-response
    :message (or (json-object-value object "message") "")
-   :actions (mapcar #'decode-assistant-action
-                    (or (json-object-value object "actions") '()))
+   :actions (remove nil
+                    (mapcar (lambda (entry)
+                              (let ((action (decode-assistant-action entry)))
+                                (and (valid-assistant-action-p action)
+                                     action)))
+                            (or (json-object-value object "actions") '())))
    :metadata (json-object->keyword-plist (or (json-object-value object "metadata") '()))))
 
 (defun parse-eval-action-form (payload)
   (cond
     ((stringp payload)
      (read-from-string payload))
-    ((and (listp payload) (or (getf payload :FORM) (getf payload :form)))
-     (read-from-string (or (getf payload :FORM) (getf payload :form))))
+    ((listp payload)
+     (let ((source (or (getf payload :FORM)
+                       (getf payload :form)
+                       (getf payload :CODE)
+                       (getf payload :code)
+                       (getf payload :EXPRESSION)
+                       (getf payload :expression))))
+       (if source
+           (read-from-string source)
+           payload)))
     (t
      payload)))
 
@@ -167,6 +224,7 @@
            (string= provider-name "openai-compatible"))
        (make-instance 'openai-compatible-provider
                       :model (config-model config)
+                      :fast-model (config-fast-model config)
                       :api-base (or (config-api-base config) "https://api.openai.com/v1")
                       :api-key (config-api-key config)))
       (t

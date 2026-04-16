@@ -2,6 +2,7 @@
 
 (defparameter *shell-package* (find-package '#:sbcl-agent-user))
 (defparameter *stream-event-listener* nil)
+(defparameter *default-ask-streaming* nil)
 
 (defun print-shell-help ()
   (format t "Lisp shell commands:~%")
@@ -74,11 +75,32 @@
   (let ((operations (first arguments)))
     (apply-patch-operations session operations)))
 
-(defun stage-response-actions (response session)
-  (let ((actions (assistant-response-actions response)))
-    (when actions
-      (stage-pending-actions session actions))
-    actions))
+(defun split-assistant-actions (actions)
+  (let ((immediate '())
+        (staged '()))
+    (dolist (action actions)
+      (if (eq (assistant-action-type action) :eval)
+          (push action immediate)
+          (push action staged)))
+    (values (nreverse immediate) (nreverse staged))))
+
+(defun process-response-actions (response session)
+  (multiple-value-bind (immediate staged)
+      (split-assistant-actions (assistant-response-actions response))
+    (let ((immediate-results (when immediate
+                               (execute-assistant-action-list immediate session))))
+      (if staged
+          (stage-pending-actions session staged)
+          (clear-pending-actions session))
+      (list :immediate-actions immediate
+            :immediate-results immediate-results
+            :staged-actions staged))))
+
+(defun execute-assistant-action-command (arguments session)
+  (let ((action (first arguments)))
+    (unless (typep action 'assistant-action)
+      (error "ASSISTANT-ACTION command requires an assistant-action object"))
+    (execute-assistant-action action session)))
 
 (defun execute-pending-actions-command (session)
   (let ((actions (agent-session-pending-actions session)))
@@ -116,6 +138,10 @@
       (error "ASK keyword options must be a property list"))
     (values prompt options)))
 
+(defun render-provider-timing (phase payload)
+  (format t "~&assistant-timing> ~S ~S~%" phase payload)
+  (finish-output))
+
 (defun render-stream-event (event)
   (case (provider-event-type event)
     (:message-start
@@ -137,6 +163,10 @@
   (when *stream-event-listener*
     (funcall *stream-event-listener* event))
   (append events (list event)))
+
+(defun option-present-p (plist key)
+  (and (listp plist)
+       (member key plist)))
 
 (defun remove-plist-key (plist key)
   (cond
@@ -165,7 +195,9 @@
                   session))
         (progn
           (append-transcript-entry session :user prompt)
-          (let ((stream-p (or (plist-value options :stream nil)
+          (let ((stream-p (or (and (option-present-p options :stream)
+                                   (plist-value options :stream nil))
+                              *default-ask-streaming*
                               (not (null *task-progress-callback*)))))
             (when *task-progress-callback*
               (funcall *task-progress-callback* :ask-started (list :prompt prompt :stream-p stream-p)))
@@ -176,7 +208,9 @@
                                                  (lambda (event)
                                                    (setf events (handle-provider-stream-event session event events)))
                                                  session)))
-                    (let ((staged-actions (stage-response-actions response session)))
+                    (let* ((action-report (process-response-actions response session))
+                           (staged-actions (getf action-report :staged-actions))
+                           (immediate-results (getf action-report :immediate-results)))
                       (append-transcript-entry session :assistant (assistant-response->string response))
                       (append-session-event session :assistant-response response)
                       (when *task-progress-callback*
@@ -184,16 +218,21 @@
                                  :ask-response
                                  (list :message (assistant-response-message response)
                                        :staged-action-count (length staged-actions)
+                                       :immediate-action-count (length (getf action-report :immediate-actions))
                                        :stream-event-count (length events))))
                       (values (list :response response
                                     :staged-action-count (length staged-actions)
+                                    :immediate-action-count (length (getf action-report :immediate-actions))
+                                    :action-results immediate-results
                                     :streamed-p t
                                     :stream-event-count (length events)
                                     :stream-events events)
                               :ask
                               session))))
                 (let* ((response (send-prompt provider prompt session))
-                       (staged-actions (stage-response-actions response session)))
+                       (action-report (process-response-actions response session))
+                       (staged-actions (getf action-report :staged-actions))
+                       (immediate-results (getf action-report :immediate-results)))
                   (append-transcript-entry session :assistant (assistant-response->string response))
                   (append-session-event session :assistant-response response)
                   (when *task-progress-callback*
@@ -201,9 +240,12 @@
                              :ask-response
                              (list :message (assistant-response-message response)
                                    :staged-action-count (length staged-actions)
+                                   :immediate-action-count (length (getf action-report :immediate-actions))
                                    :stream-event-count 0)))
                   (values (list :response response
                                 :staged-action-count (length staged-actions)
+                                :immediate-action-count (length (getf action-report :immediate-actions))
+                                :action-results immediate-results
                                 :streamed-p nil
                                 :stream-event-count 0)
                           :ask
@@ -396,6 +438,11 @@
          (append-transcript-entry active-session :user (command-form command))
          (append-transcript-entry active-session :system result)
          (values result :eval active-session)))
+      (:assistant-action
+       (let ((result (execute-assistant-action-command (command-arguments command) active-session)))
+         (append-transcript-entry active-session :assistant-action (command-form command))
+         (append-transcript-entry active-session :system result)
+         (values result :assistant-action active-session)))
       (:ask
        (execute-ask-command (command-arguments command) provider active-session))
       (:execute-actions
@@ -526,6 +573,8 @@
 (defun print-shell-result (result kind)
   (case kind
     (:help nil)
+    (:assistant-action
+     (format t "assistant-action-result> ~S~%" result))
     (:ask
      (if (getf result :enqueued-p)
          (format t "assistant-task> ~S~%" (getf result :queued-task))
@@ -559,12 +608,15 @@
     (t
      (format t "=> ~S~%" result))))
 
-(defun start-shell (provider &optional session)
+(defun start-shell (provider &optional session &key (default-stream-p nil))
   (let ((active-session (ensure-session session)))
     (format t "Starting Lisp-native shell with provider ~A.~%" (provider-name provider))
+    (when default-stream-p
+      (format t "Interactive streaming is enabled by default for ask requests.~%"))
     (format t "Session: ~A~%" (agent-session-id active-session))
     (format t "Enter (help) for commands. Press Ctrl-D to exit.~%")
-    (let ((*stream-event-listener* #'render-stream-event))
+    (let ((*stream-event-listener* #'render-stream-event)
+          (*default-ask-streaming* default-stream-p))
       (loop
         for form = (read-shell-form active-session)
         do (if (eq form :eof)

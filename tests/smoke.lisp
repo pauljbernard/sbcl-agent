@@ -40,11 +40,75 @@
               (get-output-stream-string stdout)
               (get-output-stream-string stderr)))))
 
+(defun run-command-with-input (program arguments input &key directory)
+  (let ((stdout (make-string-output-stream))
+        (stderr (make-string-output-stream))
+        (stdin (make-string-input-stream input)))
+    (let ((process (sb-ext:run-program program
+                                       arguments
+                                       :search t
+                                       :input stdin
+                                       :output stdout
+                                       :error stderr
+                                       :wait t
+                                       :directory directory)))
+      (values (sb-ext:process-exit-code process)
+              (get-output-stream-string stdout)
+              (get-output-stream-string stderr)))))
+
 (defun make-test-provider ()
   (sbcl-agent::make-provider
    (sbcl-agent::make-config :provider "mock"
                             :model "gpt-5"
                             :working-directory "/tmp/")))
+
+(defclass mixed-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider mixed-action-provider))
+  "mixed-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider mixed-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider mixed-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Executing eval now and staging the file read."
+   :actions (list (sbcl-agent::make-assistant-action :type :eval :payload '(:form "(+ 100 203)"))
+                  (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read :arguments (:path "src/main.lisp"))))
+   :metadata '(:provider :mixed-action-test)))
+
+(defclass journal-date-time-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider journal-date-time-provider))
+  "journal-date-time-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider journal-date-time-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider journal-date-time-provider) request)
+  (declare (ignore provider))
+  (let* ((prompt (sbcl-agent::provider-request-prompt request))
+         (summary (sbcl-agent::provider-request-session-summary request))
+         (transcript (getf summary :recent-transcript))
+         (assistant-turn (find :assistant transcript :from-end t :key (lambda (entry) (getf entry :role))))
+         (prior-message (and assistant-turn (getf assistant-turn :content)))
+         (code "(multiple-value-bind (sec min hour day month year) (get-decoded-time) (format nil \"~D-~D-~D ~D:~D:~D\" year month day hour min sec))"))
+    (cond
+      ((search "current data and time" prompt :test #'char-equal)
+       (sbcl-agent::make-assistant-response
+        :message code
+        :actions '()
+        :metadata '(:provider :journal-date-time-test :step :suggest)))
+      ((search "now go execute that" prompt :test #'char-equal)
+       (unless (and prior-message (search "get-decoded-time" prior-message :test #'char-equal))
+         (error "journal-date-time-provider expected the prior assistant suggestion in recent transcript"))
+       (sbcl-agent::make-assistant-response
+        :message "Executing the previously suggested date/time code."
+        :actions (list (sbcl-agent::make-assistant-action :type :eval :payload prior-message))
+        :metadata '(:provider :journal-date-time-test :step :execute)))
+      (t
+       (error "journal-date-time-provider received unexpected prompt ~S" prompt)))))
 
 (defun make-test-git-repo ()
   (let* ((root (uiop:ensure-directory-pathname
@@ -188,6 +252,81 @@
                     (sbcl-agent::config-provider config)
                     "legacy key filename should still activate the OpenAI-compatible provider"))))
 
+(defun config-with-overrides-test ()
+  (let* ((base (sbcl-agent::make-config :provider "mock"
+                                        :model "gpt-5"
+                                        :fast-model "gpt-4.1-mini"
+                                        :api-base nil
+                                        :api-key nil
+                                        :api-key-present-p nil
+                                        :working-directory "/tmp/base/"))
+         (updated (sbcl-agent::config-with-overrides base
+                                                     :provider "openai-compatible"
+                                                     :model "gpt-5.1"
+                                                     :api-base "https://example.test/v1"
+                                                     :working-directory "/tmp/override")))
+    (assert-equal "openai-compatible"
+                  (sbcl-agent::config-provider updated)
+                  "config-with-overrides should replace the provider when requested")
+    (assert-equal "gpt-5.1"
+                  (sbcl-agent::config-model updated)
+                  "config-with-overrides should replace the model when requested")
+    (assert-equal "gpt-4.1-mini"
+                  (sbcl-agent::config-fast-model updated)
+                  "config-with-overrides should preserve the fast model")
+    (assert-equal "https://example.test/v1"
+                  (sbcl-agent::config-api-base updated)
+                  "config-with-overrides should replace the api base when requested")
+    (assert-true (search "/tmp/override/" (sbcl-agent::config-working-directory updated))
+                 "config-with-overrides should normalize the working directory")))
+
+(defun openai-request-model-selection-test ()
+  (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
+                                  :model "gpt-5"
+                                  :fast-model "gpt-4.1-mini"
+                                  :api-base "https://api.openai.com/v1"
+                                  :api-key "test-key"))
+         (simple-request (sbcl-agent::make-provider-request :prompt "create a program which will tell me the current date and time of day" :session-summary '(:recent-transcript ())))
+         (deep-request (sbcl-agent::make-provider-request :prompt "provide a deep architecture analysis" :session-summary '(:recent-transcript ()))))
+    (assert-equal "gpt-4.1-mini"
+                  (sbcl-agent::openai-request-model provider simple-request)
+                  "ordinary asks should route through the fast model")
+    (assert-equal "gpt-5"
+                  (sbcl-agent::openai-request-model provider deep-request)
+                  "deep asks should stay on the configured primary model")))
+
+(defun invalid-eval-action-dropped-test ()
+  (let* ((response (sbcl-agent::decode-assistant-response-object
+                    '(("message" . "hi")
+                      ("actions" . ((("type" . "eval")
+                                         ("payload" . (("note" . "missing code"))))))
+                      ("metadata" . ()))))
+         (actions (sbcl-agent::assistant-response-actions response)))
+    (assert-equal 0
+                  (length actions)
+                  "malformed eval actions should be dropped during decode")))
+
+(defun chat-argument-parsing-test ()
+  (let ((options (sbcl-agent::parse-chat-arguments '("-i"
+                                                     "--provider" "openai-compatible"
+                                                     "--model" "gpt-5.1"
+                                                     "--api-base" "https://example.test/v1"
+                                                     "--cwd" "/tmp/chat-root"))))
+    (assert-true (sbcl-agent::chat-options-default-stream-p options)
+                 "parse-chat-arguments should enable interactive streaming for -i")
+    (assert-equal "openai-compatible"
+                  (sbcl-agent::chat-options-provider options)
+                  "parse-chat-arguments should capture provider overrides")
+    (assert-equal "gpt-5.1"
+                  (sbcl-agent::chat-options-model options)
+                  "parse-chat-arguments should capture model overrides")
+    (assert-equal "https://example.test/v1"
+                  (sbcl-agent::chat-options-api-base options)
+                  "parse-chat-arguments should capture api base overrides")
+    (assert-equal "/tmp/chat-root"
+                  (sbcl-agent::chat-options-working-directory options)
+                  "parse-chat-arguments should capture working directory overrides")))
+
 (defun command-normalization-test ()
   (let ((ask-command (sbcl-agent::normalize-form-command '(ask "inspect src/main.lisp")))
         (execute-actions-command (sbcl-agent::normalize-form-command '(execute-actions)))
@@ -248,8 +387,10 @@
                      "ask command should be handled by the provider")
         (assert-equal 0 (getf result :staged-action-count)
                       "ask without actions should stage zero actions")
-        (assert-equal 4 (length (sbcl-agent::agent-session-events updated-session))
-                      "ask dispatch should record command, transcript, and response events")))))
+        (assert-equal 0 (getf result :immediate-action-count)
+                      "ask without eval actions should auto-execute nothing")
+        (assert-equal 5 (length (sbcl-agent::agent-session-events updated-session))
+                      "ask dispatch should record command, transcript, pending-action reset, and response events")))))
 
 (defun streaming-provider-test ()
   (let* ((provider (make-test-provider))
@@ -274,6 +415,30 @@
                     (length (sbcl-agent::assistant-response-actions assembled))
                     "stream assembly should preserve proposed actions"))))
 
+(defun openai-stream-line-parser-test ()
+  (let* ((line (concatenate 'string "data: " "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"))
+         (chunk (sbcl-agent::parse-openai-stream-json-line line)))
+    (assert-true (sbcl-agent::openai-stream-data-line-p line)
+                 "openai stream parser should recognize data lines")
+    (assert-equal "Hello"
+                  (sbcl-agent::extract-openai-stream-delta chunk)
+                  "openai stream parser should extract delta content from a chunk")
+    (assert-true (sbcl-agent::openai-stream-done-p "data: [DONE]")
+                 "openai stream parser should recognize the terminal DONE line")))
+
+(defun openai-stream-response-decode-test ()
+  (let* ((content "{\"message\":\"hi\",\"actions\":[],\"metadata\":{\"provider\":\"openai-compatible\"}}")
+         (response (sbcl-agent::decode-openai-content-response content "gpt-5")))
+    (assert-equal "hi"
+                  (sbcl-agent::assistant-response-message response)
+                  "openai stream decoder should preserve the assistant message")
+    (assert-equal "openai-compatible"
+                  (getf (sbcl-agent::assistant-response-metadata response) :PROVIDER)
+                  "openai stream decoder should preserve provider metadata from the JSON payload")
+    (assert-equal "gpt-5"
+                  (getf (sbcl-agent::assistant-response-metadata response) :MODEL)
+                  "openai stream decoder should tag the model metadata")))
+
 (defun streaming-ask-dispatch-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -294,6 +459,36 @@
                          :key #'sbcl-agent::event-kind)
                    "streaming ask should log provider stream events"))))
 
+(defun default-streaming-ask-dispatch-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))))
+    (let ((sbcl-agent::*default-ask-streaming* t))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command command provider session)
+        (declare (ignore kind))
+        (assert-true (getf result :streamed-p)
+                     "default shell streaming should stream ask requests without an explicit :stream option")
+        (assert-true (> (getf result :stream-event-count) 3)
+                     "default shell streaming should still record provider stream events")
+        (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                      "default shell streaming should still stage assistant actions")))))
+
+(defun chat-interactive-flag-test ()
+  (multiple-value-bind (exit-code stdout stderr)
+      (run-command-with-input "./bin/sbcl-agent"
+                              '("chat" "-i" "--provider" "mock" "--model" "gpt-5")
+                              (concatenate 'string "(ask \"ping\")" (string #\Newline))
+                              :directory #P"/Volumes/data/development/sbcl-agent/")
+    (declare (ignore stderr))
+    (assert-equal 0 exit-code
+                  "chat -i should exit cleanly after stdin closes")
+    (assert-true (search "Interactive streaming is enabled by default" stdout)
+                 "chat -i should announce the default interactive streaming mode")
+    (assert-true (search "assistant-stream>" stdout)
+                 "chat -i should render streamed assistant output")
+    (assert-true (search "Mock response: ping" stdout)
+                 "chat -i should stream the assistant response content")))
 
 (defun ask-enqueue-test ()
   (let* ((provider (make-test-provider))
@@ -1352,10 +1547,34 @@
       (declare (ignore kind))
       (assert-equal 1 (getf result :staged-action-count)
                     "ask flow should stage one proposed action")
+      (assert-equal 0 (getf result :immediate-action-count)
+                    "tool-only ask flow should not auto-execute any actions")
       (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "session should retain one staged action")
       (assert-true (= 0 (length (or (getf result :action-results) '())))
-                   "ask flow should not execute actions immediately"))))
+                   "tool and patch actions should not execute immediately"))))
+
+(defun assistant-mixed-action-ask-test ()
+  (let* ((provider (make-instance 'mixed-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(ask "execute and inspect"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :ask kind "mixed-action ask should dispatch as :ask")
+      (assert-equal 1 (getf result :immediate-action-count)
+                    "ask should auto-execute eval actions")
+      (assert-equal 1 (getf result :staged-action-count)
+                    "ask should still stage tool actions")
+      (assert-equal 1 (length (getf result :action-results))
+                    "ask should return immediate eval results")
+      (assert-equal 303
+                    (getf (first (getf result :action-results)) :result)
+                    "immediate eval action should execute in the current image")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "only non-eval actions should remain staged")
+      (assert-equal :tool
+                    (sbcl-agent::assistant-action-type (first (sbcl-agent::agent-session-pending-actions updated-session)))
+                    "the staged remainder should be the tool action"))))
 
 (defun assistant-action-execution-test ()
   (let* ((provider (make-test-provider))
@@ -1381,10 +1600,66 @@
 (defun assistant-eval-action-execution-test ()
   (let* ((session (sbcl-agent::make-default-session))
          (action (sbcl-agent::make-assistant-action :type :eval
-                                                    :payload '(:form "(+ 100 203)"))))
+                                                    :payload '(:form "(+ 100 203)")))
+         (code-action (sbcl-agent::make-assistant-action :type :eval
+                                                         :payload '(:code "(+ 100 203)"))))
     (assert-equal 303
                   (sbcl-agent::execute-assistant-action action session)
-                  "assistant eval actions should execute Common Lisp forms in the current image")))
+                  "assistant eval actions should execute Common Lisp forms in the current image")
+    (assert-equal 303
+                  (sbcl-agent::execute-assistant-action code-action session)
+                  "assistant eval actions should also accept payloads under :code")))
+
+(defun pasted-assistant-action-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (action (sbcl-agent::make-assistant-action :type :eval
+                                                    :payload '(:form "(+ 100 203)")))
+         (command (sbcl-agent::normalize-form-command action)))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :assistant-action kind
+                    "pasted assistant-action objects should normalize into a dedicated shell command")
+      (assert-equal 303 result
+                    "pasted assistant-action command should execute the assistant action payload")
+      (assert-true (find :assistant-action
+                         (sbcl-agent::agent-session-transcript updated-session)
+                         :key (lambda (entry) (getf entry :role)))
+                   "executed assistant actions should be recorded in the transcript"))))
+
+(defun journal-date-time-followup-execution-test ()
+  (let* ((provider (make-instance 'journal-date-time-provider))
+         (session (sbcl-agent::make-default-session))
+         (first-command (sbcl-agent::normalize-form-command '(ask "create code that tells me the current data and time"))))
+    (multiple-value-bind (first-result first-kind updated-session)
+        (sbcl-agent::execute-command first-command provider session)
+      (assert-equal :ask first-kind
+                    "initial journal ask should dispatch as :ask")
+      (assert-true (search "get-decoded-time"
+                           (sbcl-agent::assistant-response-message (getf first-result :response))
+                           :test #'char-equal)
+                   "initial journal ask should return the suggested date/time code")
+      (assert-equal 0 (getf first-result :immediate-action-count)
+                    "initial journal ask should not auto-execute anything")
+      (let ((second-command (sbcl-agent::normalize-form-command '(ask "now go execute that"))))
+        (multiple-value-bind (second-result second-kind final-session)
+            (sbcl-agent::execute-command second-command provider updated-session)
+          (declare (ignore final-session))
+          (assert-equal :ask second-kind
+                        "follow-up journal ask should dispatch as :ask")
+          (assert-equal 1 (getf second-result :immediate-action-count)
+                        "follow-up journal ask should auto-execute the remembered eval action")
+          (assert-equal 0 (getf second-result :staged-action-count)
+                        "follow-up journal ask should not leave staged actions behind")
+          (assert-equal 1 (length (getf second-result :action-results))
+                        "follow-up journal ask should report the eval result")
+          (let ((rendered (getf (first (getf second-result :action-results)) :result)))
+            (assert-true (stringp rendered)
+                         "executed journal code should return a date/time string")
+            (assert-true (search "-" rendered)
+                         "rendered date/time string should contain a date separator")
+            (assert-true (search ":" rendered)
+                         "rendered date/time string should contain a time separator")))))))
 
 (defun session-summary-recent-transcript-test ()
   (let ((session (sbcl-agent::make-default-session)))
@@ -1397,6 +1672,18 @@
       (assert-equal "second"
                     (getf (second (getf summary :recent-transcript)) :content)
                     "recent transcript should preserve the latest assistant turn"))))
+
+(defun provider-session-summary-compact-test ()
+  (let ((session (sbcl-agent::make-default-session)))
+    (sbcl-agent::append-transcript-entry session :user (make-string 400 :initial-element #\x))
+    (let ((summary (sbcl-agent::provider-session-summary session)))
+      (assert-true (null (getf summary :wait-summary))
+                   "provider session summary should omit heavyweight workflow fields")
+      (assert-equal 1
+                    (length (getf summary :recent-transcript))
+                    "provider session summary should keep recent transcript entries")
+      (assert-true (< (length (getf (first (getf summary :recent-transcript)) :content)) 260)
+                   "provider session summary should truncate oversized transcript content"))))
 
 (defun session-plan-test ()
   (let* ((provider (make-test-provider))
@@ -1774,6 +2061,14 @@
   (format t "PASS config-auto-provider-selection-test~%")
   (config-legacy-key-filename-test)
   (format t "PASS config-legacy-key-filename-test~%")
+  (config-with-overrides-test)
+  (format t "PASS config-with-overrides-test~%")
+  (openai-request-model-selection-test)
+  (format t "PASS openai-request-model-selection-test~%")
+  (invalid-eval-action-dropped-test)
+  (format t "PASS invalid-eval-action-dropped-test~%")
+  (chat-argument-parsing-test)
+  (format t "PASS chat-argument-parsing-test~%")
   (command-normalization-test)
   (format t "PASS command-normalization-test~%")
   (shell-eval-test)
@@ -1782,8 +2077,16 @@
   (format t "PASS ask-dispatch-test~%")
   (streaming-provider-test)
   (format t "PASS streaming-provider-test~%")
+  (openai-stream-line-parser-test)
+  (format t "PASS openai-stream-line-parser-test~%")
+  (openai-stream-response-decode-test)
+  (format t "PASS openai-stream-response-decode-test~%")
   (streaming-ask-dispatch-test)
   (format t "PASS streaming-ask-dispatch-test~%")
+  (default-streaming-ask-dispatch-test)
+  (format t "PASS default-streaming-ask-dispatch-test~%")
+  (chat-interactive-flag-test)
+  (format t "PASS chat-interactive-flag-test~%")
   (ask-enqueue-test)
   (format t "PASS ask-enqueue-test~%")
   (queued-ask-worker-test)
@@ -1886,12 +2189,20 @@
   (format t "PASS assistant-action-proposal-test~%")
   (assistant-action-staging-test)
   (format t "PASS assistant-action-staging-test~%")
+  (assistant-mixed-action-ask-test)
+  (format t "PASS assistant-mixed-action-ask-test~%")
   (assistant-action-execution-test)
   (format t "PASS assistant-action-execution-test~%")
   (assistant-eval-action-execution-test)
   (format t "PASS assistant-eval-action-execution-test~%")
+  (pasted-assistant-action-command-test)
+  (format t "PASS pasted-assistant-action-command-test~%")
+  (journal-date-time-followup-execution-test)
+  (format t "PASS journal-date-time-followup-execution-test~%")
   (session-summary-recent-transcript-test)
   (format t "PASS session-summary-recent-transcript-test~%")
+  (provider-session-summary-compact-test)
+  (format t "PASS provider-session-summary-compact-test~%")
   (session-plan-test)
   (format t "PASS session-plan-test~%")
   (capability-policy-model-test)

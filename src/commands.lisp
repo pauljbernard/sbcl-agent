@@ -13,6 +13,8 @@
 (defun normalize-form-command (form)
   (let ((operator (command-operator-symbol form)))
     (cond
+      ((typep form 'assistant-action)
+       (make-command :kind :assistant-action :form form :arguments (list form)))
       ((or (null operator)
            (not (member operator '("ask" "plan" "tool" "help" "approve" "patch" "execute-actions"
                                    "session/save" "session/load" "session/reset" "describe-session"

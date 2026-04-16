@@ -4,15 +4,67 @@
   (format t "sbcl-agent ~A~%" "0.1.0")
   (format t "Usage: sbcl-agent <command> [args]~%~%")
   (format t "Commands:~%")
-  (format t "  chat               Start the Lisp-native interactive shell.~%")
+  (format t "  chat [options]     Start the Lisp-native interactive shell.~%")
+  (format t "                     Options: -i, --provider NAME, --model NAME, --api-base URL, --cwd PATH~%")
   (format t "  exec <cmd...>      Run a shell command from the current directory.~%")
   (format t "  doctor             Print runtime and configuration diagnostics.~%")
   (format t "  help               Show this message.~%"))
+
+(defstruct chat-options
+  (default-stream-p nil :type boolean)
+  (provider nil :type (or null string))
+  (model nil :type (or null string))
+  (api-base nil :type (or null string))
+  (working-directory nil :type (or null string)))
 
 (defun normalize-arguments (arguments)
   (if (and arguments (string= (first arguments) "--"))
       (rest arguments)
       arguments))
+
+(defun require-option-value (name remaining-arguments)
+  (let ((value (first remaining-arguments)))
+    (unless value
+      (error "Missing value for ~A" name))
+    value))
+
+(defun parse-chat-arguments (arguments)
+  (let ((default-stream-p nil)
+        (provider nil)
+        (model nil)
+        (api-base nil)
+        (working-directory nil))
+    (loop while arguments
+          for argument = (pop arguments)
+          do (cond
+               ((or (string= argument "-i")
+                    (string= argument "--interactive-stream"))
+                (setf default-stream-p t))
+               ((string= argument "--provider")
+                (setf provider (require-option-value argument arguments))
+                (pop arguments))
+               ((string= argument "--model")
+                (setf model (require-option-value argument arguments))
+                (pop arguments))
+               ((string= argument "--api-base")
+                (setf api-base (require-option-value argument arguments))
+                (pop arguments))
+               ((or (string= argument "--cwd")
+                    (string= argument "--working-directory"))
+                (setf working-directory (require-option-value argument arguments))
+                (pop arguments))
+               (t
+                (error "Unknown chat option ~A" argument))))
+    (make-chat-options :default-stream-p default-stream-p
+                       :provider provider
+                       :model model
+                       :api-base api-base
+                       :working-directory working-directory)))
+
+(defun session-for-chat-config (config)
+  (or *current-session*
+      (setf *current-session*
+            (make-default-session :cwd (config-working-directory config)))))
 
 (defun doctor-command (config)
   (let ((session (ensure-session)))
@@ -74,7 +126,15 @@
       ((string= command "doctor")
        (doctor-command config))
       ((string= command "chat")
-       (start-shell (make-provider config) (ensure-session)))
+       (let* ((chat-options (parse-chat-arguments (rest arguments)))
+              (chat-config (config-with-overrides config
+                                                 :provider (chat-options-provider chat-options)
+                                                 :model (chat-options-model chat-options)
+                                                 :api-base (chat-options-api-base chat-options)
+                                                 :working-directory (chat-options-working-directory chat-options))))
+         (start-shell (make-provider chat-config)
+                      (session-for-chat-config chat-config)
+                      :default-stream-p (chat-options-default-stream-p chat-options))))
       ((string= command "exec")
        (exec-command (rest arguments)))
       (t

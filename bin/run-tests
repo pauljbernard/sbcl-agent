@@ -1,13 +1,15 @@
-#!/usr/bin/env sh
-set -eu
+#!/usr/bin/env -S sbcl --script
 
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
-PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
-export XDG_CACHE_HOME="$PROJECT_DIR/.cache"
+(defparameter *script-path*
+  (or *load-truename* *compile-file-truename* (truename *default-pathname-defaults*)))
 
-exec sbcl --noinform \
-  --non-interactive \
-  --eval '(require :asdf)' \
-  --load "$PROJECT_DIR/tutor-codex.asd" \
-  --eval '(asdf:test-system :tutor-codex)' \
-  --quit
+(defparameter *project-dir*
+  (make-pathname :directory (butlast (pathname-directory *script-path*))
+                 :name nil
+                 :type nil
+                 :defaults *script-path*))
+
+(require :asdf)
+(load (merge-pathnames #P"tutor-codex.asd" *project-dir*))
+(asdf:test-system :tutor-codex)
+(sb-ext:exit :code 0)

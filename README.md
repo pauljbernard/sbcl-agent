@@ -7,34 +7,56 @@
 This repository currently provides:
 
 - an ASDF system for SBCL
+- CL-native executable entrypoints in `bin/`
 - a CLI entrypoint with `chat`, `exec`, `doctor`, and `help`
 - a runtime config loader from environment variables
-- a provider abstraction with a working mock provider
-- a simple REPL loop for iterative prompt/response flows
+- a Lisp shell that accepts both ordinary forms and agent commands
+- a provider abstraction with a working mock provider and an OpenAI-compatible adapter
+- session state, event logging, and s-expression persistence
+- a first-class tool registry for workspace reads and process execution
+- policy-gated approval flows for process execution and patch application
+- staged assistant actions that require explicit `(execute-actions)` execution
+- an architecture document for the CL-native "turtles all the way down" design
 
 It does not yet provide:
 
-- real model API integration
 - streaming responses
-- session persistence
-- tool approval flows
-- patch application, sandboxing, or agent orchestration
+- sandbox isolation beyond in-process policy gating
+- richer agent orchestration such as task queues and background workers
+- native git workflow tools
 
 ## Layout
 
 ```text
-sbcl/
+sbcl-agent/
 ├── tutor-codex.asd
 ├── README.md
-├── tests/
+├── docs/
+│   ├── architecture.md
+│   └── implementation-plan.md
+├── bin/
+│   ├── run-tests
+│   └── tutor-codex
+├── src/
 │   ├── package.lisp
-│   └── smoke.lisp
-└── src/
+│   ├── config.lisp
+│   ├── json.lisp
+│   ├── provider-protocol.lisp
+│   ├── provider-mock.lisp
+│   ├── provider-openai.lisp
+│   ├── commands.lisp
+│   ├── events.lisp
+│   ├── session.lisp
+│   ├── tools-registry.lisp
+│   ├── tools-fs.lisp
+│   ├── tools-process.lisp
+│   ├── patch.lisp
+│   ├── shell.lisp
+│   ├── repl.lisp
+│   └── main.lisp
+└── tests/
     ├── package.lisp
-    ├── config.lisp
-    ├── provider.lisp
-    ├── repl.lisp
-    └── main.lisp
+    └── smoke.lisp
 ```
 
 ## Run
@@ -54,6 +76,16 @@ Examples:
 ./bin/run-tests
 ```
 
+Inside `chat`, the primary interface is Common Lisp:
+
+```lisp
+(+ 100 203)
+(ask "please read src/main.lisp")
+(execute-actions)
+(tool :fs/read :path "src/main.lisp")
+(describe-session)
+```
+
 ## Test
 
 Run the base test suite with:
@@ -64,6 +96,10 @@ Run the base test suite with:
 
 The first test is a runtime smoke test. It starts SBCL, loads the `tutor-codex` system, and validates a basic assertion so the suite can immediately catch a broken Lisp environment before higher-level behavior tests are added.
 
+## Architecture
+
+The architectural target for this project is documented in [docs/architecture.md](docs/architecture.md). The core idea is that the assistant interface, protocol, tools, and execution model are all Common Lisp, with SBCL acting as the live runtime image. The execution roadmap is documented in [docs/implementation-plan.md](docs/implementation-plan.md). The repo entrypoints in `bin/` are also executable Common Lisp scripts so the runnable surface stays CL-native.
+
 ## Environment
 
 - `TUTOR_CODEX_PROVIDER`: provider backend, defaults to `mock`
@@ -73,7 +109,7 @@ The first test is a runtime smoke test. It starts SBCL, loads the `tutor-codex` 
 
 ## Next build steps
 
-1. Add a real HTTP provider adapter with streaming support.
-2. Introduce conversation/session state and transcript persistence.
-3. Add structured tool dispatch with allow/deny policy hooks.
-4. Split the CLI into command modules once the surface area grows.
+1. Add streaming support to the OpenAI-compatible provider path.
+2. Expand the tool registry with git, session, and documentation tools.
+3. Replace ad hoc approval state with a more formal capability policy model.
+4. Teach the provider boundary to emit richer CL-native plans and patch objects.

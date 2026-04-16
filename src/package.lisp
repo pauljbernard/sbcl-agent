@@ -3,8 +3,10 @@
   (:import-from #:uiop
                 #:command-line-arguments
                 #:getcwd
-                #:getenv
-                #:run-program)
+                #:getenv)
   (:export #:main))
+
+(defpackage #:tutor-codex-user
+  (:use #:cl))
 
 (in-package #:tutor-codex)

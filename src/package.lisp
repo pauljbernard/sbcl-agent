@@ -1,4 +1,4 @@
-(defpackage #:tutor-codex
+(defpackage #:sbcl-agent
   (:use #:cl)
   (:import-from #:uiop
                 #:command-line-arguments
@@ -6,7 +6,7 @@
                 #:getenv)
   (:export #:main))
 
-(defpackage #:tutor-codex-user
+(defpackage #:sbcl-agent-user
   (:use #:cl))
 
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)

@@ -1,6 +1,6 @@
-# tutor-codex
+# sbcl-agent
 
-`tutor-codex` is an SBCL-native Codex-style CLI written in Common Lisp. The command-line entrypoints, the interactive shell, the session model, the tool interface, and the runtime orchestration are all implemented in CL so the system stays "turtles all the way down".
+`sbcl-agent` is an SBCL-native Codex-style CLI written in Common Lisp. The command-line entrypoints, the interactive shell, the session model, the tool interface, and the runtime orchestration are all implemented in CL so the system stays "turtles all the way down".
 
 ## What It Does
 
@@ -30,7 +30,7 @@ The project is developed and tested against SBCL. Other Common Lisp runtimes are
 
 ```text
 sbcl-agent/
-├── tutor-codex.asd
+├── sbcl-agent.asd
 ├── README.md
 ├── docs/
 │   ├── architecture.md
@@ -38,7 +38,7 @@ sbcl-agent/
 ├── bin/
 │   ├── run-tests
 │   ├── sandbox-runner
-│   └── tutor-codex
+│   └── sbcl-agent
 ├── src/
 │   ├── package.lisp
 │   ├── config.lisp
@@ -72,17 +72,17 @@ sbcl-agent/
 From the repository root:
 
 ```bash
-./bin/tutor-codex doctor
-./bin/tutor-codex chat
+./bin/sbcl-agent doctor
+./bin/sbcl-agent chat
 ./bin/run-tests
 ```
 
 Top-level CLI commands:
 
-- `./bin/tutor-codex help`
-- `./bin/tutor-codex doctor`
-- `./bin/tutor-codex chat`
-- `./bin/tutor-codex exec <cmd...>`
+- `./bin/sbcl-agent help`
+- `./bin/sbcl-agent doctor`
+- `./bin/sbcl-agent chat`
+- `./bin/sbcl-agent exec <cmd...>`
 - `./bin/run-tests`
 
 ## Runtime Configuration
@@ -98,7 +98,7 @@ If no provider configuration is supplied, the runtime uses the mock provider. Th
 
 ## Doctor Command
 
-`./bin/tutor-codex doctor` reports the current runtime state, including:
+`./bin/sbcl-agent doctor` reports the current runtime state, including:
 
 - runtime and provider selection
 - working directory
@@ -117,10 +117,10 @@ Use `doctor` first if startup behavior looks wrong.
 Start the shell with:
 
 ```bash
-./bin/tutor-codex chat
+./bin/sbcl-agent chat
 ```
 
-Inside `chat`, the primary interface is Common Lisp. Any form that is not recognized as a shell command is evaluated in the `TUTOR-CODEX-USER` package.
+Inside `chat`, the primary interface is Common Lisp. Any form that is not recognized as a shell command is evaluated in the `SBCL-AGENT-USER` package.
 
 Basic examples:
 
@@ -353,8 +353,8 @@ Sessions can be written to and loaded from s-expression files.
 Examples:
 
 ```lisp
-(session/save "/tmp/tutor-codex-session.sexp")
-(session/load "/tmp/tutor-codex-session.sexp")
+(session/save "/tmp/sbcl-agent-session.sexp")
+(session/load "/tmp/sbcl-agent-session.sexp")
 (session/reset)
 ```
 

@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun normalize-tail-count (tail)
   (cond

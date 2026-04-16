@@ -1,4 +1,4 @@
-(in-package #:tutor-codex/tests)
+(in-package #:sbcl-agent/tests)
 
 (defun assert-true (condition message)
   (unless condition
@@ -42,7 +42,7 @@
 
 (defun make-test-git-repo ()
   (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/tutor-codex-git-~D-~D/" (get-universal-time) (random 1000000))))
+                (format nil "/tmp/sbcl-agent-git-~D-~D/" (get-universal-time) (random 1000000))))
          (ignore (ensure-directories-exist root))
          (readme (merge-pathnames #P"README.md" root)))
     (declare (ignore ignore))
@@ -76,29 +76,29 @@
     root))
 
 (defun runtime-smoke-test ()
-  (let ((config (tutor-codex::load-config))
-        (provider (tutor-codex::make-provider (tutor-codex::load-config))))
-    (assert-true (typep config 'tutor-codex::config)
-                 "load-config should return a tutor-codex config struct")
-    (assert-true (string= (tutor-codex::provider-name provider) "mock")
+  (let ((config (sbcl-agent::load-config))
+        (provider (sbcl-agent::make-provider (sbcl-agent::load-config))))
+    (assert-true (typep config 'sbcl-agent::config)
+                 "load-config should return a sbcl-agent config struct")
+    (assert-true (string= (sbcl-agent::provider-name provider) "mock")
                  "default provider should be mock")
-    (let ((response (tutor-codex::send-prompt provider "ping")))
-      (assert-true (typep response 'tutor-codex::assistant-response)
+    (let ((response (sbcl-agent::send-prompt provider "ping")))
+      (assert-true (typep response 'sbcl-agent::assistant-response)
                    "provider should return an assistant-response struct")
       (assert-true (search "SBCL scaffold"
-                           (tutor-codex::assistant-response-message response))
+                           (sbcl-agent::assistant-response-message response))
                    "mock provider should return the scaffold smoke-test marker"))))
 
 (defun json-roundtrip-test ()
-  (let* ((json (tutor-codex::emit-json (list :message "hello"
+  (let* ((json (sbcl-agent::emit-json (list :message "hello"
                                              :actions (list (list :type "tool"))
                                              :metadata (list :provider "mock"))))
-         (parsed (tutor-codex::parse-json json)))
+         (parsed (sbcl-agent::parse-json json)))
     (assert-equal "hello"
-                  (tutor-codex::json-object-value parsed "message")
+                  (sbcl-agent::json-object-value parsed "message")
                   "json emitter/parser should roundtrip message field")
     (assert-equal "tool"
-                  (tutor-codex::json-object-value (first (tutor-codex::json-object-value parsed "actions")) "type")
+                  (sbcl-agent::json-object-value (first (sbcl-agent::json-object-value parsed "actions")) "type")
                   "json emitter/parser should roundtrip nested action field")))
 
 (defun provider-decode-test ()
@@ -107,108 +107,108 @@
                                            ("payload" . (("tool_id" . ":FS/READ")
                                                           ("arguments" . (":path" "src/main.lisp")))))))
                            ("metadata" . (("provider" . "mock")))))
-         (response (tutor-codex::decode-assistant-response-object content-object)))
+         (response (sbcl-agent::decode-assistant-response-object content-object)))
     (assert-equal "decoded"
-                  (tutor-codex::assistant-response-message response)
+                  (sbcl-agent::assistant-response-message response)
                   "provider decoder should preserve message")
     (assert-equal :TOOL
-                  (tutor-codex::assistant-action-type (first (tutor-codex::assistant-response-actions response)))
+                  (sbcl-agent::assistant-action-type (first (sbcl-agent::assistant-response-actions response)))
                   "provider decoder should normalize action type")
     (assert-equal :FS/READ
-                  (getf (tutor-codex::assistant-action-payload (first (tutor-codex::assistant-response-actions response))) :TOOL-ID)
+                  (getf (sbcl-agent::assistant-action-payload (first (sbcl-agent::assistant-response-actions response))) :TOOL-ID)
                   "provider decoder should normalize tool id keyword")
     (assert-equal :PATH
-                  (first (getf (tutor-codex::assistant-action-payload (first (tutor-codex::assistant-response-actions response))) :ARGUMENTS))
+                  (first (getf (sbcl-agent::assistant-action-payload (first (sbcl-agent::assistant-response-actions response))) :ARGUMENTS))
                   "provider decoder should normalize argument keywords")))
 
 (defun openai-provider-selection-test ()
-  (let ((config (tutor-codex::make-config :provider "openai-compatible"
+  (let ((config (sbcl-agent::make-config :provider "openai-compatible"
                                           :model "gpt-5"
                                           :api-base "https://api.openai.com/v1"
                                           :api-key "test-key"
                                           :api-key-present-p t
                                           :working-directory "/tmp/")))
     (assert-equal "openai-compatible"
-                  (tutor-codex::provider-name (tutor-codex::make-provider config))
+                  (sbcl-agent::provider-name (sbcl-agent::make-provider config))
                   "make-provider should construct the openai-compatible provider")))
 
 (defun command-normalization-test ()
-  (let ((ask-command (tutor-codex::normalize-form-command '(ask "inspect src/main.lisp")))
-        (execute-actions-command (tutor-codex::normalize-form-command '(execute-actions)))
-        (describe-session-command (tutor-codex::normalize-form-command '(describe-session)))
-        (enqueue-task-command (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp"))))
-        (run-next-task-command (tutor-codex::normalize-form-command '(run-next-task)))
-        (eval-command (tutor-codex::normalize-form-command '(+ 100 203)))
-        (approve-command (tutor-codex::normalize-form-command '(approve :process-run)))
-        (patch-command (tutor-codex::normalize-form-command '(patch '((:write "x" "y"))))))
-    (assert-equal :ask (tutor-codex::command-kind ask-command)
+  (let ((ask-command (sbcl-agent::normalize-form-command '(ask "inspect src/main.lisp")))
+        (execute-actions-command (sbcl-agent::normalize-form-command '(execute-actions)))
+        (describe-session-command (sbcl-agent::normalize-form-command '(describe-session)))
+        (enqueue-task-command (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp"))))
+        (run-next-task-command (sbcl-agent::normalize-form-command '(run-next-task)))
+        (eval-command (sbcl-agent::normalize-form-command '(+ 100 203)))
+        (approve-command (sbcl-agent::normalize-form-command '(approve :process-run)))
+        (patch-command (sbcl-agent::normalize-form-command '(patch '((:write "x" "y"))))))
+    (assert-equal :ask (sbcl-agent::command-kind ask-command)
                   "ask form should normalize to :ask")
-    (assert-equal :execute-actions (tutor-codex::command-kind execute-actions-command)
+    (assert-equal :execute-actions (sbcl-agent::command-kind execute-actions-command)
                   "execute-actions form should normalize to :execute-actions")
-    (assert-equal :describe-session (tutor-codex::command-kind describe-session-command)
+    (assert-equal :describe-session (sbcl-agent::command-kind describe-session-command)
                   "describe-session form should normalize to :describe-session")
-    (assert-equal :enqueue-task (tutor-codex::command-kind enqueue-task-command)
+    (assert-equal :enqueue-task (sbcl-agent::command-kind enqueue-task-command)
                   "enqueue-task form should normalize to :enqueue-task")
-    (assert-equal :run-next-task (tutor-codex::command-kind run-next-task-command)
+    (assert-equal :run-next-task (sbcl-agent::command-kind run-next-task-command)
                   "run-next-task form should normalize to :run-next-task")
-    (assert-equal :eval (tutor-codex::command-kind eval-command)
+    (assert-equal :eval (sbcl-agent::command-kind eval-command)
                   "plain Lisp forms should normalize to :eval")
-    (assert-equal :approve (tutor-codex::command-kind approve-command)
+    (assert-equal :approve (sbcl-agent::command-kind approve-command)
                   "approve form should normalize to :approve")
-    (assert-equal :patch (tutor-codex::command-kind patch-command)
+    (assert-equal :patch (sbcl-agent::command-kind patch-command)
                   "patch form should normalize to :patch")))
 
 (defun shell-eval-test ()
   (assert-equal 303
-                (tutor-codex::eval-user-form '(+ 100 203))
+                (sbcl-agent::eval-user-form '(+ 100 203))
                 "direct user forms should evaluate in the Lisp shell"))
 
 (defun ask-dispatch-test ()
-  (let ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-        (session (tutor-codex::make-default-session))
-        (command (tutor-codex::normalize-form-command '(ask "ping"))))
+  (let ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+        (session (sbcl-agent::make-default-session))
+        (command (sbcl-agent::normalize-form-command '(ask "ping"))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (let ((response (getf result :response)))
         (assert-equal :ask kind "ask command should dispatch as :ask")
-        (assert-true (typep response 'tutor-codex::assistant-response)
+        (assert-true (typep response 'sbcl-agent::assistant-response)
                      "ask command should return an assistant response")
-        (assert-true (search "Mock response: ping" (tutor-codex::assistant-response-message response))
+        (assert-true (search "Mock response: ping" (sbcl-agent::assistant-response-message response))
                      "ask command should be handled by the provider")
         (assert-equal 0 (getf result :staged-action-count)
                       "ask without actions should stage zero actions")
-        (assert-equal 4 (length (tutor-codex::agent-session-events updated-session))
+        (assert-equal 4 (length (sbcl-agent::agent-session-events updated-session))
                       "ask dispatch should record command, transcript, and response events")))))
 
 (defun streaming-provider-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
          (events '())
-         (response (tutor-codex::stream-prompt provider
+         (response (sbcl-agent::stream-prompt provider
                                                "please read src/main.lisp"
                                                (lambda (event)
                                                  (setf events (append events (list event)))))))
     (assert-true (> (length events) 3)
                  "streaming provider should emit multiple events")
     (assert-equal :MESSAGE-START
-                  (tutor-codex::provider-event-type (first events))
+                  (sbcl-agent::provider-event-type (first events))
                   "stream should begin with a message-start event")
     (assert-true (search "Mock response: please read src/main.lisp"
-                         (tutor-codex::assistant-response-message response))
+                         (sbcl-agent::assistant-response-message response))
                  "streaming response should preserve the mock prefix")
-    (let ((assembled (tutor-codex::stream-response->assistant-response events)))
-      (assert-equal (tutor-codex::assistant-response-message response)
-                    (tutor-codex::assistant-response-message assembled)
+    (let ((assembled (sbcl-agent::stream-response->assistant-response events)))
+      (assert-equal (sbcl-agent::assistant-response-message response)
+                    (sbcl-agent::assistant-response-message assembled)
                     "streamed fragments should assemble into the final response")
       (assert-equal 1
-                    (length (tutor-codex::assistant-response-actions assembled))
+                    (length (sbcl-agent::assistant-response-actions assembled))
                     "stream assembly should preserve proposed actions"))))
 
 (defun streaming-ask-dispatch-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(ask "please read src/main.lisp" :stream t))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :stream t))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (declare (ignore kind))
       (assert-true (getf result :streamed-p)
                    "streaming ask should mark the result as streamed")
@@ -216,107 +216,107 @@
                    "streaming ask should record multiple stream events")
       (assert-equal 1 (getf result :staged-action-count)
                     "streaming ask should still stage assistant actions")
-      (assert-equal 1 (length (tutor-codex::agent-session-pending-actions updated-session))
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "streaming ask should retain staged actions in session state")
       (assert-true (find :provider-stream
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "streaming ask should log provider stream events"))))
 
 
 (defun ask-enqueue-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (assert-equal :ask kind "queued ask should still dispatch through the ask command")
       (assert-true (getf result :enqueued-p)
                    "queued ask should report that it was enqueued")
-      (assert-equal 1 (length (tutor-codex::agent-session-tasks updated-session))
+      (assert-equal 1 (length (sbcl-agent::agent-session-tasks updated-session))
                     "queued ask should create one task in the session")
       (assert-equal :ask
-                    (tutor-codex::task-kind (first (tutor-codex::agent-session-tasks updated-session)))
+                    (sbcl-agent::task-kind (first (sbcl-agent::agent-session-tasks updated-session)))
                     "queued ask should create an ask task"))))
 
 (defun queued-ask-worker-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
      provider
      session)
     (multiple-value-bind (worker-result worker-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(start-worker))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(start-worker))
          provider
          session)
       (assert-equal :start-worker worker-kind "start-worker should dispatch correctly for queued ask")
       (wait-for (lambda ()
                   (eq :completed
-                      (tutor-codex::task-status
-                       (first (tutor-codex::agent-session-tasks updated-session))))))
-      (let* ((task (first (tutor-codex::agent-session-tasks updated-session)))
-             (result (tutor-codex::task-result task))
+                      (sbcl-agent::task-status
+                       (first (sbcl-agent::agent-session-tasks updated-session))))))
+      (let* ((task (first (sbcl-agent::agent-session-tasks updated-session)))
+             (result (sbcl-agent::task-result task))
              (response (getf result :response)))
-        (assert-true (typep response 'tutor-codex::assistant-response)
+        (assert-true (typep response 'sbcl-agent::assistant-response)
                      "queued ask worker should produce an assistant response")
-        (assert-equal 1 (length (tutor-codex::agent-session-pending-actions updated-session))
+        (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                       "queued ask worker should still stage assistant actions")
-        (assert-true (> (length (tutor-codex::task-progress-events task)) 2)
+        (assert-true (> (length (sbcl-agent::task-progress-events task)) 2)
                      "queued ask worker should record task progress events")
         (assert-true (find :provider-stream
-                           (tutor-codex::task-progress-events task)
-                           :key #'tutor-codex::event-kind)
+                           (sbcl-agent::task-progress-events task)
+                           :key #'sbcl-agent::event-kind)
                      "queued ask worker should capture streamed provider progress in the task")
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command `(stop-worker ,(getf worker-result :id)))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(stop-worker ,(getf worker-result :id)))
          provider
          updated-session)))))
 
 
 (defun describe-task-progress-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
          provider
          session)
       (declare (ignore enqueue-kind))
-      (tutor-codex::execute-command
-       (tutor-codex::normalize-form-command '(run-next-task))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(run-next-task))
        provider
        updated-session)
       (multiple-value-bind (describe-result describe-kind final-session)
-          (tutor-codex::execute-command
-           (tutor-codex::normalize-form-command `(describe-task ,(getf (getf enqueue-result :queued-task) :id)))
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(describe-task ,(getf (getf enqueue-result :queued-task) :id)))
            provider
            updated-session)
         (declare (ignore final-session))
         (assert-equal :describe-task describe-kind "describe-task should dispatch correctly after queued ask")
         (assert-true (> (getf describe-result :progress-event-count) 2)
                      "describe-task should report recorded task progress events")
-        (assert-true (typep (getf describe-result :latest-progress-event) 'tutor-codex::event)
+        (assert-true (typep (getf describe-result :latest-progress-event) 'sbcl-agent::event)
                      "describe-task should expose the latest task progress event")))))
 
 
 (defun monitor-task-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
          provider
          session)
       (declare (ignore enqueue-kind))
-      (tutor-codex::execute-command
-       (tutor-codex::normalize-form-command '(run-next-task))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(run-next-task))
        provider
        updated-session)
       (multiple-value-bind (monitor-result monitor-kind final-session)
-          (tutor-codex::execute-command
-           (tutor-codex::normalize-form-command `(monitor-task ,(getf (getf enqueue-result :queued-task) :id)))
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(monitor-task ,(getf (getf enqueue-result :queued-task) :id)))
            provider
            updated-session)
         (declare (ignore final-session))
@@ -327,20 +327,20 @@
                       "monitor-task should report the completed task status")))))
 
 (defun task-queue-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
          provider
          session)
       (assert-equal :enqueue-task enqueue-kind "enqueue-task should dispatch correctly")
       (assert-equal :queued (getf enqueue-result :status) "new task should start queued")
-      (assert-equal 1 (length (tutor-codex::agent-session-tasks updated-session))
+      (assert-equal 1 (length (sbcl-agent::agent-session-tasks updated-session))
                     "session should retain one queued task"))
     (multiple-value-bind (tasks kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(list-tasks))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(list-tasks))
          provider
          session)
       (declare (ignore updated-session))
@@ -348,15 +348,15 @@
       (assert-equal 1 (length tasks) "list-tasks should return one task summary"))))
 
 (defun task-run-next-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
      session)
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(run-next-task))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(run-next-task))
          provider
          session)
       (assert-equal :run-next-task kind "run-next-task should dispatch correctly")
@@ -365,22 +365,22 @@
                            (getf (getf result :result) :content))
                    "queued tool task should return fs/read content")
       (assert-true (find :task-completed
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "task completion should be logged"))))
 
 (defun task-cancel-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
          provider
          session)
       (declare (ignore enqueue-kind updated-session))
       (multiple-value-bind (cancel-result cancel-kind final-session)
-          (tutor-codex::execute-command
-           (tutor-codex::normalize-form-command `(cancel-task ,(getf enqueue-result :id)))
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(cancel-task ,(getf enqueue-result :id)))
            provider
            session)
         (declare (ignore final-session))
@@ -388,27 +388,27 @@
         (assert-equal :cancelled (getf cancel-result :status) "cancel-task should finalize the task as cancelled")))))
 
 (defun worker-flow-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
      session)
     (multiple-value-bind (worker-result worker-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(start-worker))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(start-worker))
          provider
          session)
       (assert-equal :start-worker worker-kind "start-worker should dispatch correctly")
       (assert-true (stringp (getf worker-result :id)) "start-worker should return a worker id")
       (wait-for (lambda ()
                   (eq :completed
-                      (tutor-codex::task-status
-                       (first (tutor-codex::agent-session-tasks updated-session))))))
+                      (sbcl-agent::task-status
+                       (first (sbcl-agent::agent-session-tasks updated-session))))))
       (let ((worker-id (getf worker-result :id)))
         (multiple-value-bind (stop-result stop-kind final-session)
-            (tutor-codex::execute-command
-             (tutor-codex::normalize-form-command `(stop-worker ,worker-id))
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(stop-worker ,worker-id))
              provider
              updated-session)
           (declare (ignore final-session))
@@ -417,91 +417,91 @@
 
 
 (defun worker-introspection-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (start-result start-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(start-worker))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(start-worker))
          provider
          session)
       (assert-equal :start-worker start-kind "start-worker should dispatch correctly for introspection")
       (multiple-value-bind (workers workers-kind introspected-session)
-          (tutor-codex::execute-command
-           (tutor-codex::normalize-form-command '(list-workers))
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(list-workers))
            provider
            updated-session)
         (assert-equal :list-workers workers-kind "list-workers should dispatch correctly")
         (assert-equal 1 (length workers) "list-workers should return one worker summary")
         (multiple-value-bind (worker-result worker-kind final-session)
-            (tutor-codex::execute-command
-             (tutor-codex::normalize-form-command `(describe-worker ,(getf start-result :id)))
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-worker ,(getf start-result :id)))
              provider
              introspected-session)
           (declare (ignore final-session))
           (assert-equal :describe-worker worker-kind "describe-worker should dispatch correctly")
           (assert-equal (getf start-result :id) (getf worker-result :id)
                         "describe-worker should return the matching worker id"))
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command `(stop-worker ,(getf start-result :id)))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(stop-worker ,(getf start-result :id)))
          provider
          introspected-session)))))
 
 (defun task-persistence-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (path "/tmp/tutor-codex-task-session.sexp")
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (path "/tmp/sbcl-agent-task-session.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
      session)
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(start-worker))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(start-worker))
      provider
      session)
-    (tutor-codex::save-session session path)
-    (let ((loaded (tutor-codex::load-session path)))
-      (assert-equal 1 (length (tutor-codex::agent-session-tasks loaded))
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (assert-equal 1 (length (sbcl-agent::agent-session-tasks loaded))
                     "loaded session should preserve queued task state")
-      (assert-true (every (lambda (worker) (null (tutor-codex::worker-state-thread worker)))
-                         (tutor-codex::agent-session-workers loaded))
+      (assert-true (every (lambda (worker) (null (sbcl-agent::worker-state-thread worker)))
+                         (sbcl-agent::agent-session-workers loaded))
                    "loaded session should sanitize worker thread objects")
-      (assert-true (every (lambda (worker) (not (tutor-codex::worker-state-running-p worker)))
-                         (tutor-codex::agent-session-workers loaded))
+      (assert-true (every (lambda (worker) (not (sbcl-agent::worker-state-running-p worker)))
+                         (sbcl-agent::agent-session-workers loaded))
                    "loaded session should mark persisted workers as not running"))))
 (defun assistant-action-proposal-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (response (tutor-codex::send-prompt provider "please read src/main.lisp" session)))
-    (assert-equal 1 (length (tutor-codex::assistant-response-actions response))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (response (sbcl-agent::send-prompt provider "please read src/main.lisp" session)))
+    (assert-equal 1 (length (sbcl-agent::assistant-response-actions response))
                   "mock provider should propose one read action")
     (assert-equal :TOOL
-                  (tutor-codex::assistant-action-type (first (tutor-codex::assistant-response-actions response)))
+                  (sbcl-agent::assistant-action-type (first (sbcl-agent::assistant-response-actions response)))
                   "proposed action should be a tool action")))
 
 (defun assistant-action-staging-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(ask "please read src/main.lisp"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (declare (ignore kind))
       (assert-equal 1 (getf result :staged-action-count)
                     "ask flow should stage one proposed action")
-      (assert-equal 1 (length (tutor-codex::agent-session-pending-actions updated-session))
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "session should retain one staged action")
       (assert-true (= 0 (length (or (getf result :action-results) '())))
                    "ask flow should not execute actions immediately"))))
 
 (defun assistant-action-execution-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(ask "please read src/main.lisp"))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))
      provider
      session)
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(execute-actions))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(execute-actions))
          provider
          session)
       (assert-equal :execute-actions kind "execute-actions should dispatch correctly")
@@ -510,74 +510,74 @@
       (assert-true (search "(defun print-help ()"
                            (getf (getf (first result) :result) :content))
                    "executed assistant action should read src/main.lisp")
-      (assert-equal 0 (length (tutor-codex::agent-session-pending-actions updated-session))
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "pending actions should be cleared after execution"))))
 
 (defun session-plan-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session))
-         (command (tutor-codex::normalize-form-command '(plan "Build tool registry"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session))
+         (command (sbcl-agent::normalize-form-command '(plan "Build tool registry"))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (assert-equal :plan kind "plan command should dispatch as :plan")
       (assert-true (search "Current plan: Build tool registry" result)
                    "plan command should return the current plan message")
       (assert-equal "Build tool registry"
-                    (tutor-codex::agent-session-plan updated-session)
+                    (sbcl-agent::agent-session-plan updated-session)
                     "plan command should update session plan state"))))
 
 (defun capability-policy-model-test ()
-  (let ((policies (tutor-codex::list-capability-policies)))
+  (let ((policies (sbcl-agent::list-capability-policies)))
     (assert-true (find :process-run policies :key (lambda (entry) (getf entry :id)))
                  "capability policy registry should include :process-run")
     (assert-equal :implicit
-                  (getf (tutor-codex::capability-policy-summary
-                         (tutor-codex::ensure-capability-policy :safe-read))
+                  (getf (sbcl-agent::capability-policy-summary
+                         (sbcl-agent::ensure-capability-policy :safe-read))
                         :default-grant-mode)
                   "safe-read should be implicitly granted")
     (assert-equal :high
-                  (getf (tutor-codex::capability-policy-summary
-                         (tutor-codex::ensure-capability-policy :git-write))
+                  (getf (sbcl-agent::capability-policy-summary
+                         (sbcl-agent::ensure-capability-policy :git-write))
                         :risk-level)
                   "git-write should be modeled as high risk")))
 
 (defun capability-grant-session-test ()
-  (let ((session (tutor-codex::make-default-session)))
-    (assert-true (tutor-codex::ensure-policy-approved session :safe-read)
+  (let ((session (sbcl-agent::make-default-session)))
+    (assert-true (sbcl-agent::ensure-policy-approved session :safe-read)
                  "safe-read should be implicitly approved")
     (assert-signals-error
-     (lambda () (tutor-codex::ensure-policy-approved session :process-run))
+     (lambda () (sbcl-agent::ensure-policy-approved session :process-run))
      "Approval required"
      "process-run should still require an explicit capability grant")
-    (tutor-codex::approve-policy session :process-run)
-    (assert-true (tutor-codex::policy-approved-p session :process-run)
+    (sbcl-agent::approve-policy session :process-run)
+    (assert-true (sbcl-agent::policy-approved-p session :process-run)
                  "process-run should be approved after granting the capability")
     (assert-equal :process-run
-                  (getf (first (tutor-codex::session-capability-grants-summary session)) :policy-id)
+                  (getf (first (sbcl-agent::session-capability-grants-summary session)) :policy-id)
                   "session grant summaries should retain the granted policy id")))
 
 (defun session-save-load-test ()
-  (let* ((path #P"/tmp/tutor-codex-session-test.sexp")
-         (session (tutor-codex::make-default-session)))
-    (tutor-codex::update-session-plan session "Persist session")
-    (tutor-codex::append-transcript-entry session :user "hello")
-    (tutor-codex::save-session session path)
-    (let ((loaded (tutor-codex::load-session path)))
+  (let* ((path #P"/tmp/sbcl-agent-session-test.sexp")
+         (session (sbcl-agent::make-default-session)))
+    (sbcl-agent::update-session-plan session "Persist session")
+    (sbcl-agent::append-transcript-entry session :user "hello")
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
       (assert-equal "Persist session"
-                    (tutor-codex::agent-session-plan loaded)
+                    (sbcl-agent::agent-session-plan loaded)
                     "loaded session should preserve plan")
       (assert-equal 1
-                    (length (tutor-codex::agent-session-transcript loaded))
+                    (length (sbcl-agent::agent-session-transcript loaded))
                     "loaded session should preserve transcript entries"))))
 
 (defun session-shell-commands-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (path "/tmp/tutor-codex-shell-session.sexp")
-         (session (tutor-codex::make-default-session)))
-    (tutor-codex::update-session-plan session "Shell persistence")
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (path "/tmp/sbcl-agent-shell-session.sexp")
+         (session (sbcl-agent::make-default-session)))
+    (sbcl-agent::update-session-plan session "Shell persistence")
     (multiple-value-bind (describe-result describe-kind described-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(describe-session))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(describe-session))
          provider
          session)
       (declare (ignore described-session))
@@ -586,31 +586,31 @@
                     (getf describe-result :plan)
                     "describe-session should report the current plan"))
     (multiple-value-bind (save-result save-kind saved-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command `(session/save ,path))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(session/save ,path))
          provider
          session)
       (declare (ignore saved-session))
       (assert-equal :session-save save-kind "session/save should dispatch correctly")
       (assert-equal path (getf save-result :saved)
                     "session/save should report the saved path"))
-    (let ((fresh-session (tutor-codex::reset-session session)))
-      (assert-true (null (tutor-codex::agent-session-plan fresh-session))
+    (let ((fresh-session (sbcl-agent::reset-session session)))
+      (assert-true (null (sbcl-agent::agent-session-plan fresh-session))
                    "reset-session should clear the plan"))
     (multiple-value-bind (load-result load-kind loaded-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command `(session/load ,path))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(session/load ,path))
          provider
-         (tutor-codex::make-default-session))
+         (sbcl-agent::make-default-session))
       (assert-equal :session-load load-kind "session/load should dispatch correctly")
       (assert-equal path (getf load-result :loaded)
                     "session/load should report the loaded path")
       (assert-equal "Shell persistence"
-                    (tutor-codex::agent-session-plan loaded-session)
+                    (sbcl-agent::agent-session-plan loaded-session)
                     "session/load should restore the saved plan"))))
 
 (defun list-tools-test ()
-  (let ((tools (tutor-codex::list-tools)))
+  (let ((tools (sbcl-agent::list-tools)))
     (assert-true (find :fs/read tools :key (lambda (entry) (getf entry :id)))
                  "tool registry should include :fs/read")
     (assert-true (find :proc/run tools :key (lambda (entry) (getf entry :id)))
@@ -622,22 +622,22 @@
     (assert-true (find :docs/read tools :key (lambda (entry) (getf entry :id)))
                  "tool registry should include :docs/read")
     (assert-equal :process-run
-                  (getf (tutor-codex::describe-tool :proc/run) :isolation-profile)
+                  (getf (sbcl-agent::describe-tool :proc/run) :isolation-profile)
                   "process tool should advertise a sandbox isolation profile")
     (assert-equal :git-read
-                  (getf (tutor-codex::describe-tool :git/status) :policy)
+                  (getf (sbcl-agent::describe-tool :git/status) :policy)
                   "git status should advertise git-read policy")
     (assert-equal :safe-read
-                  (getf (tutor-codex::describe-tool :session/summary) :policy)
+                  (getf (sbcl-agent::describe-tool :session/summary) :policy)
                   "session summary should advertise safe-read policy")))
 
 (defun session-summary-tool-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::update-session-plan session "Inspect runtime state")
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::update-session-plan session "Inspect runtime state")
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :session/summary))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :session/summary))
          provider
          session)
       (declare (ignore updated-session))
@@ -648,13 +648,13 @@
                     "session summary tool should return the current session plan"))))
 
 (defun session-events-tool-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::update-session-plan session "Inspect events")
-    (tutor-codex::append-transcript-entry session :user "hello")
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::update-session-plan session "Inspect events")
+    (sbcl-agent::append-transcript-entry session :user "hello")
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :session/events :tail 2))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :session/events :tail 2))
          provider
          session)
       (declare (ignore updated-session))
@@ -662,15 +662,15 @@
       (assert-equal :session/events (getf result :tool) "session events tool should identify itself")
       (assert-equal 2 (length (getf result :events))
                     "session events tool should honor the requested tail size")
-      (assert-true (find :transcript (getf result :events) :key #'tutor-codex::event-kind)
+      (assert-true (find :transcript (getf result :events) :key #'sbcl-agent::event-kind)
                    "session events tool should return recent session events"))))
 
 (defun docs-read-tool-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(tool :docs/read :path "architecture.md"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "architecture.md"))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (declare (ignore updated-session))
       (assert-equal :tool kind "docs/read should dispatch as :tool")
       (assert-equal :docs/read (getf result :tool) "docs/read should identify itself")
@@ -678,20 +678,20 @@
                    "docs/read should return maintained architecture content"))))
 
 (defun docs-read-path-escape-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(tool :docs/read :path "../README.md"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "../README.md"))))
     (assert-signals-error
-     (lambda () (tutor-codex::execute-command command provider session))
+     (lambda () (sbcl-agent::execute-command command provider session))
      "escapes the current session workspace"
      "docs/read should reject paths outside the docs root")))
 
 (defun fs-read-tool-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(tool :fs/read :path "src/main.lisp"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command command provider session)
+        (sbcl-agent::execute-command command provider session)
       (declare (ignore updated-session))
       (assert-equal :tool kind "tool command should dispatch as :tool")
       (assert-equal :fs/read (getf result :tool) "fs/read should identify itself")
@@ -699,31 +699,31 @@
                    "fs/read should return file contents"))))
 
 (defun fs-read-path-escape-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
-         (command (tutor-codex::normalize-form-command '(tool :fs/read :path "../README.md"))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "../README.md"))))
     (assert-signals-error
-     (lambda () (tutor-codex::execute-command command provider session))
+     (lambda () (sbcl-agent::execute-command command provider session))
      "escapes the current session workspace"
      "fs/read should reject paths outside the session root")))
 
 (defun proc-run-approval-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session))
-         (command (tutor-codex::normalize-form-command '(tool :proc/run :argv ("/bin/echo" "hello")))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session))
+         (command (sbcl-agent::normalize-form-command '(tool :proc/run :argv ("/bin/echo" "hello")))))
     (assert-signals-error
-     (lambda () (tutor-codex::execute-command command provider session))
+     (lambda () (sbcl-agent::execute-command command provider session))
      "Approval required"
      "process tool should require approval before execution")))
 
 (defun approve-and-run-tool-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :process-run)) provider session)
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :process-run)) provider session)
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :proc/run :argv ("/bin/echo" "hello")))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :proc/run :argv ("/bin/echo" "hello")))
          provider
          session)
       (assert-equal :tool kind "process tool should dispatch as :tool after approval")
@@ -735,28 +735,28 @@
       (assert-equal :process-run (getf result :sandbox-profile)
                     "process tool should report the sandbox profile it used")
       (assert-true (find :sandbox-exec
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "sandboxed process execution should be logged in the session"))))
 
 (defun git-read-approval-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd (namestring (make-test-git-repo))))
-         (command (tutor-codex::normalize-form-command '(tool :git/status))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd (namestring (make-test-git-repo))))
+         (command (sbcl-agent::normalize-form-command '(tool :git/status))))
     (assert-signals-error
-     (lambda () (tutor-codex::execute-command command provider session))
+     (lambda () (sbcl-agent::execute-command command provider session))
      "Approval required"
      "git status should require explicit git-read approval")))
 
 (defun git-status-and-diff-test ()
   (let* ((repo (make-test-git-repo))
-         (provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd (namestring repo))))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :git-read)) provider session)
+         (provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd (namestring repo))))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :git-read)) provider session)
     (multiple-value-bind (status-result status-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/status))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/status))
          provider
          session)
       (assert-equal :tool status-kind "git status should dispatch as :tool")
@@ -766,12 +766,12 @@
       (assert-true (getf status-result :sandboxed)
                    "git status should execute in the sandbox")
       (assert-true (find :sandbox-exec
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "git status should be logged as sandbox execution"))
     (multiple-value-bind (diff-result diff-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/diff))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/diff))
          provider
          session)
       (declare (ignore updated-session))
@@ -782,27 +782,27 @@
 
 (defun git-write-flow-test ()
   (let* ((repo (make-test-git-repo))
-         (provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd (namestring repo))))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :git-read)) provider session)
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :git-write)) provider session)
+         (provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd (namestring repo))))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :git-read)) provider session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :git-write)) provider session)
     (multiple-value-bind (add-result add-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/add :paths ("README.md")))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/add :paths ("README.md")))
          provider
          session)
       (assert-equal :tool add-kind "git add should dispatch as :tool")
       (assert-equal :git/add (getf add-result :tool) "git add should identify itself")
       (assert-equal 0 (getf add-result :exit-code) "git add should succeed")
       (assert-true (find :sandbox-exec
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "git add should be logged as sandbox execution"))
     (multiple-value-bind (commit-result commit-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/commit :message "Initial sandbox commit"))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/commit :message "Initial sandbox commit"))
          provider
          session)
       (assert-equal :tool commit-kind "git commit should dispatch as :tool")
@@ -811,12 +811,12 @@
       (assert-true (search "Initial sandbox commit" (getf commit-result :stdout))
                    "git commit should report the commit message")
       (assert-true (find :sandbox-exec
-                         (tutor-codex::agent-session-events updated-session)
-                         :key #'tutor-codex::event-kind)
+                         (sbcl-agent::agent-session-events updated-session)
+                         :key #'sbcl-agent::event-kind)
                    "git commit should be logged as sandbox execution"))
     (multiple-value-bind (branch-result branch-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/branch :name "feature/test" :checkout t))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/branch :name "feature/test" :checkout t))
          provider
          session)
       (declare (ignore updated-session))
@@ -824,8 +824,8 @@
       (assert-equal :git/branch (getf branch-result :tool) "git branch should identify itself")
       (assert-equal 0 (getf branch-result :exit-code) "git branch checkout should succeed"))
     (multiple-value-bind (status-result status-kind updated-session)
-        (tutor-codex::execute-command
-         (tutor-codex::normalize-form-command '(tool :git/status))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :git/status))
          provider
          session)
       (declare (ignore updated-session))
@@ -834,21 +834,21 @@
                    "git status should report the checked out branch"))))
 
 (defun patch-approval-and-apply-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/tmp/"))
-         (path "/tmp/tutor-codex-patch-test.txt")
-         (patch-command '(patch ((:write "tutor-codex-patch-test.txt" "patched")))))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (path "/tmp/sbcl-agent-patch-test.txt")
+         (patch-command '(patch ((:write "sbcl-agent-patch-test.txt" "patched")))))
     (assert-signals-error
      (lambda ()
-       (tutor-codex::execute-command (tutor-codex::normalize-form-command patch-command)
+       (sbcl-agent::execute-command (sbcl-agent::normalize-form-command patch-command)
                                      provider
                                      session))
      "Approval required"
      "patch application should require workspace-write approval")
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :workspace-write)) provider session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :workspace-write)) provider session)
     (multiple-value-bind (result kind updated-session)
-        (tutor-codex::execute-command (tutor-codex::normalize-form-command patch-command)
+        (sbcl-agent::execute-command (sbcl-agent::normalize-form-command patch-command)
                                       provider
                                       session)
       (declare (ignore updated-session))
@@ -860,21 +860,21 @@
           (assert-equal "patched" line "patch should write file contents"))))))
 
 (defun patch-path-escape-test ()
-  (let* ((provider (tutor-codex::make-provider (tutor-codex::load-config)))
-         (session (tutor-codex::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (patch-command '(patch ((:write "../escape.txt" "patched")))))
-    (tutor-codex::execute-command
-     (tutor-codex::normalize-form-command '(approve :workspace-write)) provider session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :workspace-write)) provider session)
     (assert-signals-error
      (lambda ()
-       (tutor-codex::execute-command (tutor-codex::normalize-form-command patch-command)
+       (sbcl-agent::execute-command (sbcl-agent::normalize-form-command patch-command)
                                      provider
                                      session))
      "escapes the current session workspace"
      "patch application should reject writes outside the session root")))
 
 (defun run-all-tests ()
-  (format t "Running tutor-codex test suite...~%")
+  (format t "Running sbcl-agent test suite...~%")
   (runtime-smoke-test)
   (format t "PASS runtime-smoke-test~%")
   (json-roundtrip-test)

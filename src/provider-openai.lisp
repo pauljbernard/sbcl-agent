@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defclass openai-compatible-provider (provider)
   ((model :initarg :model :reader openai-provider-model)

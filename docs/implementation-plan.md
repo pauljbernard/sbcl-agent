@@ -55,7 +55,7 @@ Make the current scaffold reflect the new repo root and prepare the source tree 
 ### Exit Criteria
 
 - `./bin/run-tests` still passes
-- `./bin/tutor-codex doctor` still runs
+- `./bin/sbcl-agent doctor` still runs
 - the repo layout described in `README.md` matches disk state
 
 ## Phase 1. Lisp-Native Shell
@@ -72,7 +72,7 @@ The shell must read Lisp forms directly, distinguish agent commands from ordinar
 
 - Add `src/shell.lisp` for the top-level interactive shell.
 - Add `src/commands.lisp` for command normalization.
-- Introduce a `tutor-codex-user` package for interactive evaluation.
+- Introduce a `sbcl-agent-user` package for interactive evaluation.
 - Implement a reader loop that supports:
   - complete form reading
   - multiline forms

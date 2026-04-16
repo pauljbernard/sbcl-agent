@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun apply-patch-operation (session operation)
   (destructuring-bind (kind path content) operation

@@ -1,5 +1,5 @@
-(defpackage #:tutor-codex/tests
+(defpackage #:sbcl-agent/tests
   (:use #:cl)
   (:export #:run-all-tests))
 
-(in-package #:tutor-codex/tests)
+(in-package #:sbcl-agent/tests)

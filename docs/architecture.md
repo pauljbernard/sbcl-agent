@@ -26,7 +26,7 @@ The intended mental model is "turtles all the way down": the assistant is a Lisp
 
 ## Core User Experience
 
-The user starts `tutor-codex` and remains inside an interactive SBCL-backed agent shell.
+The user starts `sbcl-agent` and remains inside an interactive SBCL-backed agent shell.
 
 Examples of the desired interaction style:
 
@@ -286,7 +286,7 @@ Represent file edits as Lisp data:
   (:update "src/main.lisp"
    ((:replace "(defun old ...)" "(defun new ...)")))
   (:add "src/provider/openai.lisp"
-   "(in-package #:tutor-codex) ..."))
+   "(in-package #:sbcl-agent) ..."))
 ```
 
 Recommended approach:
@@ -404,10 +404,10 @@ The runtime must know what namespace code runs in.
 
 Recommendation:
 
-- user commands execute in `#:tutor-codex-user`
-- system internals live in `#:tutor-codex`
-- generated code can be staged in `#:tutor-codex.generated`
-- tool implementations live in `#:tutor-codex.tools`
+- user commands execute in `#:sbcl-agent-user`
+- system internals live in `#:sbcl-agent`
+- generated code can be staged in `#:sbcl-agent.generated`
+- tool implementations live in `#:sbcl-agent.tools`
 
 This package separation matters. It prevents accidental pollution of the core runtime and allows generated artifacts to be inspected, reloaded, or discarded.
 

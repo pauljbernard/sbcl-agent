@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun json-whitespace-char-p (character)
   (find character '(#\Space #\Tab #\Newline #\Return)))

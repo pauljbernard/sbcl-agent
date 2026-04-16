@@ -1,8 +1,8 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun print-help ()
-  (format t "tutor-codex ~A~%" "0.1.0")
-  (format t "Usage: tutor-codex <command> [args]~%~%")
+  (format t "sbcl-agent ~A~%" "0.1.0")
+  (format t "Usage: sbcl-agent <command> [args]~%~%")
   (format t "Commands:~%")
   (format t "  chat               Start the Lisp-native interactive shell.~%")
   (format t "  exec <cmd...>      Run a shell command from the current directory.~%")

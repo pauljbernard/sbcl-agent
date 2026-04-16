@@ -1,6 +1,6 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
-(defparameter *shell-package* (find-package '#:tutor-codex-user))
+(defparameter *shell-package* (find-package '#:sbcl-agent-user))
 (defparameter *stream-event-listener* nil)
 
 (defun print-shell-help ()
@@ -29,7 +29,7 @@
   (format t "  (session/reset)                    Replace the current session with a fresh one.~%")
   (format t "  (describe-session)                 Print a summary of the current session state.~%")
   (format t "  (help)                             Show this message.~%")
-  (format t "  Any other form is evaluated in the TUTOR-CODEX-USER package.~%"))
+  (format t "  Any other form is evaluated in the SBCL-AGENT-USER package.~%"))
 
 (defun shell-prompt (session)
   (format *query-io* "~A[~A]> "

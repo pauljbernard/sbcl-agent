@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defstruct agent-session
   id
@@ -15,7 +15,7 @@
 (defparameter *current-session* nil)
 
 (defun make-default-session (&key (cwd (namestring (getcwd)))
-                                  (package "TUTOR-CODEX-USER"))
+                                  (package "SBCL-AGENT-USER"))
   (make-agent-session
    :id (format nil "session-~D" (get-universal-time))
    :cwd cwd

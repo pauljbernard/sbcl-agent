@@ -1,4 +1,4 @@
-(asdf:defsystem "tutor-codex"
+(asdf:defsystem "sbcl-agent"
   :description "An SBCL-native CLI foundation for a Codex-like terminal assistant."
   :author "OpenAI Codex"
   :license "MIT"
@@ -27,16 +27,16 @@
                (:file "src/shell")
                (:file "src/repl")
                (:file "src/main"))
-  :in-order-to ((asdf:test-op (asdf:test-op "tutor-codex/tests"))))
+  :in-order-to ((asdf:test-op (asdf:test-op "sbcl-agent/tests"))))
 
-(asdf:defsystem "tutor-codex/tests"
-  :description "Base test suite for tutor-codex."
+(asdf:defsystem "sbcl-agent/tests"
+  :description "Base test suite for sbcl-agent."
   :author "OpenAI Codex"
   :license "MIT"
-  :depends-on ("tutor-codex")
+  :depends-on ("sbcl-agent")
   :serial t
   :components ((:file "tests/package")
                (:file "tests/smoke"))
   :perform (asdf:test-op (op c)
              (declare (ignore op c))
-             (uiop:symbol-call :tutor-codex/tests :run-all-tests)))
+             (uiop:symbol-call :sbcl-agent/tests :run-all-tests)))

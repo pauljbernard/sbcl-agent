@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun tool-proc-run (session &key argv)
   (declare (ignore session argv))

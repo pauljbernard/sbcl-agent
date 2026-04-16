@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defclass mock-provider (provider)
   ((model :initarg :model :reader mock-provider-model)))

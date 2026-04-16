@@ -1,4 +1,4 @@
-(in-package #:tutor-codex)
+(in-package #:sbcl-agent)
 
 (defun docs-root-pathname (session)
   (uiop:ensure-directory-pathname

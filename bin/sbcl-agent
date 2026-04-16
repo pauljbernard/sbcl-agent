@@ -10,6 +10,6 @@
                  :defaults *script-path*))
 
 (require :asdf)
-(load (merge-pathnames #P"tutor-codex.asd" *project-dir*))
-(asdf:load-system :tutor-codex)
-(sb-ext:exit :code (tutor-codex:main))
+(load (merge-pathnames #P"sbcl-agent.asd" *project-dir*))
+(asdf:load-system :sbcl-agent)
+(sb-ext:exit :code (sbcl-agent:main))

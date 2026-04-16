@@ -1,602 +1,277 @@
-# SBCL Agent Architecture
-
-## Goal
-
-Build a Codex-like CLI whose public interface, internal protocol, tool model, and execution substrate are all Common Lisp. The user interacts with the system by entering Common Lisp forms. The assistant responds with Common Lisp forms, plans, explanations, and executable artifacts that can run in the same SBCL image.
-
-This is a self-contained Lisp environment:
+---
+layout: default
+title: Architecture and Design
+hero_title: Architecture and Design
+hero_text: The design goal is not implementation parity with Codex. The goal is a transactional, image-native engineering environment that leverages SBCL while preserving safety, evidence, and reproducibility.
+eyebrow: Architecture
+permalink: /architecture.html
+description: Detailed design and architecture for sbcl-agent.
+---
+## System Objective
 
-- the CLI is Common Lisp
-- the command protocol is Common Lisp
-- tool calls are Common Lisp
-- plans are Common Lisp data
-- patches are Common Lisp data
-- execution happens in the same Common Lisp runtime
-
-The intended mental model is "turtles all the way down": the assistant is a Lisp-native development environment, not a text shell with Lisp bolted onto it.
+Build a governed, transactional, image-native agent engineering environment that can inspect and mutate the same running system it is reasoning about, while preserving reproducibility, rollback, provenance, and operator trust.
 
-## Design Principles
-
-1. The primary interface is data, not string parsing.
-2. Every assistant action should be representable as an s-expression.
-3. The model should generate structured Lisp forms whenever possible.
-4. Evaluation must be explicit, inspectable, and constrained by policy.
-5. The runtime image is the platform, so session state is first-class.
-6. Tooling should feel like extending a Lisp environment, not RPC glue.
-
-## Core User Experience
+This architecture deliberately uses Codex-like systems as an external benchmark for usefulness, not as an implementation blueprint.
 
-The user starts `sbcl-agent` and remains inside an interactive SBCL-backed agent shell.
+## Architectural Principles
 
-Examples of the desired interaction style:
+### Three explicit truths
 
-```lisp
-(ask "Summarize the current system architecture.")
+The system models what the project often calls the three truths: three distinct but connected truth domains.
 
-(plan "Add OpenAI-compatible chat provider support.")
+#### Source truth
 
-(run-task
-  :goal "Add a smoke test for config loading"
-  :approve t)
+Source truth covers the checked-in and file-based world:
 
-(tool :fs/read :path "src/main.lisp")
+- source files
+- diffs and patches
+- tests and fixtures
+- generated persistent artifacts
+- git state and reproducible build inputs
 
-(eval-form
-  '(defun hello () "hi"))
-```
+#### Image truth
 
-The CLI should also support raw Lisp input:
+Image truth covers the live SBCL image:
 
-```lisp
-(+ 100 203)
-```
+- loaded definitions
+- symbol and package state
+- heap objects and object identity
+- dynamic bindings
+- caches and memoized values
+- active threads and workers
+- open resources and runtime handles
 
-The environment distinguishes between:
+#### Workflow truth
 
-- plain Lisp evaluation
-- agent requests
-- tool invocations
-- code mutation operations
-- session and memory operations
+Workflow truth covers the durable record of engineering activity:
 
-These should all still look like ordinary Lisp forms from the user perspective.
+- work-items
+- plans and hypotheses
+- introspection evidence
+- mutation intents
+- runtime observations
+- validations
+- approvals and interventions
+- rollback and quarantine status
+- final conclusions
 
-## Top-Level Architecture
+Every meaningful task should answer:
 
-```text
-┌────────────────────────────────────────────────────────────┐
-│                        User / REPL                         │
-│  Reads CL forms, prints CL values, explanations, results  │
-└────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌────────────────────────────────────────────────────────────┐
-│                    Command Dispatcher                      │
-│  Classifies forms: eval, ask, plan, tool, patch, session  │
-└────────────────────────────────────────────────────────────┘
-                           │
-          ┌────────────────┼────────────────┐
-          ▼                ▼                ▼
-┌────────────────┐ ┌────────────────┐ ┌─────────────────────┐
-│ Agent Runtime  │ │ Tool Runtime   │ │ Lisp Eval Runtime   │
-│ prompt/session │ │ registry/policy│ │ compile/load/eval   │
-└────────────────┘ └────────────────┘ └─────────────────────┘
-          │                │                │
-          └────────────────┼────────────────┘
-                           ▼
-┌────────────────────────────────────────────────────────────┐
-│                    State + Event Log                       │
-│ transcript, plans, approvals, patches, forms, outputs     │
-└────────────────────────────────────────────────────────────┘
-                           │
-                           ▼
-┌────────────────────────────────────────────────────────────┐
-│              Model Adapter / Provider Boundary             │
-│ serializes context into CL-friendly messages and decodes   │
-│ model outputs into forms, actions, and annotations         │
-└────────────────────────────────────────────────────────────┘
-```
+- what changed in source?
+- what changed in image?
+- what evidence links the two?
 
-## Major Subsystems
+### Transactional live-image workflow
 
-### 1. CLI Shell
+The core loop is:
 
-The shell is an SBCL-native REPL application, not a subprocess wrapper around another tool.
+1. inspect source and image
+2. plan bounded mutations
+3. checkpoint the relevant state
+4. mutate source and image deliberately
+5. observe runtime effects
+6. validate in-image
+7. validate from cold state
+8. reconcile differences
+9. commit, roll back, or quarantine
 
-Responsibilities:
+This is stricter than a basic analyze-plan-execute-validate loop because the live image can both help and mislead.
 
-- read forms from standard input
-- maintain prompt state
-- pretty-print values and agent events
-- allow multiline forms and history
-- distinguish evaluator mode from agent mode
+## Runtime Layers
 
-Suggested module:
+### CLI and entrypoints
 
-```text
-src/shell.lisp
-```
+The operator-facing executables in `bin/` launch the SBCL runtime, load the system, and dispatch into the Common Lisp main entrypoint.
 
-Primary abstractions:
+Primary commands today:
 
-- `shell`
-- `read-command`
-- `dispatch-command`
-- `print-event`
+- `doctor`
+- `chat`
+- `exec`
+- `help`
+- `run-tests`
 
-### 2. Command Model
+### Shell and command normalization
 
-Every user action should map to a Lisp command object or tagged form.
+The interactive shell is implemented in Common Lisp and accepts both:
 
-Two complementary approaches work well:
+- shell commands such as `(ask ...)`, `(plan ...)`, and `(tool ...)`
+- ordinary Lisp forms for direct evaluation
 
-1. Native forms with conventional operator names:
+Command normalization turns recognized forms into structured command records while leaving unrecognized forms available for normal Lisp evaluation.
 
-```lisp
-(ask "Implement a provider.")
-(tool :fs/read :path "src/provider.lisp")
-```
+### Provider boundary
 
-2. Internal normalized command records:
+The provider layer abstracts model interaction and returns structured Common Lisp data, not raw untyped text.
 
-```lisp
-(:command :ask :prompt "Implement a provider.")
-(:command :tool :tool :fs/read :path "src/provider.lisp")
-```
+Current providers:
 
-Recommendation:
+- mock provider for local verification and deterministic smoke tests
+- OpenAI-compatible provider for external model-backed responses
 
-- let the user write natural Lisp forms
-- normalize them internally into command structures
+The provider contract also supports streaming by emitting structured provider events.
 
-This keeps the surface idiomatic while simplifying dispatch and logging.
+### Session runtime
 
-### 3. Agent Runtime
+The session layer owns the operator-facing mutable runtime state:
 
-The agent runtime owns the Codex-like behavior.
+- transcript and event log
+- staged assistant actions
+- plan summary
+- capability grants
+- queued tasks and worker metadata
+- work-item and workflow record collections
 
-Responsibilities:
+Sessions can be saved and restored, which gives the shell continuity across runs.
 
-- maintain conversation state
-- build model context from transcript and working state
-- request structured completions from the model
-- decode model output into Lisp actions
-- manage approval checkpoints
-- produce final answers, patches, tool requests, and plans
+### Tool registry
 
-Suggested data model:
+Tools are Common Lisp-callable capabilities that expose structured operations.
 
-```lisp
-(defstruct agent-session
-  id
-  cwd
-  package
-  transcript
-  plan
-  tool-policy
-  model
-  provider
-  state)
-```
+Current tool families include:
 
-The session should live in memory during a run and be serializable to disk.
+- filesystem tools
+- docs tools
+- session tools
+- process tools
+- git tools
+- patch application
 
-### 4. Provider Boundary
+The design intent is that tools remain explicit, reviewable, and capability-gated.
 
-The provider layer is the only part that knows how to talk to an external model.
+### Task queue and workers
 
-Responsibilities:
+Tasks provide background execution infrastructure. Workers execute queued tasks inside the current runtime and expose status for monitoring.
 
-- convert session context into provider request payloads
-- define response schemas
-- stream tokens or events
-- decode assistant output back into Lisp structures
+In the long-term design, tasks are subordinate execution units. Work-items remain the top-level engineering unit.
 
-Critical design point:
+### Work-items and workflow records
 
-The provider should not return opaque text only. It should aim to return a mixed structure:
+Work-items are the core transactional units in the system. Workflow records capture governance, approvals, state transitions, and operator-facing evidence.
 
-```lisp
-(:assistant-response
-  :message "I will inspect the project first."
-  :actions
-  ((:tool :fs/read :path "src/main.lisp")
-   (:tool :fs/read :path "src/provider.lisp")))
-```
+Current implementation themes already present in the codebase include:
 
-When the model cannot reliably emit structured objects directly, the provider can request a Lisp-serializable tagged block and parse it into internal action objects.
+- checkpoints
+- replay identifiers and validator task records
+- wait-state reporting
+- operator status summaries
+- image-only outcomes
+- source reconciliation records
 
-### 5. Tool Runtime
+## Data Model Overview
 
-Tools are Lisp-callable capabilities registered in a central registry.
+### Work-item
 
-Examples:
+A work-item represents a bounded engineering effort.
 
-- `:fs/read`
-- `:fs/write`
-- `:fs/patch`
-- `:proc/run`
-- `:git/status`
-- `:git/commit`
-- `:session/save`
-- `:docs/search`
+Typical concerns captured by a work-item:
 
-Each tool should have:
+- goal and scope
+- source snapshot and checkpoint references
+- image-related observations
+- planned and executed validations
+- taint and provenance state
+- final disposition
 
-- a symbolic id
-- an argument schema
-- an implementation function
-- a policy classification
-- a result encoder
+### Mutation transaction
 
-Suggested tool definition shape:
+A mutation transaction binds a set of source and image changes to a checkpoint and a closure outcome.
 
-```lisp
-(defstruct tool-definition
-  id
-  documentation
-  arglist
-  policy
-  function)
-```
+Expected closure states:
 
-Tools are invoked by the agent runtime, but tool implementations remain plain Common Lisp functions.
+- committed to source and image
+- committed to image only
+- rolled back
+- quarantined for operator review
 
-### 6. Evaluation Runtime
+### Validator task record
 
-This project needs two forms of evaluation:
+Validator task records track replayable validation steps, including:
 
-1. direct user evaluation
-2. assistant-generated evaluation
+- replay grouping
+- validator kind
+- checkpoint linkage
+- status transitions
+- resume and replay metadata
 
-They must not be treated as equivalent.
+### Image reconciliation record
 
-#### Direct User Evaluation
-
-If the user types:
-
-```lisp
-(+ 100 203)
-```
-
-the form may be evaluated directly in the active package and returned normally.
-
-#### Assistant-Generated Evaluation
-
-If the assistant proposes code, evaluation should be explicit and policy-governed.
-
-Recommended flow:
-
-1. assistant emits a form
-2. runtime validates the form shape
-3. runtime asks for approval if policy requires it
-4. runtime evaluates or compiles it in a controlled package
-5. runtime records the result in the event log
-
-This avoids hidden execution while preserving the Lisp-native experience.
-
-### 7. Patch and Mutation Engine
-
-A Codex-like tool must modify files, not only evaluate ephemeral forms.
-
-Represent file edits as Lisp data:
-
-```lisp
-(:patch
-  (:update "src/main.lisp"
-   ((:replace "(defun old ...)" "(defun new ...)")))
-  (:add "src/provider/openai.lisp"
-   "(in-package #:sbcl-agent) ..."))
-```
-
-Recommended approach:
-
-- keep patch intent as structured Lisp
-- apply filesystem writes through the tool runtime
-- optionally render unified diff for human review
-
-This allows the model to think in terms of AST-ish mutation while still interoperating with file-based workflows.
-
-### 8. Transcript and Event Log
-
-A self-hosted Lisp agent should treat its internal history as data.
-
-Persist:
-
-- user commands
-- normalized command objects
-- assistant messages
-- tool calls and results
-- approvals
-- patches
-- evaluation results
-- errors
-
-Suggested representation:
-
-```lisp
-(defstruct event
-  timestamp
-  kind
-  payload)
-```
-
-Persist these as readable s-expressions on disk so the system can reload prior context without custom binary formats.
-
-### 9. Memory and Workspace Model
-
-The agent should be aware of:
-
-- current working directory
-- current package
-- loaded ASDF systems
-- open files
-- active plan
-- session memory
-
-This is where the Lisp-native design is stronger than a shell clone. Because the runtime is an image, the system can expose live environment state directly:
-
-```lisp
-(current-package)
-(loaded-systems)
-(session-plan)
-(workspace-files)
-```
-
-## Interface Design
-
-## User-Facing Special Forms
-
-The CLI should provide a small standard vocabulary.
-
-### Conversation
-
-```lisp
-(ask "Explain the current design.")
-(chat "Refactor the provider layer.")
-(plan "Add structured tool dispatch.")
-```
-
-### Tooling
-
-```lisp
-(tool :fs/read :path "src/main.lisp")
-(tool :proc/run :argv '("sbcl" "--version"))
-(tool :git/status)
-```
-
-### Evaluation
-
-```lisp
-(eval-form '(+ 1 2))
-(compile-form '(defun x () 42))
-```
-
-### Mutation
-
-```lisp
-(patch
-  '((:update "README.md"
-      ((:append "New architecture notes")))))
-```
-
-### Session
-
-```lisp
-(session/save)
-(session/load "last-session.sexp")
-(session/reset)
-```
-
-### Introspection
-
-```lisp
-(help)
-(describe-tool :fs/read)
-(describe-session)
-```
-
-These are interface forms, not necessarily raw CL special operators. They can be ordinary functions or macros dispatched by the shell.
-
-## Execution Semantics
-
-The runtime must know what namespace code runs in.
-
-Recommendation:
-
-- user commands execute in `#:sbcl-agent-user`
-- system internals live in `#:sbcl-agent`
-- generated code can be staged in `#:sbcl-agent.generated`
-- tool implementations live in `#:sbcl-agent.tools`
-
-This package separation matters. It prevents accidental pollution of the core runtime and allows generated artifacts to be inspected, reloaded, or discarded.
+Image reconciliation records document how an image-only result was later brought back into durable source truth.
 
 ## Safety Model
 
-Because the assistant can emit executable Lisp, policy must be explicit.
+### Capability gates
 
-### Trust Levels
+The current runtime uses capability grants to make stateful operations explicit. Present gates include:
 
-Suggested execution classes:
+- process execution
+- git read and git write
+- workspace writes
 
-- `:safe-read`
-- `:workspace-write`
-- `:process-run`
-- `:network`
-- `:eval-generated`
-- `:git-push`
+### Checkpointing
 
-Every tool and assistant action should declare one of these classes.
+Before meaningful mutation, the system should record a checkpoint that ties together the relevant source baseline, image scope, and validation starting point.
 
-### Approval Policy
+The current implementation has checkpoint metadata in the work-item system. The long-term goal is higher-fidelity image capture and rollback support.
 
-Recommended defaults:
+### Rollback
 
-- direct user eval: allowed
-- file reads: allowed
-- local workspace writes: approval optional
-- subprocesses: approval required
-- network access: approval required
-- assistant-generated eval: approval required
+Rollback is a first-class architectural requirement even where implementation fidelity is still growing. The intended rollback surface includes both source and image effects.
 
-### Form Validation
+### Quarantine
 
-Before evaluating assistant-generated forms:
+Not every task should end in a clean commit or rollback. The architecture explicitly allows unresolved work to be quarantined for operator review.
 
-- reject reader-eval tricks
-- disallow package mutation by default
-- disallow `sb-ext:*posix-argv*` mutation and global image mutation unless approved
-- validate target package
-- validate referenced functions if in restricted mode
+## Validation Model
 
-Do not rely on string filters. Parse forms and inspect them as Lisp objects.
+### Live validation
 
-## Why CL-First Matters
+Live validation asks whether the mutation improved the currently running image.
 
-The main architectural advantage of this design is that the model can emit the same language that the system understands natively.
+### Reproducibility validation
 
-That produces a tighter loop:
+Reproducibility validation asks whether the same result can be reproduced from source in a cold start.
 
-1. user asks in Lisp
-2. runtime normalizes request into Lisp data
-3. provider asks model for Lisp-native actions
-4. assistant emits Lisp data or Lisp code
-5. runtime validates and executes Lisp in the same image
-6. result comes back as Lisp values
+### Reconciliation
 
-This removes impedance mismatch between:
+If live validation and cold-start validation disagree, the system should preserve that disagreement rather than flattening it into a false binary success.
 
-- command protocol and implementation language
-- tool schema and execution language
-- generated code and host runtime
+## Multi-Agent Direction
 
-## Recommended Module Layout
+The intended long-term orchestration model is role isolation rather than unconstrained task fan-out.
 
-```text
-src/
-├── package.lisp
-├── main.lisp
-├── shell.lisp
-├── commands.lisp
-├── session.lisp
-├── events.lisp
-├── provider/
-│   ├── protocol.lisp
-│   ├── mock.lisp
-│   └── openai-compatible.lisp
-├── tools/
-│   ├── registry.lisp
-│   ├── fs.lisp
-│   ├── process.lisp
-│   ├── git.lisp
-│   └── session.lisp
-├── eval/
-│   ├── runtime.lisp
-│   ├── validator.lisp
-│   └── packages.lisp
-├── patch/
-│   ├── protocol.lisp
-│   └── apply.lisp
-└── ui/
-    ├── printer.lisp
-    └── repl.lisp
-```
+Planned roles:
 
-## Example End-to-End Flow
+- observer agents inspect but do not mutate
+- planner agents propose transactions but do not execute them
+- mutation agents operate inside narrow transaction scopes
+- reviewer agents inspect diffs, image deltas, and evidence without altering active work
+- a supervisor agent owns closure, escalation, and rollback decisions
 
-User input:
+This ordering matters. Strong transaction boundaries come before aggressive parallelism.
 
-```lisp
-(ask "Add a doctor command that shows package and session information.")
-```
+## Module Map
 
-Internal normalized command:
+The current source tree maps roughly to the architecture like this:
 
-```lisp
-(:command :ask
-  :prompt "Add a doctor command that shows package and session information.")
-```
+- `config.lisp`: runtime configuration and provider bootstrap
+- `provider-protocol.lisp`, `provider-mock.lisp`, `provider-openai.lisp`: model interaction boundary
+- `commands.lisp`, `shell.lisp`, `repl.lisp`, `main.lisp`: operator interface and command execution
+- `session.lisp`, `events.lisp`, `tasks.lisp`: session runtime, logging, queues, and workers
+- `tools-*.lisp`, `tools-registry.lisp`: structured capability surface
+- `policy.lisp`, `sandbox.lisp`, `patch.lisp`: execution governance and workspace mutation controls
+- `work-items.lisp`, `workflow.lisp`: transactional engineering record and workflow evidence
 
-Provider response:
+## Architectural Gaps
 
-```lisp
-(:assistant-response
-  :message "I will inspect the current command and config modules first."
-  :actions
-  ((:tool :fs/read :path "src/main.lisp")
-   (:tool :fs/read :path "src/config.lisp")))
-```
+The codebase already demonstrates the core design direction, but some elements remain only partially implemented.
 
-Later assistant patch proposal:
+Largest remaining gaps:
 
-```lisp
-(:assistant-response
-  :message "I have prepared a patch."
-  :actions
-  ((:patch
-     (:update "src/main.lisp"
-      ((:replace "..." "..."))))
-   (:tool :proc/run :argv '("./bin/run-tests"))))
-```
+- higher-fidelity image checkpoint capture
+- stronger rollback of live image changes
+- more deterministic replay and provenance export
+- deeper role isolation for multi-agent work
+- richer cold-start validation orchestration
 
-At each step, the runtime can render human-readable text while still treating the interaction as executable Lisp data.
-
-## Implementation Phases
-
-### Phase 1. Lisp-Native Shell
-
-- multiline reader
-- command normalization
-- plain evaluation mode
-- mock provider
-
-### Phase 2. Structured Agent Runtime
-
-- session objects
-- event log
-- command/action protocol
-- tool registry
-
-### Phase 3. Controlled Execution
-
-- generated-form validator
-- approval model
-- subprocess and filesystem tools
-- patch engine
-
-### Phase 4. Real Provider
-
-- OpenAI-compatible chat provider
-- response decoding
-- streaming events
-- retry and error handling
-
-### Phase 5. Self-Hosting Workflow
-
-- generated Lisp patches
-- assistant-authored test updates
-- session persistence
-- reusable command macros and agent libraries
-
-## Non-Goals for the First Iteration
-
-- full editor integration
-- distributed agents
-- graphical UI
-- image snapshot portability across Lisp implementations
-- arbitrary sandbox security guarantees inside one SBCL image
-
-SBCL is the target runtime, so the first design should lean into SBCL strengths rather than prematurely abstracting for every Common Lisp implementation.
-
-## Summary
-
-The system should be designed as a Lisp machine for agentic development:
-
-- the interface is Lisp
-- the protocol is Lisp
-- the tool layer is Lisp
-- the memory model is Lisp
-- the generated artifacts are Lisp
-- the execution environment is Lisp
-
-That is the correct architecture if the goal is not merely "a CLI written in Lisp" but "a Codex-like assistant whose entire operational model is native Common Lisp."
+Those gaps are intentional roadmap items, not hidden assumptions. See [Implementation Plan]({{ '/implementation-plan.html' | relative_url }}) for delivery sequencing.

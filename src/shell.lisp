@@ -18,6 +18,13 @@
   (format t "  (start-worker)                     Start a background worker thread for queued tasks.~%")
   (format t "  (stop-worker \"worker-id\")         Stop a background worker thread.~%")
   (format t "  (list-workers)                     Show worker summaries for the current session.~%")
+  (format t "  (list-work-items)                  Show work-item summaries for the current session.~%")
+  (format t "  (describe-work-item \"work-id\")   Show one work-item detail record.~%")
+  (format t "  (list-workflow-records)           Show workflow records for the current session.~%")
+  (format t "  (describe-workflow-record \"wf-id\") Show one workflow record with its durable log entries.~%")
+  (format t "  (request-work-item-approval \"work-id\" :policy [:reason \"...\"]) Mark a work-item as waiting for approval.~%")
+  (format t "  (quarantine-work-item \"work-id\" \"reason\") Quarantine a work-item for operator review.~%")
+  (format t "  (resume-work-item \"work-id\" [:note \"...\"]) Resume a quarantined or waiting work-item.~%")
   (format t "  (describe-worker \"worker-id\")     Show one worker summary.~%")
   (format t "  (approve :process-run)             Grant a capability policy to the current session.~%")
   (format t "  (tool :fs/read :path \"file\")     Read a workspace file.~%")
@@ -260,6 +267,126 @@
         (error "Unknown worker ~A" worker-id))
       (worker-summary worker))))
 
+(defun enriched-work-item-detail (session work-item)
+  (let ((detail (work-item-detail work-item))
+        (record (work-item-workflow-record session work-item)))
+    (if record
+        (append detail (list :workflow-record (workflow-record-summary record)))
+        detail)))
+
+(defun execute-describe-work-item-command (arguments session)
+  (let ((work-item-id (first arguments)))
+    (unless (stringp work-item-id)
+      (error "DESCRIBE-WORK-ITEM requires a string work-item id"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-describe-workflow-record-command (arguments session)
+  (let ((workflow-record-id (first arguments)))
+    (unless (stringp workflow-record-id)
+      (error "DESCRIBE-WORKFLOW-RECORD requires a string workflow record id"))
+    (let ((record (find-workflow-record session workflow-record-id)))
+      (unless record
+        (error "Unknown workflow record ~A" workflow-record-id))
+      (workflow-record-detail record))))
+(defun execute-request-work-item-approval-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (policy (second arguments))
+        (reason (getf (cddr arguments) :reason)))
+    (unless (stringp work-item-id)
+      (error "REQUEST-WORK-ITEM-APPROVAL requires a string work-item id"))
+    (unless (keywordp policy)
+      (error "REQUEST-WORK-ITEM-APPROVAL requires a keyword policy"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (request-work-item-approval session work-item policy :reason reason)
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-quarantine-work-item-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (reason (second arguments)))
+    (unless (stringp work-item-id)
+      (error "QUARANTINE-WORK-ITEM requires a string work-item id"))
+    (unless (stringp reason)
+      (error "QUARANTINE-WORK-ITEM requires a string reason"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (quarantine-work-item session work-item reason :evidence (work-item-summary work-item))
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-resume-work-item-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (note (getf (rest arguments) :note)))
+    (unless (stringp work-item-id)
+      (error "RESUME-WORK-ITEM requires a string work-item id"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (resume-work-item session work-item :note note)
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-why-waiting-command (arguments session)
+  (let ((work-item-id (first arguments)))
+    (unless (stringp work-item-id)
+      (error "WHY-WAITING requires a string work-item id"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (work-item-wait-report session work-item))))
+
+(defun execute-list-replay-groups-command (session)
+  (session-validator-replay-groups session))
+
+(defun execute-list-image-reconciliations-command (session)
+  (session-image-reconciliation-summary session))
+
+(defun execute-replay-validator-task-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (validator-task-id (second arguments))
+        (status (or (getf (cddr arguments) :status) :passed)))
+    (unless (stringp work-item-id)
+      (error "REPLAY-VALIDATOR-TASK requires a string work-item id"))
+    (unless (stringp validator-task-id)
+      (error "REPLAY-VALIDATOR-TASK requires a string validator task id"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (execute-validator-task-record session work-item validator-task-id :status status)
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-replay-validator-set-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (replay-id (second arguments))
+        (status (or (getf (cddr arguments) :status) :passed))
+        (statuses (getf (cddr arguments) :statuses)))
+    (unless (stringp work-item-id)
+      (error "REPLAY-VALIDATOR-SET requires a string work-item id"))
+    (unless (stringp replay-id)
+      (error "REPLAY-VALIDATOR-SET requires a string replay id"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (execute-validator-replay-set session work-item replay-id :status status :statuses statuses)
+      (enriched-work-item-detail session work-item))))
+
+(defun execute-reconcile-image-only-source-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (summary (second arguments)))
+    (unless (stringp work-item-id)
+      (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string work-item id"))
+    (unless (stringp summary)
+      (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string summary"))
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (reconcile-image-only-work-item-to-source session work-item summary)
+      (enriched-work-item-detail session work-item))))
+
+
 (defun execute-command (command provider &optional session)
   (let ((active-session (ensure-session session)))
     (append-session-event active-session :command (command-summary command))
@@ -312,6 +439,54 @@
                active-session))
       (:list-workers
        (values (list-worker-summaries active-session) :list-workers active-session))
+      (:list-work-items
+       (values (list-work-item-summaries active-session) :list-work-items active-session))
+      (:describe-work-item
+       (values (execute-describe-work-item-command (command-arguments command) active-session)
+               :describe-work-item
+               active-session))
+      (:list-workflow-records
+       (values (list-workflow-record-summaries active-session) :list-workflow-records active-session))
+      (:describe-workflow-record
+       (values (execute-describe-workflow-record-command (command-arguments command) active-session)
+               :describe-workflow-record
+               active-session))
+      (:request-work-item-approval
+       (values (execute-request-work-item-approval-command (command-arguments command) active-session)
+               :request-work-item-approval
+               active-session))
+      (:quarantine-work-item
+       (values (execute-quarantine-work-item-command (command-arguments command) active-session)
+               :quarantine-work-item
+               active-session))
+      (:resume-work-item
+       (values (execute-resume-work-item-command (command-arguments command) active-session)
+               :resume-work-item
+               active-session))
+      (:why-waiting
+       (values (execute-why-waiting-command (command-arguments command) active-session)
+               :why-waiting
+               active-session))
+      (:list-replay-groups
+       (values (execute-list-replay-groups-command active-session)
+               :list-replay-groups
+               active-session))
+      (:list-image-reconciliations
+       (values (execute-list-image-reconciliations-command active-session)
+               :list-image-reconciliations
+               active-session))
+      (:replay-validator-task
+       (values (execute-replay-validator-task-command (command-arguments command) active-session)
+               :replay-validator-task
+               active-session))
+      (:replay-validator-set
+       (values (execute-replay-validator-set-command (command-arguments command) active-session)
+               :replay-validator-set
+               active-session))
+      (:reconcile-image-only-source
+       (values (execute-reconcile-image-only-source-command (command-arguments command) active-session)
+               :reconcile-image-only-source
+               active-session))
       (:describe-worker
        (values (execute-describe-worker-command (command-arguments command) active-session)
                :describe-worker
@@ -361,7 +536,7 @@
            (when (assistant-response-actions response)
              (format t "assistant-actions> ~S~%" (assistant-response-actions response))
              (format t "assistant-actions-staged> ~D~%" staged-count)))))
-    ((:enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker)
+    ((:enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source)
      (format t "tasks> ~S~%" result))
     (:execute-actions
      (format t "assistant-action-results> ~S~%" result))

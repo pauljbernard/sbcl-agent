@@ -1,0 +1,1068 @@
+(in-package #:sbcl-agent)
+
+(defstruct validation-result
+  kind
+  status
+  executed-at
+  evidence
+  tainted-p)
+
+(defstruct image-reconciliation-record
+  recorded-at
+  replay-id
+  image-summary
+  source-summary
+  status)
+
+(defstruct reconciliation-record
+  status
+  recorded-at
+  summary
+  live-status
+  cold-status
+  reproducibility-status
+  taint-status
+  taint-reasons)
+
+(defstruct checkpoint-record
+  id
+  captured-at
+  source-snapshot
+  image-snapshot-ref
+  worker-summaries
+  validation-baseline)
+
+(defstruct mutation-transaction
+  id
+  work-item-id
+  replay-id
+  scope
+  checkpoint-id
+  state
+  source-mutations
+  image-mutations
+  resource-effects
+  rollback-status
+  rollback-detail
+  quarantine-status)
+
+(defstruct validator-task-record
+  id
+  replay-id
+  kind
+  checkpoint-id
+  status
+  resume-command
+  created-at
+  completed-at)
+
+(defstruct provenance-record
+  source-hash
+  image-snapshot-id
+  introspection-queries
+  executed-mutations
+  before-after-map
+  runtime-observations
+  validation-outputs
+  final-source-diff
+  rollback-availability
+  taint-status
+  taint-reasons
+  approval-checkpoints
+  operator-interventions)
+
+(defstruct work-item
+  id
+  goal
+  status
+  created-at
+  updated-at
+  source-snapshot
+  image-snapshot-ref
+  workflow-record-ref
+  introspection-evidence
+  mutation-intent
+  runtime-observations
+  live-validation-result
+  cold-validation-result
+  pending-validations
+  validator-tasks
+  next-action
+  resume-payload
+  image-reconciliation
+  reconciliation-result
+  rollback-point
+  taint-status
+  closure-decision
+  transaction-ids
+  transactions
+  checkpoints
+  provenance)
+
+(defun make-work-item-id ()
+  (format nil "work-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun make-mutation-transaction-id ()
+  (format nil "txn-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun make-checkpoint-id ()
+  (format nil "checkpoint-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun make-replay-id (prefix work-item-id &optional detail)
+  (format nil "~A-~X"
+          prefix
+          (abs (sxhash (list prefix work-item-id detail)))))
+
+(defun make-validator-task-id (work-item-id kind checkpoint-id)
+  (make-replay-id "validator" work-item-id (list kind checkpoint-id)))
+
+(defun session-work-items (session)
+  (agent-session-work-items session))
+
+(defun capture-work-item-source-snapshot (session)
+  (list :captured-at (get-universal-time)
+        :cwd (agent-session-cwd session)
+        :plan (agent-session-plan session)
+        :transcript-count (length (agent-session-transcript session))
+        :event-count (length (agent-session-events session))))
+
+(defun capture-work-item-image-snapshot-reference (session)
+  (list :captured-at (get-universal-time)
+        :session-id (agent-session-id session)
+        :package (agent-session-package session)
+        :task-count (length (agent-session-tasks session))
+        :worker-count (length (agent-session-workers session))
+        :event-count (length (agent-session-events session))))
+
+(defun make-work-item-transaction (work-item-id &key scope)
+  (let ((transaction-id (make-mutation-transaction-id)))
+    (make-mutation-transaction :id transaction-id
+                               :work-item-id work-item-id
+                               :replay-id (make-replay-id "txn" work-item-id (list scope transaction-id))
+                               :scope (or scope :transitional-task)
+                               :checkpoint-id nil
+                               :state :created
+                               :source-mutations '()
+                               :image-mutations '()
+                               :resource-effects '()
+                               :rollback-status :not-started
+                               :rollback-detail nil
+                               :quarantine-status nil)))
+
+(defun validation-result-summary (result)
+  (and result
+       (list :kind (validation-result-kind result)
+             :status (validation-result-status result)
+             :executed-at (validation-result-executed-at result)
+             :tainted-p (validation-result-tainted-p result)
+             :evidence (validation-result-evidence result))))
+
+(defun reconciliation-record-view (record)
+  (and record
+       (list :status (reconciliation-record-status record)
+             :recorded-at (reconciliation-record-recorded-at record)
+             :summary (reconciliation-record-summary record)
+             :live-status (reconciliation-record-live-status record)
+             :cold-status (reconciliation-record-cold-status record)
+             :reproducibility-status (reconciliation-record-reproducibility-status record)
+             :taint-status (reconciliation-record-taint-status record)
+             :taint-reasons (reconciliation-record-taint-reasons record))))
+
+(defun checkpoint-summary (checkpoint)
+  (list :id (checkpoint-record-id checkpoint)
+        :captured-at (checkpoint-record-captured-at checkpoint)
+        :worker-count (length (checkpoint-record-worker-summaries checkpoint))
+        :validation-baseline (checkpoint-record-validation-baseline checkpoint)))
+
+(defun latest-work-item-checkpoint (work-item)
+  (car (last (work-item-checkpoints work-item))))
+
+(defun latest-work-item-checkpoint-id (work-item)
+  (let ((checkpoint (latest-work-item-checkpoint work-item)))
+    (and checkpoint (checkpoint-record-id checkpoint))))
+
+(defun validator-task-record-summary (record)
+  (list :id (validator-task-record-id record)
+        :replay-id (validator-task-record-replay-id record)
+        :kind (validator-task-record-kind record)
+        :checkpoint-id (validator-task-record-checkpoint-id record)
+        :status (validator-task-record-status record)
+        :resume-command (validator-task-record-resume-command record)
+        :created-at (validator-task-record-created-at record)
+        :completed-at (validator-task-record-completed-at record)))
+
+(defun work-item-validator-actions (work-item)
+  (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item)))
+
+(defun find-validator-task-record (work-item validator-task-id)
+  (find validator-task-id (work-item-validator-tasks work-item)
+        :key #'validator-task-record-id :test #'string=))
+
+(defun find-validator-task-record-by-replay-id (work-item replay-id)
+  (find replay-id (work-item-validator-tasks work-item)
+        :key #'validator-task-record-replay-id :test #'string=))
+
+(defun normalize-validator-status (status)
+  (case status
+    ((:passed :failed :partial) status)
+    (t (error "Unsupported validator status ~S" status))))
+
+(defun validator-status-for-kind (kind default statuses)
+  (or (and statuses (getf statuses kind)) default))
+
+(defun execute-validator-task-record (session work-item validator-task-id &key (status :passed) evidence)
+  (let ((record (find-validator-task-record work-item validator-task-id))
+        (normalized-status (normalize-validator-status status)))
+    (unless record
+      (error "Unknown validator task ~A for work-item ~A" validator-task-id (work-item-id work-item)))
+    (setf (validator-task-record-status record) normalized-status
+          (validator-task-record-completed-at record) (get-universal-time))
+    (ecase (validator-task-record-kind record)
+      (:live
+       (setf (work-item-live-validation-result work-item)
+             (make-live-validation-result normalized-status
+                                          (or evidence
+                                              (list :validator-task-id validator-task-id
+                                                    :replay-id (validator-task-record-replay-id record)
+                                                    :checkpoint-id (validator-task-record-checkpoint-id record))))))
+      (:cold
+       (setf (work-item-cold-validation-result work-item)
+             (make-cold-validation-result normalized-status
+                                          (or evidence
+                                              (list :validator-task-id validator-task-id
+                                                    :replay-id (validator-task-record-replay-id record)
+                                                    :checkpoint-id (validator-task-record-checkpoint-id record)))))))
+    (refresh-work-item-pending-validations session work-item)
+    (set-work-item-next-action session work-item
+                               (if (work-item-pending-validations work-item)
+                                   (list :type :complete-pending-validations
+                                         :pending (work-item-pending-validations work-item))
+                                   nil))
+    (set-work-item-resume-payload session work-item
+                                  (if (work-item-pending-validations work-item)
+                                      (list :resume-command :complete-validations
+                                            :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                            :pending (work-item-pending-validations work-item)
+                                            :validator-actions (work-item-validator-actions work-item)
+                                            :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
+                                            :rollback-point (work-item-rollback-point work-item))
+                                      nil))
+    (reconcile-validation-results work-item)
+    (append-work-item-workflow-entry session work-item
+                                     :validate
+                                     :validator-task-executed
+                                     (list :validator-task (validator-task-record-summary record)
+                                           :validation-result (case (validator-task-record-kind record)
+                                                                (:live (validation-result-summary (work-item-live-validation-result work-item)))
+                                                                (:cold (validation-result-summary (work-item-cold-validation-result work-item))))))
+    record))
+
+(defun execute-validator-replay-set (session work-item replay-id &key (status :passed) statuses)
+  (let* ((normalized-status (normalize-validator-status status))
+         (records (remove-if-not (lambda (record)
+                                   (string= replay-id (validator-task-record-replay-id record)))
+                                 (work-item-validator-tasks work-item))))
+    (unless records
+      (error "Unknown validator replay id ~A for work-item ~A" replay-id (work-item-id work-item)))
+    (dolist (record records)
+      (execute-validator-task-record session
+                                     work-item
+                                     (validator-task-record-id record)
+                                     :status (normalize-validator-status
+                                              (validator-status-for-kind (validator-task-record-kind record)
+                                                                         normalized-status
+                                                                         statuses))
+                                     :evidence (list :validator-task-id (validator-task-record-id record)
+                                                     :replay-id replay-id
+                                                     :checkpoint-id (validator-task-record-checkpoint-id record)
+                                                     :batch-replay-p t)))
+    records))
+
+(defun reconcile-image-only-work-item-to-source (session work-item summary)
+  (unless (eq (work-item-status work-item) :image-only)
+    (error "Work-item ~A is not in image-only state" (work-item-id work-item)))
+  (let ((transaction (current-work-item-transaction work-item)))
+    (when transaction
+      (setf (mutation-transaction-state transaction) :committed))
+    (setf (work-item-status work-item) :committed
+          (work-item-closure-decision work-item) :committed-to-source-and-image
+          (work-item-image-reconciliation work-item)
+          (make-image-reconciliation-record :recorded-at (get-universal-time)
+                                            :replay-id (and transaction (mutation-transaction-replay-id transaction))
+                                            :image-summary (work-item-resume-payload work-item)
+                                            :source-summary summary
+                                            :status :attached-to-source)
+          (work-item-updated-at work-item) (get-universal-time))
+    (refresh-work-item-pending-validations session work-item)
+    (set-work-item-next-action session work-item nil)
+    (set-work-item-resume-payload session work-item nil)
+    (append-work-item-source-mutation work-item
+                                      (list :kind :image-only-reconciliation
+                                            :summary summary)
+                                      session)
+    (append-work-item-workflow-entry session work-item
+                                     :reconcile
+                                     :image-only-reconciled-to-source
+                                     (list :summary summary
+                                           :replay-id (and transaction (mutation-transaction-replay-id transaction)))
+                                     :status :committed)
+    (let ((record (work-item-workflow-record session work-item)))
+      (when record
+        (close-workflow-record session
+                               record
+                               (list :work-item-status :committed
+                                     :closure-decision :committed-to-source-and-image
+                                     :summary summary)
+                               :status :committed
+                               :evidence (work-item-summary work-item))))
+    work-item))
+
+(defun refresh-work-item-validator-tasks (session work-item)
+  (let* ((checkpoint-id (latest-work-item-checkpoint-id work-item))
+         (pending (work-item-pending-validations work-item))
+         (existing (work-item-validator-tasks work-item))
+         (updated
+          (mapcar (lambda (kind)
+                    (or (find kind existing :key #'validator-task-record-kind :test #'eq)
+                        (make-validator-task-record
+                         :id (make-validator-task-id (work-item-id work-item) kind checkpoint-id)
+                         :replay-id (make-replay-id "validator-replay" (work-item-id work-item) (list kind checkpoint-id))
+                         :kind kind
+                         :checkpoint-id checkpoint-id
+                         :status :pending
+                         :resume-command :complete-validations
+                         :created-at (get-universal-time)
+                         :completed-at nil)))
+                  pending)))
+    (dolist (record updated)
+      (setf (validator-task-record-checkpoint-id record) checkpoint-id)
+      (when (null (validator-task-record-completed-at record))
+        (setf (validator-task-record-status record) :pending)))
+    (dolist (record existing)
+      (unless (member (validator-task-record-kind record) pending :test #'eq)
+        (when (eq (validator-task-record-status record) :pending)
+          (setf (validator-task-record-status record) :completed))
+        (setf (validator-task-record-completed-at record) (or (validator-task-record-completed-at record)
+                                                              (get-universal-time)))))
+    (setf (work-item-validator-tasks work-item)
+          (append
+           (mapcar (lambda (record)
+                     (or (find (validator-task-record-kind record) updated
+                               :key #'validator-task-record-kind :test #'eq)
+                         record))
+                   existing)
+           (remove-if (lambda (record)
+                        (find (validator-task-record-kind record) existing
+                              :key #'validator-task-record-kind :test #'eq))
+                      updated))
+          (work-item-updated-at work-item) (get-universal-time))
+    (append-work-item-workflow-entry session
+                                     work-item
+                                     :validate
+                                     :validator-tasks-updated
+                                     (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item)))
+    (work-item-validator-tasks work-item)))
+
+(defun transaction-summary (transaction)
+  (list :id (mutation-transaction-id transaction)
+        :replay-id (mutation-transaction-replay-id transaction)
+        :scope (mutation-transaction-scope transaction)
+        :checkpoint-id (mutation-transaction-checkpoint-id transaction)
+        :state (mutation-transaction-state transaction)
+        :rollback-status (mutation-transaction-rollback-status transaction)
+        :rollback-detail (mutation-transaction-rollback-detail transaction)
+        :quarantine-status (mutation-transaction-quarantine-status transaction)
+        :source-mutation-count (length (mutation-transaction-source-mutations transaction))
+        :image-mutation-count (length (mutation-transaction-image-mutations transaction))
+        :resource-effect-count (length (mutation-transaction-resource-effects transaction))))
+
+(defun provenance-record-summary (record)
+  (and record
+       (list :source-hash (provenance-record-source-hash record)
+             :image-snapshot-id (provenance-record-image-snapshot-id record)
+             :introspection-query-count (length (provenance-record-introspection-queries record))
+             :executed-mutation-count (length (provenance-record-executed-mutations record))
+             :validation-output-count (length (provenance-record-validation-outputs record))
+             :rollback-availability (provenance-record-rollback-availability record)
+             :taint-status (provenance-record-taint-status record)
+             :taint-reasons (provenance-record-taint-reasons record)
+             :approval-checkpoint-count (length (provenance-record-approval-checkpoints record))
+             :operator-intervention-count (length (provenance-record-operator-interventions record)))))
+
+(defun make-initial-provenance-record (source-snapshot image-snapshot-ref)
+  (make-provenance-record :source-hash (sxhash source-snapshot)
+                          :image-snapshot-id (getf image-snapshot-ref :session-id)
+                          :introspection-queries '()
+                          :executed-mutations '()
+                          :before-after-map '()
+                          :runtime-observations '()
+                          :validation-outputs '()
+                          :final-source-diff nil
+                          :rollback-availability :not-started
+                          :taint-status :clean
+                          :taint-reasons '()
+                          :approval-checkpoints '()
+                          :operator-interventions '()))
+
+(defun append-work-item-source-mutation (work-item payload &optional session)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (when transaction
+      (setf (mutation-transaction-source-mutations transaction)
+            (append (mutation-transaction-source-mutations transaction) (list payload))))
+    (setf (provenance-record-executed-mutations (work-item-provenance work-item))
+          (append (provenance-record-executed-mutations (work-item-provenance work-item))
+                  (list (list :kind :source :payload payload))))
+    (when session
+      (append-work-item-workflow-entry session work-item :mutate-source :source-mutation payload :status :in-progress))
+    payload))
+
+(defun append-work-item-image-mutation (work-item payload &optional session)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (when transaction
+      (setf (mutation-transaction-image-mutations transaction)
+            (append (mutation-transaction-image-mutations transaction) (list payload))))
+    (setf (provenance-record-executed-mutations (work-item-provenance work-item))
+          (append (provenance-record-executed-mutations (work-item-provenance work-item))
+                  (list (list :kind :image :payload payload))))
+    (when session
+      (append-work-item-workflow-entry session work-item :mutate-image :image-mutation payload :status :in-progress))
+    payload))
+
+(defun append-work-item-resource-effect (work-item payload &optional session)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (when transaction
+      (setf (mutation-transaction-resource-effects transaction)
+            (append (mutation-transaction-resource-effects transaction) (list payload))))
+    (when session
+      (append-work-item-workflow-entry session work-item :observe-runtime :resource-effect payload :status :in-progress))
+    payload))
+
+
+(defun work-item-summary (work-item)
+  (list :id (work-item-id work-item)
+        :goal (work-item-goal work-item)
+        :status (work-item-status work-item)
+        :created-at (work-item-created-at work-item)
+        :updated-at (work-item-updated-at work-item)
+        :source-snapshot (work-item-source-snapshot work-item)
+        :image-snapshot-ref (work-item-image-snapshot-ref work-item)
+        :mutation-intent (work-item-mutation-intent work-item)
+        :runtime-observation-count (length (work-item-runtime-observations work-item))
+        :live-validation-result (validation-result-summary (work-item-live-validation-result work-item))
+        :cold-validation-result (validation-result-summary (work-item-cold-validation-result work-item))
+        :pending-validations (work-item-pending-validations work-item)
+        :validator-tasks (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item))
+        :next-action (work-item-next-action work-item)
+        :resume-payload (work-item-resume-payload work-item)
+        :image-reconciliation (let ((record (work-item-image-reconciliation work-item)))
+                                (and record
+                                     (list :recorded-at (image-reconciliation-record-recorded-at record)
+                                           :replay-id (image-reconciliation-record-replay-id record)
+                                           :image-summary (image-reconciliation-record-image-summary record)
+                                           :source-summary (image-reconciliation-record-source-summary record)
+                                           :status (image-reconciliation-record-status record))))
+        :reconciliation-result (reconciliation-record-view (work-item-reconciliation-result work-item))
+        :rollback-point (work-item-rollback-point work-item)
+        :taint-status (work-item-taint-status work-item)
+        :taint-reasons (work-item-taint-reasons work-item)
+        :closure-decision (work-item-closure-decision work-item)
+        :workflow-record-ref (work-item-workflow-record-ref work-item)
+        :transaction-ids (work-item-transaction-ids work-item)
+        :checkpoint-count (length (work-item-checkpoints work-item))
+        :provenance (provenance-record-summary (work-item-provenance work-item))))
+
+(defun work-item-detail (work-item)
+  (append (work-item-summary work-item)
+          (list :transactions (mapcar #'transaction-summary (work-item-transactions work-item))
+                :checkpoints (mapcar #'checkpoint-summary (work-item-checkpoints work-item))
+                :latest-runtime-observation (let ((events (work-item-runtime-observations work-item)))
+                                              (and events (car (last events))))
+                :provenance-detail (provenance-record-summary (work-item-provenance work-item))
+                :workflow-record-ref (work-item-workflow-record-ref work-item))))
+
+(defun find-work-item (session work-item-id)
+  (find work-item-id (agent-session-work-items session)
+        :key #'work-item-id :test #'string=))
+
+(defun list-work-item-summaries (session)
+  (mapcar #'work-item-summary (agent-session-work-items session)))
+
+(defun work-item-workflow-record (session work-item)
+  (and (work-item-workflow-record-ref work-item)
+       (find-workflow-record session (work-item-workflow-record-ref work-item))))
+
+(defun append-work-item-workflow-entry (session work-item phase kind payload &key status)
+  (let ((record (work-item-workflow-record session work-item)))
+    (when record
+      (append-workflow-record-entry session record phase kind payload :status status))))
+
+(defun work-item-pending-validation-kinds (work-item)
+  (let ((pending '()))
+    (unless (work-item-live-validation-result work-item)
+      (push :live pending))
+    (unless (work-item-cold-validation-result work-item)
+      (push :cold pending))
+    (nreverse pending)))
+
+(defun refresh-work-item-pending-validations (session work-item)
+  (let ((pending (if (member (work-item-status work-item)
+                             '(:committed :rolled-back :failed :image-only)
+                             :test #'eq)
+                     '()
+                     (work-item-pending-validation-kinds work-item))))
+    (setf (work-item-pending-validations work-item) pending
+          (work-item-updated-at work-item) (get-universal-time))
+    (let ((record (work-item-workflow-record session work-item)))
+      (when record
+        (update-workflow-record-pending-validations record pending :session session)))
+    (refresh-work-item-validator-tasks session work-item)
+    pending))
+
+(defun set-work-item-next-action (session work-item next-action)
+  (setf (work-item-next-action work-item) next-action
+        (work-item-updated-at work-item) (get-universal-time))
+  (let ((record (work-item-workflow-record session work-item)))
+    (when record
+      (update-workflow-record-next-action record next-action :session session)))
+  next-action)
+
+(defun set-work-item-resume-payload (session work-item resume-payload)
+  (setf (work-item-resume-payload work-item) resume-payload
+        (work-item-updated-at work-item) (get-universal-time))
+  (let ((record (work-item-workflow-record session work-item)))
+    (when record
+      (update-workflow-record-resume-payload record resume-payload :session session)))
+  resume-payload)
+
+(defun work-item-wait-report (session work-item)
+  (let* ((record (work-item-workflow-record session work-item))
+         (pending (refresh-work-item-pending-validations session work-item))
+         (waiting-on (and record (workflow-record-waiting-on record)))
+         (reason (cond
+                   ((eq waiting-on :approval) :approval-required)
+                   ((eq waiting-on :operator-review) :operator-review-required)
+                   ((null pending) :ready)
+                   (t :pending-validation))))
+    (list :work-item-id (work-item-id work-item)
+          :status (work-item-status work-item)
+          :waiting-on waiting-on
+          :why reason
+          :pending-validations pending
+          :next-action (or (work-item-next-action work-item)
+                           (and record (workflow-record-next-action record)))
+          :resume-payload (or (work-item-resume-payload work-item)
+                              (and record (workflow-record-resume-payload record)))
+          :validator-tasks (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item))
+          :approval-requirements (and record (workflow-record-approval-requirements record))
+          :quarantine-reason (and record (workflow-record-quarantine-reason record))
+          :resume-count (and record (workflow-record-resume-count record))
+          :workflow-record-ref (work-item-workflow-record-ref work-item))))
+
+(defun mirror-work-item-operator-intervention (work-item intervention)
+  (setf (provenance-record-operator-interventions (work-item-provenance work-item))
+        (append (provenance-record-operator-interventions (work-item-provenance work-item))
+                (list intervention))
+        (work-item-updated-at work-item) (get-universal-time))
+  intervention)
+
+(defun append-work-item-operator-intervention (session work-item kind payload &key status)
+  (let ((record (work-item-workflow-record session work-item)))
+    (when record
+      (mirror-work-item-operator-intervention
+       work-item
+       (record-operator-intervention session record kind payload :status status)))))
+
+(defun request-work-item-approval (session work-item policy &key reason)
+  (let ((record (work-item-workflow-record session work-item)))
+    (unless record
+      (error "Work-item ~A has no workflow record" (work-item-id work-item)))
+    (let ((requirement (mark-workflow-record-awaiting-approval session record policy :reason reason)))
+      (setf (provenance-record-approval-checkpoints (work-item-provenance work-item))
+            (append (provenance-record-approval-checkpoints (work-item-provenance work-item))
+                    (list requirement))
+            (work-item-updated-at work-item) (get-universal-time))
+      (mirror-work-item-operator-intervention
+       work-item
+       (list :kind :approval-requested
+             :timestamp (get-universal-time)
+             :payload requirement))
+      (set-work-item-next-action session work-item
+                                 (list :type :await-approval
+                                       :policy policy
+                                       :resume-command `(resume-work-item ,(work-item-id work-item))))
+      (set-work-item-resume-payload session work-item
+                                    (list :resume-command `(resume-work-item ,(work-item-id work-item))
+                                          :rollback-point (work-item-rollback-point work-item)
+                                          :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                          :pending-validations (work-item-pending-validation-kinds work-item)
+                                          :validator-actions (work-item-validator-actions work-item)
+                                          :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
+                                          :approval-policy policy))
+      (refresh-work-item-pending-validations session work-item)
+      requirement)))
+
+(defun quarantine-work-item (session work-item reason &key evidence)
+  (let ((record (work-item-workflow-record session work-item)))
+    (unless record
+      (error "Work-item ~A has no workflow record" (work-item-id work-item)))
+    (quarantine-workflow-record session record reason :evidence evidence)
+    (let ((transaction (current-work-item-transaction work-item)))
+      (when transaction
+        (setf (mutation-transaction-quarantine-status transaction) :quarantined)))
+    (mirror-work-item-operator-intervention
+     work-item
+     (list :kind :quarantined
+           :timestamp (get-universal-time)
+           :payload reason))
+    (setf (work-item-status work-item) :quarantined
+          (work-item-updated-at work-item) (get-universal-time))
+    (set-work-item-next-action session work-item
+                               (list :type :operator-review
+                                     :resume-command `(resume-work-item ,(work-item-id work-item))
+                                     :reason reason))
+    (set-work-item-resume-payload session work-item
+                                  (list :resume-command `(resume-work-item ,(work-item-id work-item))
+                                        :rollback-point (work-item-rollback-point work-item)
+                                        :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                        :validator-actions (work-item-validator-actions work-item)
+                                        :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
+                                        :quarantine-reason reason
+                                        :operator-options '(:resume :rollback)))
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun resume-work-item (session work-item &key note)
+  (let ((record (work-item-workflow-record session work-item)))
+    (unless record
+      (error "Work-item ~A has no workflow record" (work-item-id work-item)))
+    (resume-workflow-record session record :note note)
+    (let ((transaction (current-work-item-transaction work-item)))
+      (when transaction
+        (setf (mutation-transaction-quarantine-status transaction) nil)))
+    (mirror-work-item-operator-intervention
+     work-item
+     (list :kind :resumed
+           :timestamp (get-universal-time)
+           :payload (or note :resume-requested)))
+    (setf (work-item-status work-item) :resumed
+          (work-item-updated-at work-item) (get-universal-time))
+    (set-work-item-next-action session work-item
+                               (list :type :continue-transaction
+                                     :note note
+                                     :suggested-step :run-live-and-cold-validation))
+    (set-work-item-resume-payload session work-item
+                                  (list :resume-command :continue-transaction
+                                        :note note
+                                        :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                        :pending-validations (work-item-pending-validation-kinds work-item)
+                                        :validator-actions (work-item-validator-actions work-item)
+                                        :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))))
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun find-work-item-transaction (work-item transaction-id)
+  (find transaction-id (work-item-transactions work-item)
+        :key #'mutation-transaction-id :test #'string=))
+
+(defun current-work-item-transaction (work-item)
+  (first (last (work-item-transactions work-item))))
+
+(defun make-live-validation-result (status evidence &key tainted-p)
+  (make-validation-result :kind :live
+                          :status status
+                          :executed-at (get-universal-time)
+                          :evidence evidence
+                          :tainted-p tainted-p))
+
+(defun make-cold-validation-result (status evidence &key tainted-p)
+  (make-validation-result :kind :cold
+                          :status status
+                          :executed-at (get-universal-time)
+                          :evidence evidence
+                          :tainted-p tainted-p))
+
+(defun validation-result-passed-p (result)
+  (and result (eq (validation-result-status result) :passed)))
+
+(defun work-item-taint-reasons (work-item)
+  (let* ((transaction (current-work-item-transaction work-item))
+         (live (work-item-live-validation-result work-item))
+         (cold (work-item-cold-validation-result work-item))
+         (status (work-item-status work-item))
+         (reasons '()))
+    (when (and transaction
+               (member status '(:mutating :failed :rolled-back :quarantined) :test #'eq))
+      (push :live-image-mutated reasons))
+    (when (and transaction
+               (plusp (length (mutation-transaction-image-mutations transaction)))
+               (not (validation-result-passed-p cold)))
+      (push :image-state-not-reproduced reasons))
+    (when (and transaction
+               (eq (mutation-transaction-rollback-status transaction) :required))
+      (push :rollback-required reasons))
+    (when (eq status :failed)
+      (push :task-failed reasons))
+    (when (eq status :rolled-back)
+      (push :rollback-state reasons))
+    (when (eq status :quarantined)
+      (push :quarantined-state reasons))
+    (when (and live cold
+               (not (eq (validation-result-status live)
+                        (validation-result-status cold))))
+      (push :validation-diverged reasons))
+    (nreverse (remove-duplicates reasons :test #'eq))))
+
+(defun refresh-work-item-taint-state (work-item)
+  (let ((reasons (work-item-taint-reasons work-item)))
+    (setf (work-item-taint-status work-item) (if reasons :tainted :clean)
+          (provenance-record-taint-status (work-item-provenance work-item)) (if reasons :tainted :clean)
+          (provenance-record-taint-reasons (work-item-provenance work-item)) reasons)
+    reasons))
+
+(defun reconciliation-summary-message (status taint-reasons)
+  (let ((base (case status
+                (:durable "Live and cold validation both passed.")
+                (:tainted-durable "Live and cold validation both passed, but the result is still tainted by image state.")
+                (:live-only "Live validation passed but cold validation failed.")
+                (:tainted-live-only "Live validation passed but cold validation failed, and the result remains tainted by image state.")
+                (:cold-only "Cold validation passed but live validation failed.")
+                (:failed "Live and cold validation both failed.")
+                (t "Validation is incomplete."))))
+    (if taint-reasons
+        (format nil "~A Taint reasons: ~{~A~^, ~}." base taint-reasons)
+        base)))
+
+(defun reconcile-validation-results (work-item)
+  (let* ((live (work-item-live-validation-result work-item))
+         (cold (work-item-cold-validation-result work-item))
+         (live-status (and live (validation-result-status live)))
+         (cold-status (and cold (validation-result-status cold)))
+         (taint-reasons (refresh-work-item-taint-state work-item))
+         (tainted-p (not (null taint-reasons)))
+         (summary (cond
+                    ((and (eq live-status :passed) (eq cold-status :passed) tainted-p)
+                     :tainted-durable)
+                    ((and (eq live-status :passed) (eq cold-status :passed))
+                     :durable)
+                    ((and (eq live-status :passed) (eq cold-status :failed) tainted-p)
+                     :tainted-live-only)
+                    ((and (eq live-status :passed) (eq cold-status :failed))
+                     :live-only)
+                    ((and (eq live-status :failed) (eq cold-status :passed))
+                     :cold-only)
+                    ((and (eq live-status :failed) (eq cold-status :failed))
+                     :failed)
+                    (t :incomplete)))
+         (reproducibility-status (cond
+                                   ((eq cold-status :passed) :reproduced)
+                                   ((eq cold-status :failed) :not-reproduced)
+                                   (t :unknown))))
+    (setf (work-item-reconciliation-result work-item)
+          (make-reconciliation-record :status summary
+                                      :recorded-at (get-universal-time)
+                                      :summary (reconciliation-summary-message summary taint-reasons)
+                                      :live-status live-status
+                                      :cold-status cold-status
+                                      :reproducibility-status reproducibility-status
+                                      :taint-status (if tainted-p :tainted :clean)
+                                      :taint-reasons taint-reasons))
+    (work-item-reconciliation-result work-item)))
+
+(defun mark-work-item-image-only (session work-item &key reason)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (when transaction
+      (setf (mutation-transaction-state transaction) :image-only))
+    (setf (work-item-status work-item) :image-only
+          (work-item-closure-decision work-item) :committed-to-image-only
+          (work-item-updated-at work-item) (get-universal-time))
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    (set-work-item-next-action session work-item nil)
+    (set-work-item-resume-payload session work-item
+                                  (list :resume-command :reconcile-image-only
+                                        :replay-id (and transaction (mutation-transaction-replay-id transaction))
+                                        :reason reason))
+    (append-work-item-workflow-entry session work-item
+                                     :reconcile
+                                     :image-only-commit
+                                     (list :reason reason
+                                           :replay-id (and transaction (mutation-transaction-replay-id transaction)))
+                                     :status :image-only)
+    (let ((record (work-item-workflow-record session work-item)))
+      (when record
+        (close-workflow-record session
+                               record
+                               (list :work-item-status :image-only
+                                     :closure-decision :committed-to-image-only
+                                     :reason reason)
+                               :status :image-only
+                               :evidence (work-item-summary work-item))))
+    work-item))
+
+(defun update-work-item-validation-results (session work-item live-status live-evidence cold-status cold-evidence)
+  (refresh-work-item-taint-state work-item)
+  (setf (work-item-live-validation-result work-item)
+        (make-live-validation-result live-status live-evidence
+                                     :tainted-p (eq (work-item-taint-status work-item) :tainted))
+        (work-item-cold-validation-result work-item)
+        (make-cold-validation-result cold-status cold-evidence)
+        (work-item-updated-at work-item) (get-universal-time)
+        (provenance-record-validation-outputs (work-item-provenance work-item))
+        (list (validation-result-summary (work-item-live-validation-result work-item))
+              (validation-result-summary (work-item-cold-validation-result work-item))))
+  (refresh-work-item-pending-validations session work-item)
+  (set-work-item-next-action session work-item
+                             (if (null (work-item-pending-validations work-item))
+                                 nil
+                                 (list :type :complete-pending-validations
+                                       :pending (work-item-pending-validations work-item))))
+  (set-work-item-resume-payload session work-item
+                                (if (null (work-item-pending-validations work-item))
+                                    nil
+                                    (list :resume-command :complete-validations
+                                          :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                          :pending (work-item-pending-validations work-item)
+                                          :validator-actions (work-item-validator-actions work-item)
+                                          :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
+                                          :rollback-point (work-item-rollback-point work-item))))
+  (reconcile-validation-results work-item)
+  (append-work-item-workflow-entry session work-item
+                                   :validate
+                                   :validation-results
+                                   (list :live (validation-result-summary (work-item-live-validation-result work-item))
+                                         :cold (validation-result-summary (work-item-cold-validation-result work-item))
+                                         :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item)))
+                                   :status :validating)
+  work-item)
+
+(defun create-work-item (session goal &key mutation-intent transaction-scope workflow-record-ref)
+  (let* ((id (make-work-item-id))
+         (source-snapshot (capture-work-item-source-snapshot session))
+         (image-snapshot-ref (capture-work-item-image-snapshot-reference session))
+         (transaction (make-work-item-transaction id :scope transaction-scope))
+         (workflow-record (or (and workflow-record-ref
+                                   (find-workflow-record session workflow-record-ref))
+                              (create-workflow-record session
+                                                      goal
+                                                      :work-item-id id
+                                                      :initial-phase :inspect
+                                                      :initial-kind :source-and-image-snapshots
+                                                      :initial-payload (list :source-snapshot source-snapshot
+                                                                             :image-snapshot-ref image-snapshot-ref))))
+         (work-item (make-work-item
+                     :id id
+                     :goal goal
+                     :status :created
+                     :created-at (get-universal-time)
+                     :updated-at (get-universal-time)
+                     :source-snapshot source-snapshot
+                     :image-snapshot-ref image-snapshot-ref
+                     :workflow-record-ref (and workflow-record (workflow-record-id workflow-record))
+                     :introspection-evidence '()
+                     :mutation-intent mutation-intent
+                     :runtime-observations '()
+                     :live-validation-result nil
+                     :cold-validation-result nil
+                     :pending-validations '(:live :cold)
+                     :validator-tasks '()
+                     :next-action (list :type :capture-checkpoint-and-validate
+                                        :suggested-step :checkpoint)
+                     :resume-payload (list :resume-command :start-work-item
+                                           :checkpoint-id nil
+                                           :pending '(:live :cold)
+                                           :validator-actions '()
+                                           :replay-id (mutation-transaction-replay-id transaction))
+                     :image-reconciliation nil
+                     :reconciliation-result nil
+                     :rollback-point (list :transaction-id (mutation-transaction-id transaction)
+                                           :rollback-status :not-started)
+                     :taint-status :clean
+                     :closure-decision nil
+                     :transaction-ids (list (mutation-transaction-id transaction))
+                     :transactions (list transaction)
+                     :checkpoints '()
+                     :provenance (make-initial-provenance-record source-snapshot image-snapshot-ref))))
+    (setf (agent-session-work-items session)
+          (append (agent-session-work-items session) (list work-item)))
+    (append-work-item-workflow-entry session work-item :inspect :work-item-created (work-item-summary work-item) :status :open)
+    (refresh-work-item-pending-validations session work-item)
+    (append-session-event session :work-item-created (work-item-summary work-item))
+    work-item))
+
+(defun create-work-item-for-task (session task &key mutation-intent)
+  (create-work-item session
+                    (format nil "Execute task ~A (~A)" (task-id task) (task-kind task))
+                    :mutation-intent (or mutation-intent
+                                         (list :task-id (task-id task)
+                                               :command-kind (task-kind task)
+                                               :payload (task-payload task)))
+                    :transaction-scope :task))
+
+(defun append-work-item-runtime-observation (session work-item kind payload)
+  (let ((event (make-event-now kind payload)))
+    (setf (work-item-runtime-observations work-item)
+          (append (work-item-runtime-observations work-item) (list event))
+          (work-item-updated-at work-item) (get-universal-time)
+          (provenance-record-runtime-observations (work-item-provenance work-item))
+          (append (provenance-record-runtime-observations (work-item-provenance work-item))
+                  (list event)))
+    (append-work-item-workflow-entry session work-item :observe-runtime kind payload :status :in-progress)
+    event))
+
+(defun append-work-item-checkpoint (session work-item &key validation-baseline)
+  (let ((checkpoint (make-checkpoint-record
+                     :id (make-checkpoint-id)
+                     :captured-at (get-universal-time)
+                     :source-snapshot (capture-work-item-source-snapshot session)
+                     :image-snapshot-ref (capture-work-item-image-snapshot-reference session)
+                     :worker-summaries (list-worker-summaries session)
+                     :validation-baseline (or validation-baseline
+                                              (list :event-count (length (agent-session-events session))
+                                                    :task-count (length (agent-session-tasks session)))))))
+    (setf (work-item-checkpoints work-item)
+          (append (work-item-checkpoints work-item) (list checkpoint))
+          (work-item-updated-at work-item) (get-universal-time)
+          (provenance-record-rollback-availability (work-item-provenance work-item)) :captured)
+    (let ((transaction (current-work-item-transaction work-item)))
+      (when transaction
+        (setf (mutation-transaction-checkpoint-id transaction) (checkpoint-record-id checkpoint)
+              (mutation-transaction-state transaction) :checkpointed
+              (mutation-transaction-rollback-status transaction) :captured
+              (mutation-transaction-rollback-detail transaction)
+              (list :checkpoint-id (checkpoint-record-id checkpoint)
+                    :restorable-p nil))))
+    (append-work-item-workflow-entry session work-item :checkpoint :checkpoint-created (checkpoint-summary checkpoint) :status :checkpointed)
+    (refresh-work-item-pending-validations session work-item)
+    (set-work-item-resume-payload session work-item
+                                  (list :resume-command :run-task
+                                        :checkpoint-id (checkpoint-record-id checkpoint)
+                                        :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
+                                        :rollback-point (work-item-rollback-point work-item)
+                                        :validator-actions (work-item-validator-actions work-item)))
+    (append-work-item-runtime-observation session work-item :checkpoint-created (checkpoint-summary checkpoint))
+    checkpoint))
+
+(defun update-work-item-status-from-task (session task status &key closure-decision error)
+  (let ((work-item (and (task-work-item-id task)
+                        (find-work-item session (task-work-item-id task)))))
+    (when work-item
+      (let ((transaction (current-work-item-transaction work-item)))
+        (when transaction
+          (setf (mutation-transaction-state transaction)
+                (case status
+                  (:planned (if (mutation-transaction-checkpoint-id transaction)
+                                (mutation-transaction-state transaction)
+                                :planned))
+                  (:checkpointed :checkpointed)
+                  (:mutating :mutating)
+                  (:committed :committed)
+                  (:rolled-back :rolled-back)
+                  (:failed :failed)
+                  (t (or (mutation-transaction-state transaction) :created)))
+                (mutation-transaction-rollback-status transaction)
+                (case status
+                  (:rolled-back :rolled-back)
+                  (:failed :required)
+                  (:committed :not-needed)
+                  (:quarantined :required)
+                  (t (mutation-transaction-rollback-status transaction)))
+                (mutation-transaction-rollback-detail transaction)
+                (case status
+                  (:failed (list :reason error :recommended-action :rollback-or-quarantine))
+                  (:rolled-back (list :reason :cancelled :restored-p nil))
+                  (:quarantined (list :reason error :recommended-action :operator-review))
+                  (:committed (list :reason :commit-succeeded))
+                  (t (mutation-transaction-rollback-detail transaction)))))
+        (setf (work-item-status work-item) status
+              (work-item-updated-at work-item) (get-universal-time)
+              (work-item-closure-decision work-item) closure-decision
+              (work-item-rollback-point work-item)
+              (list :transaction-id (first (last (work-item-transaction-ids work-item)))
+                    :rollback-status (if (member status '(:rolled-back :failed) :test #'eq)
+                                         :available
+                                         :captured))
+              (provenance-record-rollback-availability (work-item-provenance work-item))
+              (if (member status '(:rolled-back :failed) :test #'eq) :available :captured))
+        (refresh-work-item-taint-state work-item)
+        (refresh-work-item-pending-validations session work-item)
+        (set-work-item-next-action session work-item
+                                   (case status
+                                     (:planned (list :type :checkpoint :suggested-step :checkpoint))
+                                     (:checkpointed (list :type :mutate :suggested-step :run-task))
+                                     (:mutating (list :type :observe-runtime :suggested-step :await-runtime-effects))
+                                     (:committed nil)
+                                     (:failed (list :type :review-failure :suggested-step :quarantine-or-rollback))
+                                     (:rolled-back nil)
+                                     (:quarantined (list :type :operator-review :suggested-step :resume-or-rollback))
+                                     (t (work-item-next-action work-item))))
+        (set-work-item-resume-payload session work-item
+                                      (case status
+                                        (:planned (list :resume-command :checkpoint
+                                                        :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                        :replay-id (mutation-transaction-replay-id transaction)
+                                                        :rollback-point (work-item-rollback-point work-item)))
+                                        (:checkpointed (list :resume-command :run-task
+                                                             :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                             :replay-id (mutation-transaction-replay-id transaction)
+                                                             :checkpoint-count (length (work-item-checkpoints work-item))))
+                                        (:mutating (list :resume-command :observe-runtime
+                                                         :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                         :replay-id (mutation-transaction-replay-id transaction)
+                                                         :transaction-id (first (last (work-item-transaction-ids work-item)))))
+                                        (:committed nil)
+                                        (:rolled-back nil)
+                                        (:failed (list :resume-command :quarantine-or-rollback
+                                                       :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                       :replay-id (mutation-transaction-replay-id transaction)
+                                                       :error error))
+                                        (:quarantined (work-item-resume-payload work-item))
+                                        (t (work-item-resume-payload work-item))))
+        (append-work-item-runtime-observation
+         session
+         work-item
+         :task-state
+         (list :task-id (task-id task)
+               :task-status (task-status task)
+               :work-item-status status
+               :error error))
+        (append-work-item-workflow-entry session work-item :reconcile :task-status-transition
+                                         (list :task-id (task-id task)
+                                               :status status
+                                               :closure-decision closure-decision
+                                               :error error)
+                                         :status (case status
+                                                   (:planned :planned)
+                                                   (:mutating :in-progress)
+                                                   (:committed :ready-to-close)
+                                                   (:failed :requires-review)
+                                                   (:rolled-back :rolled-back)
+                                                   (t :open)))
+        (when (member status '(:committed :failed :rolled-back) :test #'eq)
+          (update-work-item-validation-results
+           session
+           work-item
+           (if (eq status :committed) :passed :failed)
+           (list :task-id (task-id task)
+                 :status status
+                 :event-count (length (task-progress-events task)))
+           (if (eq status :committed) :passed :failed)
+           (list :task-id (task-id task)
+                 :status status
+                 :requires-fresh-run-p t))
+          (let ((record (work-item-workflow-record session work-item)))
+            (when record
+              (close-workflow-record session
+                                     record
+                                     (list :work-item-status status
+                                           :closure-decision closure-decision
+                                           :rollback-point (work-item-rollback-point work-item)
+                                           :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item)))
+                                     :status (case status
+                                               (:committed :committed)
+                                               (:failed :quarantined)
+                                               (:rolled-back :rolled-back)
+                                               (t :closed))
+                                     :evidence (work-item-summary work-item)))))
+      work-item))))

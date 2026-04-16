@@ -15,6 +15,8 @@
                (:file "src/events")
                (:file "src/policy")
                (:file "src/session")
+               (:file "src/workflow")
+               (:file "src/work-items")
                (:file "src/sandbox")
                (:file "src/tools-registry")
                (:file "src/tools-fs")

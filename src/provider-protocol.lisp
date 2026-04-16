@@ -107,6 +107,15 @@
                     (or (json-object-value object "actions") '()))
    :metadata (json-object->keyword-plist (or (json-object-value object "metadata") '()))))
 
+(defun parse-eval-action-form (payload)
+  (cond
+    ((stringp payload)
+     (read-from-string payload))
+    ((and (listp payload) (or (getf payload :FORM) (getf payload :form)))
+     (read-from-string (or (getf payload :FORM) (getf payload :form))))
+    (t
+     payload)))
+
 (defun execute-assistant-action (action session)
   (case (assistant-action-type action)
     (:TOOL
@@ -120,6 +129,8 @@
        (apply #'invoke-tool tool-id session (or arguments '()))))
     (:PATCH
      (apply-patch-operations session (assistant-action-payload action)))
+    (:EVAL
+     (eval-user-form (parse-eval-action-form (assistant-action-payload action))))
     (t
      (error "Unsupported assistant action type ~S" (assistant-action-type action)))))
 

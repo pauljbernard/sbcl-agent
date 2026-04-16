@@ -2,6 +2,19 @@
 
 `sbcl-agent` is an SBCL-native Codex-style CLI written in Common Lisp. The command-line entrypoints, the interactive shell, the session model, the tool interface, and the runtime orchestration are all implemented in CL so the system stays "turtles all the way down".
 
+## Documentation Site
+
+The primary end-user and architectural documentation now lives in `docs/` for GitHub Pages.
+
+Start with:
+
+- `docs/index.md`
+- `docs/why-sbcl-agent.md`
+- `docs/architecture.md`
+- `docs/user-guide.md`
+- `docs/common-lisp-runtime.md`
+- `docs/common-lisp-guide.md`
+
 ## What It Does
 
 The current runtime provides:
@@ -16,6 +29,9 @@ The current runtime provides:
 - a capability policy model for controlled operations
 - sandbox-backed process and git execution
 - queued tasks and background worker threads
+- transactional live-image work-items with checkpoints, rollback metadata, provenance, taint, and workflow records
+- validator replay groups and replayable validator task records
+- image-only live fixes that can later be reconciled into durable source-and-image closures
 - CL-native workspace, docs, session, process, patch, and git tools
 
 ## Requirements
@@ -89,12 +105,14 @@ Top-level CLI commands:
 
 Environment variables:
 
-- `TUTOR_CODEX_PROVIDER`: provider backend, defaults to `mock`
+- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime selects `openai-compatible` if an API key is available and otherwise falls back to `mock`
 - `TUTOR_CODEX_MODEL`: logical model name, defaults to `gpt-5`
 - `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
 - `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
 
-If no provider configuration is supplied, the runtime uses the mock provider. That is the easiest way to validate the environment and exercise the shell without external dependencies.
+If `OPENAI_API_KEY` is unset, `sbcl-agent` falls back to `openai-api-key.key` in the current working directory and trims trailing whitespace from that file. This keeps the local key out of shell history while still allowing the runtime to bootstrap itself from the repository root.
+
+If no provider override is supplied, the runtime automatically selects `openai-compatible` when an API key is available. Otherwise it falls back to `mock`. The mock provider remains the easiest way to validate the environment and exercise the shell without external dependencies.
 
 ## Doctor Command
 
@@ -107,6 +125,8 @@ If no provider configuration is supplied, the runtime uses the mock provider. Th
 - queued task and active worker counts
 - approved capability grants
 - available sandbox profiles
+- operator status buckets for ready, blocked, quarantined, image-only, and durable work
+- validator replay group and image reconciliation counts
 - whether git tools are registered
 - whether API base and API key are configured
 
@@ -159,6 +179,12 @@ Available shell commands:
 - `(session/load "path")`
 - `(session/reset)`
 - `(describe-session)`
+- `(why-waiting "work-id")`
+- `(list-replay-groups)`
+- `(list-image-reconciliations)`
+- `(replay-validator-task "work-id" "validator-id" :status :passed)`
+- `(replay-validator-set "work-id" "replay-id" :status :passed :statuses '(:live :partial :cold :passed))`
+- `(reconcile-image-only-source "work-id" "summary")`
 
 ### Normal Lisp Evaluation
 
@@ -237,6 +263,9 @@ Examples:
 
 - `:session/summary`
 - `:session/events`
+- `:session/operator-status`
+- `:session/replay-groups`
+- `:session/image-reconciliations`
 
 Examples:
 
@@ -405,3 +434,31 @@ The runtime is still early-stage. Current known limitations include:
 ## Development Notes
 
 All executable surfaces in the repository are intended to remain Common Lisp. If you add new runtime entrypoints, they should preserve the CL-native model rather than introducing non-Lisp control scripts.
+
+## Live-Image Workflow Controls
+
+The current north star is not exact Codex implementation parity. `sbcl-agent` treats source truth, image truth, and workflow truth as separate but linked domains.
+
+In practice that means the runtime now has explicit controls for live-image engineering:
+
+- work-items capture checkpoints, rollback metadata, validation state, provenance, and replay ids
+- validator tasks are durable records with ids, replay ids, checkpoint references, and terminal outcomes such as `:passed`, `:failed`, and `:partial`
+- replay groups let you re-run a coordinated validator set by `replay-id`
+- image-only outcomes let the runtime acknowledge “fixed the live image first” without pretending source is already reconciled
+- image reconciliation records capture when an image-only fix is later attached to durable source changes
+
+Typical flow for a live-image fix:
+
+```lisp
+(list-work-items)
+(why-waiting "work-...")
+(list-replay-groups)
+(replay-validator-task "work-..." "validator-..." :status :passed)
+(replay-validator-set "work-..." "validator-replay-..."
+                      :status :passed
+                      :statuses '(:live :partial :cold :passed))
+(list-image-reconciliations)
+(reconcile-image-only-source "work-..." "Captured source patch and tests")
+```
+
+Use `describe-session`, `:session/operator-status`, `:session/replay-groups`, and `:session/image-reconciliations` when you need a summary across the entire current image instead of one work-item.

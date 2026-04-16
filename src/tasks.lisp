@@ -14,6 +14,7 @@
   error
   session-id
   worker-id
+  work-item-id
   progress-events)
 
 (defstruct worker-state
@@ -66,6 +67,7 @@
              :error nil
              :session-id (agent-session-id session)
              :worker-id nil
+             :work-item-id nil
              :progress-events '()))
 
 (defun task-summary (task)
@@ -78,6 +80,7 @@
         :completed-at (task-completed-at task)
         :session-id (task-session-id task)
         :worker-id (task-worker-id task)
+        :work-item-id (task-work-item-id task)
         :progress-event-count (length (task-progress-events task))
         :latest-progress-event (car (last (task-progress-events task)))
         :result (task-result task)
@@ -108,6 +111,7 @@
     (list :id (task-id task)
           :status (task-status task)
           :worker-id (task-worker-id task)
+          :work-item-id (task-work-item-id task)
           :progress-event-count count
           :recent-progress-events (mapcar #'progress-event-summary recent)
           :latest-progress-event (and events (progress-event-summary (car (last events)))))))
@@ -125,7 +129,11 @@
 
 (defun enqueue-task (session command &key (priority 0) payload)
   (let* ((task (make-queued-task session command :priority priority :payload payload))
+         (work-item (create-work-item-for-task session task))
          (tasks (append (agent-session-tasks session) (list task))))
+    (setf (task-work-item-id task) (work-item-id work-item))
+    (append-work-item-checkpoint session work-item)
+    (update-work-item-status-from-task session task :planned)
     (update-session-task-list session (sort-tasks tasks))
     (append-session-event session :task-enqueued (task-summary task))
     task))
@@ -146,6 +154,8 @@
           (task-completed-at task) (get-universal-time))
     (append-task-progress-event session task :task-cancelled (task-summary task))
     (append-session-event session :task-cancelled (task-summary task))
+    (update-work-item-status-from-task session task :rolled-back
+                                       :closure-decision :cancelled)
     task))
 
 (defun next-queued-task (session)
@@ -157,6 +167,12 @@
         (task-worker-id task) worker-id)
   (append-task-progress-event session task :task-started (task-summary task))
   (append-session-event session :task-started (task-summary task))
+  (append-work-item-image-mutation (find-work-item session (task-work-item-id task))
+                                   (list :kind :task-execution
+                                         :task-id (task-id task)
+                                         :command-kind (task-kind task))
+                                   session)
+  (update-work-item-status-from-task session task :mutating)
   (let ((*task-progress-callback* (task-progress-callback session task)))
     (handler-case
         (multiple-value-bind (result kind updated-session)
@@ -167,6 +183,20 @@
                 (task-result task) result)
           (append-task-progress-event session task :task-completed (task-summary task))
           (append-session-event session :task-completed (task-summary task))
+          (let ((work-item (find-work-item session (task-work-item-id task))))
+            (when work-item
+              (append-work-item-source-mutation work-item
+                                                (list :kind :result
+                                                      :task-id (task-id task)
+                                                      :result-kind (task-kind task))
+                                                session)
+              (append-work-item-resource-effect work-item
+                                                (list :kind :completion
+                                                      :task-id (task-id task)
+                                                      :worker-id worker-id)
+                                                session)))
+          (update-work-item-status-from-task session task :committed
+                                             :closure-decision :committed-to-source-and-image)
           task)
       (error (condition)
         (setf (task-status task) :failed
@@ -174,9 +204,20 @@
               (task-error task) (princ-to-string condition))
         (append-task-progress-event session task :task-failed (task-summary task))
         (append-session-event session :task-failed (task-summary task))
+        (let ((work-item (find-work-item session (task-work-item-id task))))
+          (when work-item
+            (append-work-item-resource-effect work-item
+                                              (list :kind :failure
+                                                    :task-id (task-id task)
+                                                    :error (princ-to-string condition))
+                                              session)))
+        (update-work-item-status-from-task session task :failed
+                                           :closure-decision :rejected-and-rolled-back
+                                           :error (princ-to-string condition))
         task))))
 
-(defun run-next-task (session provider &optional worker-id)
+(defun run-next-task
+ (session provider &optional worker-id)
   (let ((task (next-queued-task session)))
     (unless task
       (error "No queued tasks are available in the current session"))

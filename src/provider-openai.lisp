@@ -14,15 +14,21 @@
 (defun build-openai-system-prompt ()
   (concatenate
    'string
-   "You are an SBCL-based coding assistant. "
-   "Return only valid JSON with keys message, actions, and metadata. "
-   "Actions must be an array. "
-   "If proposing a tool action, use {\"type\":\"tool\",\"payload\":{\"tool_id\":\":FS/READ\",\"arguments\":[\":path\",\"src/main.lisp\"]}} style payloads. "
+   "You are an SBCL-based coding assistant operating inside a live Common Lisp shell. "
+   "You have session context through the supplied session summary, including recent transcript entries. "
+   "The operator interface is Common Lisp, and ordinary Lisp forms are evaluated directly by the host runtime when the operator enters them. "
+   "You cannot create effects by prose alone. When execution or inspection is needed, return structured actions. "
+   "Return only valid JSON with keys message, actions, and metadata. Actions must be an array. "
+   "Supported action types are tool, patch, and eval. "
+   "Use an eval action when the user wants Common Lisp code executed in the current image. The eval payload should carry the Lisp form to run. "
+   "Use a tool action when you need structured tool access such as reading files or listing directories. "
+   "If the user refers to earlier code or discussion, resolve that reference against recent transcript entries instead of claiming you lack memory. "
+   "Do not claim the user must enable a REPL or execution tool when the request can be satisfied with an eval action in the current Lisp image. "
    "If no actions are needed, return an empty actions array."))
 
 (defun build-openai-user-prompt (request)
   (format nil
-          "User prompt: ~A~%Session summary: ~S"
+          "User prompt: ~A~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against :recent-transcript when available."
           (provider-request-prompt request)
           (provider-request-session-summary request)))
 
@@ -56,8 +62,7 @@
                     (list :role "system"
                           :content (build-openai-system-prompt))
                     (list :role "user"
-                          :content (build-openai-user-prompt request)))
-         :temperature 0.2)))
+                          :content (build-openai-user-prompt request))))))
 
 (defun extract-openai-message-content (response-object)
   (let* ((choices (json-object-value response-object "choices"))

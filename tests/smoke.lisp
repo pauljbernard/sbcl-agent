@@ -40,6 +40,12 @@
               (get-output-stream-string stdout)
               (get-output-stream-string stderr)))))
 
+(defun make-test-provider ()
+  (sbcl-agent::make-provider
+   (sbcl-agent::make-config :provider "mock"
+                            :model "gpt-5"
+                            :working-directory "/tmp/")))
+
 (defun make-test-git-repo ()
   (let* ((root (uiop:ensure-directory-pathname
                 (format nil "/tmp/sbcl-agent-git-~D-~D/" (get-universal-time) (random 1000000))))
@@ -76,12 +82,16 @@
     root))
 
 (defun runtime-smoke-test ()
-  (let ((config (sbcl-agent::load-config))
-        (provider (sbcl-agent::make-provider (sbcl-agent::load-config))))
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-runtime-~D-~D/" (get-universal-time) (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (config (sbcl-agent::load-config :working-directory (namestring root)))
+         (provider (sbcl-agent::make-provider config)))
+    (declare (ignore ignore))
     (assert-true (typep config 'sbcl-agent::config)
                  "load-config should return a sbcl-agent config struct")
     (assert-true (string= (sbcl-agent::provider-name provider) "mock")
-                 "default provider should be mock")
+                 "default provider should be mock when no provider or API key is configured")
     (let ((response (sbcl-agent::send-prompt provider "ping")))
       (assert-true (typep response 'sbcl-agent::assistant-response)
                    "provider should return an assistant-response struct")
@@ -132,12 +142,63 @@
                   (sbcl-agent::provider-name (sbcl-agent::make-provider config))
                   "make-provider should construct the openai-compatible provider")))
 
+(defun config-key-file-fallback-test ()
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-config-~D-~D/" (get-universal-time) (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (key-path (merge-pathnames #P"openai-api-key.key" root)))
+    (declare (ignore ignore))
+    (with-open-file (stream key-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "file-key" stream))
+    (let ((config (sbcl-agent::load-config :working-directory (namestring root))))
+      (assert-equal "file-key"
+                    (sbcl-agent::config-api-key config)
+                    "load-config should fall back to openai-api-key.key when OPENAI_API_KEY is unset")
+      (assert-true (sbcl-agent::config-api-key-present-p config)
+                   "load-config should mark the API key as present when read from key file"))))
+
+(defun config-auto-provider-selection-test ()
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-provider-~D-~D/" (get-universal-time) (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (key-path (merge-pathnames #P"openai-api-key.key" root)))
+    (declare (ignore ignore))
+    (with-open-file (stream key-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "file-key" stream))
+    (let ((config (sbcl-agent::load-config :working-directory (namestring root))))
+      (assert-equal "openai-compatible"
+                    (sbcl-agent::config-provider config)
+                    "load-config should auto-select the openai-compatible provider when an API key is present")
+      (assert-true (typep (sbcl-agent::make-provider config) 'sbcl-agent::openai-compatible-provider)
+                   "make-provider should construct the OpenAI-compatible provider after auto-selection"))))
+
+(defun config-legacy-key-filename-test ()
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-legacy-provider-~D-~D/" (get-universal-time) (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (key-path (merge-pathnames #P"openai-api-kay.key" root)))
+    (declare (ignore ignore))
+    (with-open-file (stream key-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "legacy-file-key" stream))
+    (let ((config (sbcl-agent::load-config :working-directory (namestring root))))
+      (assert-equal "legacy-file-key"
+                    (sbcl-agent::config-api-key config)
+                    "load-config should honor the legacy misspelled key filename when present")
+      (assert-equal "openai-compatible"
+                    (sbcl-agent::config-provider config)
+                    "legacy key filename should still activate the OpenAI-compatible provider"))))
+
 (defun command-normalization-test ()
   (let ((ask-command (sbcl-agent::normalize-form-command '(ask "inspect src/main.lisp")))
         (execute-actions-command (sbcl-agent::normalize-form-command '(execute-actions)))
         (describe-session-command (sbcl-agent::normalize-form-command '(describe-session)))
         (enqueue-task-command (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp"))))
         (run-next-task-command (sbcl-agent::normalize-form-command '(run-next-task)))
+        (list-replay-groups-command (sbcl-agent::normalize-form-command '(list-replay-groups)))
+        (list-image-reconciliations-command (sbcl-agent::normalize-form-command '(list-image-reconciliations)))
+        (replay-validator-command (sbcl-agent::normalize-form-command '(replay-validator-task "work" "validator" :status :passed)))
+        (replay-validator-set-command (sbcl-agent::normalize-form-command '(replay-validator-set "work" "replay" :status :partial :statuses '(:live :partial :cold :passed))))
+        (reconcile-image-only-command (sbcl-agent::normalize-form-command '(reconcile-image-only-source "work" "summary")))
         (eval-command (sbcl-agent::normalize-form-command '(+ 100 203)))
         (approve-command (sbcl-agent::normalize-form-command '(approve :process-run)))
         (patch-command (sbcl-agent::normalize-form-command '(patch '((:write "x" "y"))))))
@@ -151,6 +212,16 @@
                   "enqueue-task form should normalize to :enqueue-task")
     (assert-equal :run-next-task (sbcl-agent::command-kind run-next-task-command)
                   "run-next-task form should normalize to :run-next-task")
+    (assert-equal :list-replay-groups (sbcl-agent::command-kind list-replay-groups-command)
+                  "list-replay-groups form should normalize to :list-replay-groups")
+    (assert-equal :list-image-reconciliations (sbcl-agent::command-kind list-image-reconciliations-command)
+                  "list-image-reconciliations form should normalize to :list-image-reconciliations")
+    (assert-equal :replay-validator-task (sbcl-agent::command-kind replay-validator-command)
+                  "replay-validator-task form should normalize to :replay-validator-task")
+    (assert-equal :replay-validator-set (sbcl-agent::command-kind replay-validator-set-command)
+                  "replay-validator-set form should normalize to :replay-validator-set")
+    (assert-equal :reconcile-image-only-source (sbcl-agent::command-kind reconcile-image-only-command)
+                  "reconcile-image-only-source form should normalize to :reconcile-image-only-source")
     (assert-equal :eval (sbcl-agent::command-kind eval-command)
                   "plain Lisp forms should normalize to :eval")
     (assert-equal :approve (sbcl-agent::command-kind approve-command)
@@ -164,7 +235,7 @@
                 "direct user forms should evaluate in the Lisp shell"))
 
 (defun ask-dispatch-test ()
-  (let ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let ((provider (make-test-provider))
         (session (sbcl-agent::make-default-session))
         (command (sbcl-agent::normalize-form-command '(ask "ping"))))
     (multiple-value-bind (result kind updated-session)
@@ -181,7 +252,7 @@
                       "ask dispatch should record command, transcript, and response events")))))
 
 (defun streaming-provider-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (events '())
          (response (sbcl-agent::stream-prompt provider
                                                "please read src/main.lisp"
@@ -204,7 +275,7 @@
                     "stream assembly should preserve proposed actions"))))
 
 (defun streaming-ask-dispatch-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :stream t))))
     (multiple-value-bind (result kind updated-session)
@@ -225,7 +296,7 @@
 
 
 (defun ask-enqueue-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))))
     (multiple-value-bind (result kind updated-session)
@@ -240,7 +311,7 @@
                     "queued ask should create an ask task"))))
 
 (defun queued-ask-worker-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
@@ -276,7 +347,7 @@
 
 
 (defun describe-task-progress-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
@@ -302,7 +373,7 @@
 
 
 (defun monitor-task-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
@@ -327,7 +398,7 @@
                       "monitor-task should report the completed task status")))))
 
 (defun task-queue-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
@@ -348,7 +419,7 @@
       (assert-equal 1 (length tasks) "list-tasks should return one task summary"))))
 
 (defun task-run-next-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -370,7 +441,7 @@
                    "task completion should be logged"))))
 
 (defun task-cancel-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
@@ -388,7 +459,7 @@
         (assert-equal :cancelled (getf cancel-result :status) "cancel-task should finalize the task as cancelled")))))
 
 (defun worker-flow-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -417,7 +488,7 @@
 
 
 (defun worker-introspection-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (multiple-value-bind (start-result start-kind updated-session)
         (sbcl-agent::execute-command
@@ -446,8 +517,802 @@
          provider
          introspected-session)))))
 
+(defun work-item-creation-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (declare (ignore provider))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     (make-test-provider)
+     session)
+    (assert-equal 1 (length (sbcl-agent::agent-session-work-items session))
+                  "enqueue-task should create one transitional work-item")
+    (let ((work-item (first (sbcl-agent::agent-session-work-items session)))
+          (task (first (sbcl-agent::agent-session-tasks session))))
+      (assert-equal (sbcl-agent::task-work-item-id task)
+                    (sbcl-agent::work-item-id work-item)
+                    "queued task should link to its work-item")
+      (assert-equal :planned (sbcl-agent::work-item-status work-item)
+                    "new work-item should reflect planned transitional task state"))))
+
+(defun work-item-persistence-test ()
+  (let* ((path #P"/tmp/sbcl-agent-work-item-session.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     (make-test-provider)
+     session)
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (assert-equal 1 (length (sbcl-agent::agent-session-work-items loaded))
+                    "saved session should preserve transitional work-items")
+      (assert-equal :planned
+                    (sbcl-agent::work-item-status (first (sbcl-agent::agent-session-work-items loaded)))
+                    "loaded work-item should preserve status"))))
+
+(defun work-item-checkpoint-test ()
+  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     (make-test-provider)
+     session)
+    (let ((work-item (first (sbcl-agent::agent-session-work-items session))))
+      (assert-equal 1 (length (sbcl-agent::work-item-checkpoints work-item))
+                    "new transitional work-item should capture one checkpoint")
+      (assert-equal :checkpointed
+                    (sbcl-agent::mutation-transaction-state (first (sbcl-agent::work-item-transactions work-item)))
+                    "new work-item transaction should advance to checkpointed before execution"))))
+
+(defun work-item-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (enqueue-result enqueue-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+         provider
+         session)
+      (declare (ignore enqueue-kind))
+      (multiple-value-bind (list-result list-kind listed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(list-work-items))
+           provider
+           updated-session)
+        (declare (ignore listed-session))
+        (assert-equal :list-work-items list-kind "list-work-items should dispatch correctly")
+        (assert-equal 1 (length list-result) "list-work-items should return one work-item summary"))
+      (multiple-value-bind (detail-result detail-kind detailed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(describe-work-item ,(getf enqueue-result :work-item-id)))
+           provider
+           updated-session)
+        (declare (ignore detailed-session))
+        (assert-equal :describe-work-item detail-kind "describe-work-item should dispatch correctly")
+        (assert-equal 1 (length (getf detail-result :transactions))
+                      "describe-work-item should expose transaction detail")
+        (assert-equal 1 (length (getf detail-result :checkpoints))
+                      "describe-work-item should expose checkpoint detail")))))
+
+(defun work-item-validation-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(run-next-task))
+     provider
+     session)
+    (let ((work-item (first (sbcl-agent::agent-session-work-items session))))
+      (assert-equal :passed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-live-validation-result work-item))
+                    "committed work-item should record a passing live validation result")
+      (assert-equal :passed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-cold-validation-result work-item))
+                    "committed work-item should record a passing cold validation result")
+      (assert-equal :durable
+                    (sbcl-agent::reconciliation-record-status (sbcl-agent::work-item-reconciliation-result work-item))
+                    "committed work-item should reconcile to durable status"))))
+
+(defun work-item-failure-validation-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "missing-file.lisp")))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(run-next-task))
+     provider
+     session)
+    (let* ((work-item (first (sbcl-agent::agent-session-work-items session)))
+           (transaction (first (sbcl-agent::work-item-transactions work-item))))
+      (assert-equal :failed
+                    (sbcl-agent::work-item-status work-item)
+                    "failing task should mark work-item failed")
+      (assert-equal :failed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-live-validation-result work-item))
+                    "failing work-item should record a failing live validation result")
+      (assert-equal :failed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-cold-validation-result work-item))
+                    "failing work-item should record a failing cold validation result")
+      (assert-equal :failed
+                    (sbcl-agent::reconciliation-record-status (sbcl-agent::work-item-reconciliation-result work-item))
+                    "failing work-item should reconcile to failed status")
+      (assert-equal :required
+                    (sbcl-agent::mutation-transaction-rollback-status transaction)
+                    "failing transaction should require rollback")
+      (assert-true (getf (sbcl-agent::mutation-transaction-rollback-detail transaction) :reason)
+                   "failing transaction should record rollback detail"))))
+
+(defun work-item-provenance-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(run-next-task))
+     provider
+     session)
+    (let* ((work-item (first (sbcl-agent::agent-session-work-items session)))
+           (provenance (sbcl-agent::work-item-provenance work-item))
+           (transaction (first (sbcl-agent::work-item-transactions work-item))))
+      (assert-true (> (length (sbcl-agent::provenance-record-executed-mutations provenance)) 1)
+                   "committed work-item should record executed mutations in provenance")
+      (assert-true (> (length (sbcl-agent::mutation-transaction-source-mutations transaction)) 0)
+                   "committed transaction should record source mutation evidence")
+      (assert-true (> (length (sbcl-agent::mutation-transaction-image-mutations transaction)) 0)
+                   "committed transaction should record image mutation evidence")
+      (assert-equal :clean
+                    (sbcl-agent::provenance-record-taint-status provenance)
+                    "committed work-item provenance should record clean taint status"))))
+
+(defun work-item-provenance-shell-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (enqueue-result enqueue-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+         provider
+         session)
+      (declare (ignore enqueue-kind))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(run-next-task))
+       provider
+       updated-session)
+      (multiple-value-bind (detail-result detail-kind detailed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(describe-work-item ,(getf enqueue-result :work-item-id)))
+           provider
+           updated-session)
+        (declare (ignore detailed-session))
+        (assert-equal :describe-work-item detail-kind "describe-work-item should still dispatch correctly with provenance")
+        (assert-true (getf detail-result :provenance-detail)
+                     "describe-work-item should expose provenance detail")))))
+
+(defun work-item-taint-reconciliation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Synthetic taint check" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-image-mutation work-item
+                                                 (list :kind :synthetic-runtime-patch
+                                                       :symbol 'sbcl-agent::demo-symbol))
+    (setf (sbcl-agent::work-item-status work-item) :committed)
+    (sbcl-agent::update-work-item-validation-results
+     session
+     work-item
+     :passed
+     (list :validator :live-test)
+     :failed
+     (list :validator :cold-test))
+    (let ((reconciliation (sbcl-agent::work-item-reconciliation-result work-item)))
+      (assert-equal :tainted-live-only
+                    (sbcl-agent::reconciliation-record-status reconciliation)
+                    "live-only outcomes should remain explicitly tainted when image mutations are not reproduced")
+      (assert-equal :not-reproduced
+                    (sbcl-agent::reconciliation-record-reproducibility-status reconciliation)
+                    "live-only outcomes should report a failed reproducibility status")
+      (assert-equal :tainted
+                    (sbcl-agent::reconciliation-record-taint-status reconciliation)
+                    "live-only outcomes should report a tainted reconciliation status")
+      (assert-true (member :image-state-not-reproduced
+                           (sbcl-agent::reconciliation-record-taint-reasons reconciliation))
+                   "tainted live-only outcomes should explain that the image state was not reproduced")
+      (assert-true (member :validation-diverged
+                           (sbcl-agent::reconciliation-record-taint-reasons reconciliation))
+                   "tainted live-only outcomes should record validation divergence")
+      (assert-true (sbcl-agent::validation-result-tainted-p
+                    (sbcl-agent::work-item-live-validation-result work-item))
+                   "live validation should carry taint when run against tainted image state"))))
+
+(defun work-item-taint-shell-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Synthetic shell taint check" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-image-mutation work-item
+                                                 (list :kind :synthetic-runtime-patch
+                                                       :symbol 'sbcl-agent::shell-symbol))
+    (setf (sbcl-agent::work-item-status work-item) :committed)
+    (sbcl-agent::update-work-item-validation-results
+     session
+     work-item
+     :passed
+     (list :validator :live-test)
+     :failed
+     (list :validator :cold-test))
+    (multiple-value-bind (detail-result detail-kind detailed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(describe-work-item ,(sbcl-agent::work-item-id work-item)))
+         provider
+         session)
+      (declare (ignore detailed-session))
+      (assert-equal :describe-work-item detail-kind "describe-work-item should dispatch correctly for tainted synthetic work-items")
+      (assert-equal :tainted-live-only
+                    (getf (getf detail-result :reconciliation-result) :status)
+                    "describe-work-item should expose tainted live-only reconciliation state")
+      (assert-equal :not-reproduced
+                    (getf (getf detail-result :reconciliation-result) :reproducibility-status)
+                    "describe-work-item should expose reproducibility state")
+      (assert-true (member :image-state-not-reproduced
+                           (getf detail-result :taint-reasons))
+                   "describe-work-item should expose taint reasons on the work-item summary")
+      (assert-true (member :validation-diverged
+                           (getf (getf detail-result :reconciliation-result) :taint-reasons))
+                   "describe-work-item should expose reconciliation taint reasons"))))
+
+(defun workflow-record-creation-test ()
+  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     (make-test-provider)
+     session)
+    (assert-equal 1 (length (sbcl-agent::agent-session-workflow-records session))
+                  "enqueue-task should create one workflow record alongside the work-item")
+    (let* ((work-item (first (sbcl-agent::agent-session-work-items session)))
+           (record (first (sbcl-agent::agent-session-workflow-records session))))
+      (assert-equal (sbcl-agent::work-item-id work-item)
+                    (sbcl-agent::workflow-record-work-item-id record)
+                    "workflow record should link back to its work-item")
+      (assert-equal (sbcl-agent::workflow-record-id record)
+                    (sbcl-agent::work-item-workflow-record-ref work-item)
+                    "work-item should link to its workflow record")
+      (assert-true (> (length (sbcl-agent::workflow-record-entries record)) 0)
+                   "workflow record should capture an initial inspection entry"))))
+
+(defun workflow-record-persistence-test ()
+  (let* ((path #P"/tmp/sbcl-agent-workflow-session.sexp")
+         (provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(run-next-task))
+     provider
+     session)
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (assert-equal 1 (length (sbcl-agent::agent-session-workflow-records loaded))
+                    "saved session should preserve workflow records")
+      (assert-true (> (length (sbcl-agent::workflow-record-entries (first (sbcl-agent::agent-session-workflow-records loaded)))) 2)
+                   "loaded workflow record should preserve appended entries")
+      (assert-equal :committed
+                    (sbcl-agent::workflow-record-status (first (sbcl-agent::agent-session-workflow-records loaded)))
+                    "loaded workflow record should preserve closure status"))))
+
+(defun workflow-record-shell-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (enqueue-result enqueue-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+         provider
+         session)
+      (declare (ignore enqueue-result enqueue-kind))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(run-next-task))
+       provider
+       updated-session)
+      (multiple-value-bind (list-result list-kind listed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(list-workflow-records))
+           provider
+           updated-session)
+        (declare (ignore listed-session))
+        (assert-equal :list-workflow-records list-kind "list-workflow-records should dispatch correctly")
+        (assert-equal 1 (length list-result) "list-workflow-records should return one workflow record"))
+      (let ((record (first (sbcl-agent::agent-session-workflow-records updated-session))))
+        (multiple-value-bind (detail-result detail-kind detailed-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-workflow-record ,(sbcl-agent::workflow-record-id record)))
+             provider
+             updated-session)
+          (declare (ignore detailed-session))
+          (assert-equal :describe-workflow-record detail-kind "describe-workflow-record should dispatch correctly")
+          (assert-equal (sbcl-agent::workflow-record-id record)
+                        (getf detail-result :id)
+                        "describe-workflow-record should return the requested workflow record")
+          (assert-true (> (length (getf detail-result :entries)) 2)
+                       "describe-workflow-record should expose appended workflow entries")
+          (assert-equal :committed
+                        (getf detail-result :status)
+                        "describe-workflow-record should expose committed closure state"))))))
+
+(defun workflow-record-approval-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Approval check" :transaction-scope :test))
+         (record (first (sbcl-agent::agent-session-workflow-records session))))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
+    (assert-equal :awaiting-approval
+                  (sbcl-agent::workflow-record-status record)
+                  "request-work-item-approval should put the workflow record into awaiting-approval state")
+    (assert-equal :approval
+                  (sbcl-agent::workflow-record-waiting-on record)
+                  "approval requests should mark workflow waiting-on approval")
+    (assert-true (find :process-run
+                       (sbcl-agent::workflow-record-approval-requirements record)
+                       :key (lambda (entry) (getf entry :policy)))
+                 "approval requirements should record the requested policy")
+    (assert-true (> (length (sbcl-agent::provenance-record-approval-checkpoints (sbcl-agent::work-item-provenance work-item))) 0)
+                 "approval requests should be preserved in provenance checkpoints")))
+
+(defun workflow-record-quarantine-resume-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Quarantine check" :transaction-scope :test))
+         (record (first (sbcl-agent::agent-session-workflow-records session))))
+    (sbcl-agent::quarantine-work-item session work-item "Needs operator review")
+    (assert-equal :quarantined
+                  (sbcl-agent::workflow-record-status record)
+                  "quarantine-work-item should mark the workflow record quarantined")
+    (assert-equal :operator-review
+                  (sbcl-agent::workflow-record-waiting-on record)
+                  "quarantine should block on operator review")
+    (assert-equal "Needs operator review"
+                  (sbcl-agent::workflow-record-quarantine-reason record)
+                  "quarantine should preserve the operator-facing reason")
+    (assert-equal :quarantined
+                  (sbcl-agent::work-item-status work-item)
+                  "quarantine should update the work-item status")
+    (sbcl-agent::resume-work-item session work-item :note "Operator approved resume")
+    (assert-equal :resumed
+                  (sbcl-agent::workflow-record-status record)
+                  "resume-work-item should mark the workflow record resumed")
+    (assert-equal 1
+                  (sbcl-agent::workflow-record-resume-count record)
+                  "resume-work-item should increment the resume count")
+    (assert-true (> (length (sbcl-agent::workflow-record-operator-interventions record)) 1)
+                 "quarantine and resume should both record operator interventions")))
+
+(defun workflow-record-operator-shell-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Operator shell check" :transaction-scope :test)))
+    (multiple-value-bind (approval-result approval-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(request-work-item-approval ,(sbcl-agent::work-item-id work-item) :process-run :reason "Need process execution"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :request-work-item-approval approval-kind "request-work-item-approval should dispatch correctly")
+      (assert-equal :awaiting-approval
+                    (getf (getf approval-result :workflow-record) :status)
+                    "work-item detail should expose awaiting approval state"))
+    (multiple-value-bind (quarantine-result quarantine-kind quarantined-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(quarantine-work-item ,(sbcl-agent::work-item-id work-item) "Needs operator review"))
+         provider
+         session)
+      (declare (ignore quarantined-session))
+      (assert-equal :quarantine-work-item quarantine-kind "quarantine-work-item should dispatch correctly")
+      (assert-equal :quarantined
+                    (getf quarantine-result :status)
+                    "quarantine-work-item should return a quarantined work-item detail"))
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(resume-work-item ,(sbcl-agent::work-item-id work-item) :note "Resume now"))
+         provider
+         session)
+      (declare (ignore resumed-session))
+      (assert-equal :resume-work-item resume-kind "resume-work-item should dispatch correctly")
+      (assert-equal :resumed
+                    (getf resume-result :status)
+                    "resume-work-item should return a resumed work-item detail"))
+    (let ((record (first (sbcl-agent::agent-session-workflow-records session))))
+      (multiple-value-bind (detail-result detail-kind detail-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(describe-workflow-record ,(sbcl-agent::workflow-record-id record)))
+           provider
+           session)
+        (declare (ignore detail-session))
+        (assert-equal :describe-workflow-record detail-kind "describe-workflow-record should still dispatch correctly after operator controls")
+        (assert-equal 3
+                      (length (getf detail-result :operator-interventions))
+                      "workflow detail should expose approval, quarantine, and resume interventions")
+        (assert-equal 1
+                      (getf detail-result :resume-count)
+                      "workflow detail should expose resume count")))))
+
+(defun work-item-wait-report-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Wait report check" :transaction-scope :test)))
+    (let ((report (sbcl-agent::work-item-wait-report session work-item)))
+      (assert-equal :pending-validation
+                    (getf report :why)
+                    "new work-items should report pending validation work")
+      (assert-equal '(:live :cold)
+                    (getf report :pending-validations)
+                    "new work-items should expose both pending validations"))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
+    (let ((report (sbcl-agent::work-item-wait-report session work-item)))
+      (assert-equal :approval-required
+                    (getf report :why)
+                    "approval-gated work should explain the approval dependency")
+      (assert-equal :approval
+                    (getf report :waiting-on)
+                    "approval-gated work should report approval waiting state")
+      (assert-true (equal :await-approval
+                          (getf (getf report :next-action) :type))
+                   "approval-gated work should expose a resumable next action"))))
+
+(defun why-waiting-shell-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Why waiting shell check" :transaction-scope :test)))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(why-waiting ,(sbcl-agent::work-item-id work-item)))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :why-waiting kind "why-waiting should dispatch correctly")
+      (assert-equal :approval-required
+                    (getf result :why)
+                    "why-waiting should explain approval blockers")
+      (assert-equal :approval
+                    (getf result :waiting-on)
+                    "why-waiting should return the workflow wait reason")
+      (assert-true (equal :await-approval
+                          (getf (getf result :next-action) :type))
+                   "why-waiting should expose a deterministic next action"))))
+
+(defun workflow-record-resume-payload-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Resume payload check" :transaction-scope :test))
+         (record (first (sbcl-agent::agent-session-workflow-records session))))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
+    (assert-equal "RESUME-WORK-ITEM"
+                  (symbol-name (first (getf (sbcl-agent::workflow-record-resume-payload record) :resume-command)))
+                  "workflow resume payload should preserve a resumable command form")
+    (assert-equal "RESUME-WORK-ITEM"
+                  (symbol-name (first (getf (sbcl-agent::work-item-resume-payload work-item) :resume-command)))
+                  "work-item resume payload should stay aligned with the workflow record")))
+
+(defun session-wait-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-a (sbcl-agent::create-work-item session "Approval blocked" :transaction-scope :test))
+         (work-b (sbcl-agent::create-work-item session "Validation pending" :transaction-scope :test)))
+    (declare (ignore work-b))
+    (sbcl-agent::request-work-item-approval session work-a :process-run :reason "Need process execution")
+    (let* ((summary (sbcl-agent::session-wait-summary session))
+           (reasons (getf summary :by-reason))
+           (session-summary (sbcl-agent::session-summary session)))
+      (assert-equal 2
+                    (getf summary :blocked-count)
+                    "session-wait-summary should count blocked work items")
+      (assert-true (find :approval-required reasons :key (lambda (entry) (getf entry :why)))
+                   "session-wait-summary should include approval blockers")
+      (assert-true (find :pending-validation reasons :key (lambda (entry) (getf entry :why)))
+                   "session-wait-summary should include pending validation blockers")
+      (assert-equal 2
+                    (getf (getf session-summary :wait-summary) :blocked-count)
+                    "session-summary should expose wait-summary data"))))
+
+
+(defun checkpoint-linked-resume-payload-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Checkpoint link check" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((payload (sbcl-agent::work-item-resume-payload work-item)))
+      (assert-true (stringp (getf payload :checkpoint-id))
+                   "checkpoint-linked resume payload should include checkpoint id")
+      (assert-equal (sbcl-agent::latest-work-item-checkpoint-id work-item)
+                    (getf payload :checkpoint-id)
+                    "resume payload should point at the latest checkpoint"))))
+
+(defun validator-action-plan-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Validator action check" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((actions (sbcl-agent::work-item-validator-actions work-item)))
+      (assert-equal 2 (length actions)
+                    "validator action plan should include live and cold validators for fresh work")
+      (assert-true (every (lambda (entry) (stringp (getf entry :checkpoint-id))) actions)
+                   "validator action plan should carry checkpoint ids"))))
+
+
+(defun transaction-replay-id-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Replay id check" :transaction-scope :test))
+         (transaction (first (sbcl-agent::work-item-transactions work-item))))
+    (assert-true (stringp (sbcl-agent::mutation-transaction-replay-id transaction))
+                 "transactions should carry replay ids")
+    (assert-true (search "TXN-" (string-upcase (sbcl-agent::mutation-transaction-replay-id transaction)))
+                 "transaction replay ids should use the txn prefix")))
+
+(defun validator-task-records-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Validator record check" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((records (sbcl-agent::work-item-validator-tasks work-item)))
+      (assert-equal 2 (length records)
+                    "validator task records should be created for pending validators")
+      (assert-true (every (lambda (record)
+                            (and (stringp (sbcl-agent::validator-task-record-id record))
+                                 (stringp (sbcl-agent::validator-task-record-replay-id record))))
+                          records)
+                   "validator task records should carry ids and replay ids"))))
+
+(defun list-replay-groups-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "List replay groups" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let* ((records (sbcl-agent::work-item-validator-tasks work-item))
+           (group-id (sbcl-agent::validator-task-record-replay-id (first records))))
+      (setf (sbcl-agent::validator-task-record-replay-id (second records)) group-id)
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(list-replay-groups))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :list-replay-groups kind "list-replay-groups should dispatch correctly")
+        (assert-equal 1 (length result)
+                      "list-replay-groups should return one aggregated replay group")))))
+
+(defun list-image-reconciliations-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "List reconciliations" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(list-image-reconciliations))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :list-image-reconciliations kind "list-image-reconciliations should dispatch correctly")
+      (assert-equal 1 (length result)
+                    "list-image-reconciliations should return one reconciliation record"))))
+
+(defun replay-validator-set-mixed-status-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Replay mixed status" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let* ((live (first (sbcl-agent::work-item-validator-tasks work-item)))
+           (cold (second (sbcl-agent::work-item-validator-tasks work-item))))
+      (setf (sbcl-agent::validator-task-record-replay-id cold)
+            (sbcl-agent::validator-task-record-replay-id live))
+      (sbcl-agent::execute-validator-replay-set session
+                                                work-item
+                                                (sbcl-agent::validator-task-record-replay-id live)
+                                                :status :passed
+                                                :statuses '(:live :partial :cold :failed))
+      (assert-equal :partial
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-live-validation-result work-item))
+                    "mixed replay should allow live validation to be partial")
+      (assert-equal :failed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-cold-validation-result work-item))
+                    "mixed replay should allow cold validation to fail"))))
+
+(defun session-replay-group-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Replay group summary" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let* ((records (sbcl-agent::work-item-validator-tasks work-item))
+           (group-id (sbcl-agent::validator-task-record-replay-id (first records))))
+      (setf (sbcl-agent::validator-task-record-replay-id (second records)) group-id)
+      (let ((groups (sbcl-agent::session-validator-replay-groups session)))
+        (assert-equal 1 (length groups)
+                      "session replay group summary should aggregate shared replay ids")
+        (assert-equal 2 (getf (first groups) :task-count)
+                      "session replay group summary should count grouped validator tasks")))))
+
+(defun session-image-reconciliation-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Reconciliation summary" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
+    (let ((items (sbcl-agent::session-image-reconciliation-summary session)))
+      (assert-equal 1 (length items)
+                    "session image reconciliation summary should expose reconciled image-only work")
+      (assert-equal :attached-to-source
+                    (getf (first items) :status)
+                    "session image reconciliation summary should preserve reconciliation status"))))
+
+(defun doctor-command-replay-and-reconciliation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (config (sbcl-agent::load-config))
+         (stdout (make-string-output-stream))
+         (work-item (sbcl-agent::create-work-item session "Doctor replay summary" :transaction-scope :test)))
+    (setf sbcl-agent::*current-session* session)
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
+    (let ((*standard-output* stdout))
+      (assert-equal 0 (sbcl-agent::doctor-command config)
+                    "doctor command should succeed with replay and reconciliation data"))
+    (let ((output (get-output-stream-string stdout)))
+      (assert-true (search "Validator replay groups:" output)
+                   "doctor should print validator replay group count")
+      (assert-true (search "Image reconciliations:" output)
+                   "doctor should print image reconciliation count"))))
+
+(defun replay-validator-set-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Replay validator set shell" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let* ((replay-id (sbcl-agent::validator-task-record-replay-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(replay-validator-set ,(sbcl-agent::work-item-id work-item) ,replay-id :status :partial))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :replay-validator-set kind "replay-validator-set should dispatch correctly")
+        (assert-equal :partial
+                      (getf (getf result :live-validation-result) :status)
+                      "replay-validator-set should propagate partial status")
+        (assert-true (member :cold (getf result :pending-validations))
+                     "replaying one validator set should leave cold validation pending when replay ids are per validator")))))
+
+(defun validator-failure-status-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Validator failure" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((validator-id (sbcl-agent::validator-task-record-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
+      (sbcl-agent::execute-validator-task-record session work-item validator-id :status :failed)
+      (assert-equal :failed
+                    (sbcl-agent::validation-result-status (sbcl-agent::work-item-live-validation-result work-item))
+                    "validator replay should preserve failed status")
+      (assert-equal :failed
+                    (sbcl-agent::validator-task-record-status (first (sbcl-agent::work-item-validator-tasks work-item)))
+                    "validator task record should preserve failed status"))))
+
+(defun image-reconciliation-record-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Image reconciliation record" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
+    (let ((record (sbcl-agent::work-item-image-reconciliation work-item)))
+      (assert-true record "reconciling image-only work should create an image reconciliation record")
+      (assert-equal :attached-to-source
+                    (sbcl-agent::image-reconciliation-record-status record)
+                    "image reconciliation record should preserve attached-to-source status"))))
+
+(defun replay-validator-task-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Replay validator shell" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((validator-id (sbcl-agent::validator-task-record-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(replay-validator-task ,(sbcl-agent::work-item-id work-item) ,validator-id :status :passed))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :replay-validator-task kind "replay-validator-task should dispatch correctly")
+        (assert-equal 1
+                      (length (getf result :pending-validations))
+                      "replaying one validator should leave one pending validator")
+        (assert-equal :passed
+                      (getf (getf result :live-validation-result) :status)
+                      "replaying the first validator should record a passed live validation")))))
+
+(defun reconcile-image-only-source-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Image-only reconcile shell" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(reconcile-image-only-source ,(sbcl-agent::work-item-id work-item) "Captured source patch"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :reconcile-image-only-source kind "reconcile-image-only-source should dispatch correctly")
+      (assert-equal :committed
+                    (getf result :status)
+                    "reconciling image-only work should return a committed work-item detail")
+      (assert-equal :committed-to-source-and-image
+                    (getf result :closure-decision)
+                    "reconciling image-only work should produce a durable closure decision"))))
+
+(defun image-only-outcome-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Image only check" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (assert-equal :image-only
+                  (sbcl-agent::work-item-status work-item)
+                  "image-only outcome should set the work-item status")
+    (assert-equal :committed-to-image-only
+                  (sbcl-agent::work-item-closure-decision work-item)
+                  "image-only outcome should preserve the closure decision")
+    (let ((status (sbcl-agent::session-operator-status session)))
+      (assert-equal 1 (getf status :image-only-count)
+                    "operator status should count image-only work items"))))
+
+(defun operator-status-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (ready (sbcl-agent::create-work-item session "Ready item" :transaction-scope :test))
+         (blocked (sbcl-agent::create-work-item session "Blocked item" :transaction-scope :test))
+         (quarantined (sbcl-agent::create-work-item session "Quarantined item" :transaction-scope :test)))
+    (sbcl-agent::update-work-item-validation-results session ready :passed '(:live) :passed '(:cold))
+    (sbcl-agent::request-work-item-approval session blocked :process-run :reason "Need process execution")
+    (sbcl-agent::quarantine-work-item session quarantined "Needs review")
+    (setf (sbcl-agent::work-item-closure-decision ready) :committed-to-source-and-image)
+    (let ((status (sbcl-agent::session-operator-status session)))
+      (assert-equal 0 (getf status :ready-count)
+                    "durable source-and-image work should not remain in the generic ready bucket")
+      (assert-equal 1 (getf status :durable-count)
+                    "operator status should count durable source-and-image work items")
+      (assert-equal 1 (getf status :blocked-count)
+                    "operator status should count blocked work items")
+      (assert-equal 1 (getf status :quarantined-count)
+                    "operator status should count quarantined work items"))))
+
+(defun operator-status-tool-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::request-work-item-approval session
+                                            (sbcl-agent::create-work-item session "Operator tool blocked" :transaction-scope :test)
+                                            :process-run
+                                            :reason "Need process execution")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :session/operator-status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :tool kind "operator status tool should dispatch as :tool")
+      (assert-equal :session/operator-status (getf result :tool)
+                    "operator status tool should identify itself")
+      (assert-equal 1
+                    (getf (getf result :status) :blocked-count)
+                    "operator status tool should expose blocked count")
+      (assert-equal 0
+                    (getf (getf result :status) :image-only-count)
+                    "operator status tool should expose image-only count"))))
+
+(defun doctor-command-wait-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (config (sbcl-agent::load-config))
+         (stdout (make-string-output-stream)))
+    (setf sbcl-agent::*current-session* session)
+    (sbcl-agent::request-work-item-approval session
+                                            (sbcl-agent::create-work-item session "Doctor blocked" :transaction-scope :test)
+                                            :process-run
+                                            :reason "Need process execution")
+    (let ((*standard-output* stdout))
+      (assert-equal 0
+                    (sbcl-agent::doctor-command config)
+                    "doctor command should succeed"))
+    (let ((output (get-output-stream-string stdout)))
+      (assert-true (search "Blocked work items: 1" output)
+                   "doctor command should print blocked work-item count")
+      (assert-true (search ":APPROVAL-REQUIRED" output)
+                   "doctor command should print blocked work-item reasons")
+      (assert-true (search "Operator status: ready=0 blocked=1 quarantined=0 image-only=0 durable=0" output)
+                   "doctor command should print operator status counts"))))
+
 (defun task-persistence-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (path "/tmp/sbcl-agent-task-session.sexp")
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
@@ -469,7 +1334,7 @@
                          (sbcl-agent::agent-session-workers loaded))
                    "loaded session should mark persisted workers as not running"))))
 (defun assistant-action-proposal-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (response (sbcl-agent::send-prompt provider "please read src/main.lisp" session)))
     (assert-equal 1 (length (sbcl-agent::assistant-response-actions response))
@@ -479,7 +1344,7 @@
                   "proposed action should be a tool action")))
 
 (defun assistant-action-staging-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
@@ -493,7 +1358,7 @@
                    "ask flow should not execute actions immediately"))))
 
 (defun assistant-action-execution-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))
@@ -513,8 +1378,28 @@
       (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "pending actions should be cleared after execution"))))
 
+(defun assistant-eval-action-execution-test ()
+  (let* ((session (sbcl-agent::make-default-session))
+         (action (sbcl-agent::make-assistant-action :type :eval
+                                                    :payload '(:form "(+ 100 203)"))))
+    (assert-equal 303
+                  (sbcl-agent::execute-assistant-action action session)
+                  "assistant eval actions should execute Common Lisp forms in the current image")))
+
+(defun session-summary-recent-transcript-test ()
+  (let ((session (sbcl-agent::make-default-session)))
+    (sbcl-agent::append-transcript-entry session :user "first")
+    (sbcl-agent::append-transcript-entry session :assistant "second")
+    (let ((summary (sbcl-agent::session-summary session)))
+      (assert-equal 2
+                    (length (getf summary :recent-transcript))
+                    "session summary should include recent transcript entries")
+      (assert-equal "second"
+                    (getf (second (getf summary :recent-transcript)) :content)
+                    "recent transcript should preserve the latest assistant turn"))))
+
 (defun session-plan-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
          (command (sbcl-agent::normalize-form-command '(plan "Build tool registry"))))
     (multiple-value-bind (result kind updated-session)
@@ -571,7 +1456,7 @@
                     "loaded session should preserve transcript entries"))))
 
 (defun session-shell-commands-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (path "/tmp/sbcl-agent-shell-session.sexp")
          (session (sbcl-agent::make-default-session)))
     (sbcl-agent::update-session-plan session "Shell persistence")
@@ -632,7 +1517,7 @@
                   "session summary should advertise safe-read policy")))
 
 (defun session-summary-tool-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::update-session-plan session "Inspect runtime state")
     (multiple-value-bind (result kind updated-session)
@@ -648,7 +1533,7 @@
                     "session summary tool should return the current session plan"))))
 
 (defun session-events-tool-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::update-session-plan session "Inspect events")
     (sbcl-agent::append-transcript-entry session :user "hello")
@@ -666,7 +1551,7 @@
                    "session events tool should return recent session events"))))
 
 (defun docs-read-tool-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "architecture.md"))))
     (multiple-value-bind (result kind updated-session)
@@ -674,11 +1559,11 @@
       (declare (ignore updated-session))
       (assert-equal :tool kind "docs/read should dispatch as :tool")
       (assert-equal :docs/read (getf result :tool) "docs/read should identify itself")
-      (assert-true (search "turtles all the way down" (string-downcase (getf result :content)))
+      (assert-true (search "the three truths" (string-downcase (getf result :content)))
                    "docs/read should return maintained architecture content"))))
 
 (defun docs-read-path-escape-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "../README.md"))))
     (assert-signals-error
@@ -687,7 +1572,7 @@
      "docs/read should reject paths outside the docs root")))
 
 (defun fs-read-tool-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
@@ -699,7 +1584,7 @@
                    "fs/read should return file contents"))))
 
 (defun fs-read-path-escape-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "../README.md"))))
     (assert-signals-error
@@ -708,7 +1593,7 @@
      "fs/read should reject paths outside the session root")))
 
 (defun proc-run-approval-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
          (command (sbcl-agent::normalize-form-command '(tool :proc/run :argv ("/bin/echo" "hello")))))
     (assert-signals-error
@@ -717,7 +1602,7 @@
      "process tool should require approval before execution")))
 
 (defun approve-and-run-tool-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :process-run)) provider session)
@@ -740,7 +1625,7 @@
                    "sandboxed process execution should be logged in the session"))))
 
 (defun git-read-approval-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd (namestring (make-test-git-repo))))
          (command (sbcl-agent::normalize-form-command '(tool :git/status))))
     (assert-signals-error
@@ -750,7 +1635,7 @@
 
 (defun git-status-and-diff-test ()
   (let* ((repo (make-test-git-repo))
-         (provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd (namestring repo))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :git-read)) provider session)
@@ -782,7 +1667,7 @@
 
 (defun git-write-flow-test ()
   (let* ((repo (make-test-git-repo))
-         (provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+         (provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd (namestring repo))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :git-read)) provider session)
@@ -834,7 +1719,7 @@
                    "git status should report the checked out branch"))))
 
 (defun patch-approval-and-apply-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/tmp/"))
          (path "/tmp/sbcl-agent-patch-test.txt")
          (patch-command '(patch ((:write "sbcl-agent-patch-test.txt" "patched")))))
@@ -860,7 +1745,7 @@
           (assert-equal "patched" line "patch should write file contents"))))))
 
 (defun patch-path-escape-test ()
-  (let* ((provider (sbcl-agent::make-provider (sbcl-agent::load-config)))
+  (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (patch-command '(patch ((:write "../escape.txt" "patched")))))
     (sbcl-agent::execute-command
@@ -883,6 +1768,12 @@
   (format t "PASS provider-decode-test~%")
   (openai-provider-selection-test)
   (format t "PASS openai-provider-selection-test~%")
+  (config-key-file-fallback-test)
+  (format t "PASS config-key-file-fallback-test~%")
+  (config-auto-provider-selection-test)
+  (format t "PASS config-auto-provider-selection-test~%")
+  (config-legacy-key-filename-test)
+  (format t "PASS config-legacy-key-filename-test~%")
   (command-normalization-test)
   (format t "PASS command-normalization-test~%")
   (shell-eval-test)
@@ -911,6 +1802,84 @@
   (format t "PASS worker-flow-test~%")
   (worker-introspection-test)
   (format t "PASS worker-introspection-test~%")
+  (work-item-creation-test)
+  (format t "PASS work-item-creation-test~%")
+  (work-item-persistence-test)
+  (format t "PASS work-item-persistence-test~%")
+  (work-item-checkpoint-test)
+  (format t "PASS work-item-checkpoint-test~%")
+  (work-item-shell-commands-test)
+  (format t "PASS work-item-shell-commands-test~%")
+  (work-item-validation-test)
+  (format t "PASS work-item-validation-test~%")
+  (work-item-failure-validation-test)
+  (format t "PASS work-item-failure-validation-test~%")
+  (work-item-provenance-test)
+  (format t "PASS work-item-provenance-test~%")
+  (work-item-provenance-shell-test)
+  (format t "PASS work-item-provenance-shell-test~%")
+  (work-item-taint-reconciliation-test)
+  (format t "PASS work-item-taint-reconciliation-test~%")
+  (work-item-taint-shell-test)
+  (format t "PASS work-item-taint-shell-test~%")
+  (workflow-record-creation-test)
+  (format t "PASS workflow-record-creation-test~%")
+  (workflow-record-persistence-test)
+  (format t "PASS workflow-record-persistence-test~%")
+  (workflow-record-shell-test)
+  (format t "PASS workflow-record-shell-test~%")
+  (workflow-record-approval-state-test)
+  (format t "PASS workflow-record-approval-state-test~%")
+  (workflow-record-quarantine-resume-test)
+  (format t "PASS workflow-record-quarantine-resume-test~%")
+  (workflow-record-operator-shell-test)
+  (format t "PASS workflow-record-operator-shell-test~%")
+  (work-item-wait-report-test)
+  (format t "PASS work-item-wait-report-test~%")
+  (why-waiting-shell-command-test)
+  (format t "PASS why-waiting-shell-command-test~%")
+  (workflow-record-resume-payload-test)
+  (format t "PASS workflow-record-resume-payload-test~%")
+  (session-wait-summary-test)
+  (format t "PASS session-wait-summary-test~%")
+  (checkpoint-linked-resume-payload-test)
+  (format t "PASS checkpoint-linked-resume-payload-test~%")
+  (transaction-replay-id-test)
+  (format t "PASS transaction-replay-id-test~%")
+  (validator-action-plan-test)
+  (format t "PASS validator-action-plan-test~%")
+  (validator-task-records-test)
+  (format t "PASS validator-task-records-test~%")
+  (list-replay-groups-command-test)
+  (format t "PASS list-replay-groups-command-test~%")
+  (list-image-reconciliations-command-test)
+  (format t "PASS list-image-reconciliations-command-test~%")
+  (replay-validator-set-mixed-status-test)
+  (format t "PASS replay-validator-set-mixed-status-test~%")
+  (replay-validator-set-command-test)
+  (format t "PASS replay-validator-set-command-test~%")
+  (validator-failure-status-test)
+  (format t "PASS validator-failure-status-test~%")
+  (replay-validator-task-command-test)
+  (format t "PASS replay-validator-task-command-test~%")
+  (reconcile-image-only-source-command-test)
+  (format t "PASS reconcile-image-only-source-command-test~%")
+  (session-replay-group-summary-test)
+  (format t "PASS session-replay-group-summary-test~%")
+  (image-reconciliation-record-test)
+  (format t "PASS image-reconciliation-record-test~%")
+  (session-image-reconciliation-summary-test)
+  (format t "PASS session-image-reconciliation-summary-test~%")
+  (image-only-outcome-test)
+  (format t "PASS image-only-outcome-test~%")
+  (operator-status-summary-test)
+  (format t "PASS operator-status-summary-test~%")
+  (operator-status-tool-test)
+  (format t "PASS operator-status-tool-test~%")
+  (doctor-command-wait-summary-test)
+  (format t "PASS doctor-command-wait-summary-test~%")
+  (doctor-command-replay-and-reconciliation-test)
+  (format t "PASS doctor-command-replay-and-reconciliation-test~%")
   (task-persistence-test)
   (format t "PASS task-persistence-test~%")
   (assistant-action-proposal-test)
@@ -919,6 +1888,10 @@
   (format t "PASS assistant-action-staging-test~%")
   (assistant-action-execution-test)
   (format t "PASS assistant-action-execution-test~%")
+  (assistant-eval-action-execution-test)
+  (format t "PASS assistant-eval-action-execution-test~%")
+  (session-summary-recent-transcript-test)
+  (format t "PASS session-summary-recent-transcript-test~%")
   (session-plan-test)
   (format t "PASS session-plan-test~%")
   (capability-policy-model-test)

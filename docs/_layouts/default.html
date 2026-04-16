@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
+    <meta name="description" content="{{ page.description | default: site.description }}">
+    <link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <div>
+          <a class="site-brand" href="{{ '/' | relative_url }}">sbcl-agent</a>
+          <p class="site-tagline">Transactional, image-native agent engineering on SBCL</p>
+        </div>
+        <nav class="top-nav" aria-label="Top navigation">
+          <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Home</a>
+          <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why</a>
+          <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture</a>
+          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <a href="{{ '/common-lisp-runtime.html' | relative_url }}"{% if page.url == '/common-lisp-runtime.html' %} aria-current="page"{% endif %}>CL Runtime</a>
+          <a href="{{ '/common-lisp-guide.html' | relative_url }}"{% if page.url == '/common-lisp-guide.html' %} aria-current="page"{% endif %}>CL Guide</a>
+        </nav>
+      </header>
+
+      <div class="layout-grid">
+        <aside class="sidebar" aria-label="Documentation navigation">
+          <p class="sidebar-label">Documentation</p>
+          <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Overview</a>
+          <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why sbcl-agent Exists</a>
+          <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
+          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <a href="{{ '/common-lisp-runtime.html' | relative_url }}"{% if page.url == '/common-lisp-runtime.html' %} aria-current="page"{% endif %}>Common Lisp as a Runtime</a>
+          <a href="{{ '/common-lisp-guide.html' | relative_url }}"{% if page.url == '/common-lisp-guide.html' %} aria-current="page"{% endif %}>Common Lisp Language Guide</a>
+          <a href="{{ '/implementation-plan.html' | relative_url }}"{% if page.url == '/implementation-plan.html' %} aria-current="page"{% endif %}>Implementation Plan</a>
+        </aside>
+
+        <main class="content-shell">
+          {% if page.hero_title %}
+          <section class="hero">
+            <p class="eyebrow">{{ page.eyebrow | default: 'sbcl-agent docs' }}</p>
+            <h1>{{ page.hero_title }}</h1>
+            {% if page.hero_text %}<p class="hero-text">{{ page.hero_text }}</p>{% endif %}
+          </section>
+          {% endif %}
+
+          <article class="doc-content">
+            {{ content }}
+          </article>
+        </main>
+      </div>
+
+      <footer class="site-footer">
+        <p>sbcl-agent documentation for the GitHub Pages site in <code>/docs</code>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

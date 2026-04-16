@@ -1,0 +1,16 @@
+#!/usr/bin/env -S sbcl --script
+
+(defparameter *script-path*
+  (or *load-truename* *compile-file-truename* (truename *default-pathname-defaults*)))
+
+(defparameter *project-dir*
+  (make-pathname :directory (butlast (pathname-directory *script-path*))
+                 :name nil
+                 :type nil
+                 :defaults *script-path*))
+
+(require :asdf)
+(load (merge-pathnames #P"tutor-codex.asd" *project-dir*))
+(asdf:load-system :tutor-codex)
+(tutor-codex::sandbox-worker-main)
+(sb-ext:exit :code 0)

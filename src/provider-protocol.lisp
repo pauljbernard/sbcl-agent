@@ -10,6 +10,10 @@
   type
   payload)
 
+(defstruct provider-event
+  type
+  payload)
+
 (defstruct assistant-response
   message
   actions
@@ -18,6 +22,7 @@
 (defgeneric provider-name (provider))
 (defgeneric provider-capabilities (provider))
 (defgeneric send-request (provider request))
+(defgeneric stream-request (provider request event-handler))
 
 (defun make-provider-request-from-session (prompt session)
   (let ((active-session (or session (ignore-errors (ensure-session)))))
@@ -30,6 +35,35 @@
 
 (defun send-prompt (provider prompt &optional session)
   (send-request provider (make-provider-request-from-session prompt session)))
+
+(defun emit-provider-event (event-handler type payload)
+  (funcall event-handler (make-provider-event :type type :payload payload)))
+
+(defun stream-response->assistant-response (events)
+  (let ((message-fragments '())
+        (actions '())
+        (metadata '()))
+    (dolist (event events)
+      (case (provider-event-type event)
+        (:message-delta
+         (push (provider-event-payload event) message-fragments))
+        (:action-proposal
+         (let ((payload (provider-event-payload event)))
+           (setf actions (append actions
+                                 (if (listp payload) payload (list payload))))))
+        (:message-complete
+         (let ((payload (provider-event-payload event)))
+           (when (and (listp payload) (getf payload :metadata))
+             (setf metadata (getf payload :metadata)))))))
+    (make-assistant-response
+     :message (apply #'concatenate 'string (nreverse message-fragments))
+     :actions actions
+     :metadata metadata)))
+
+(defun stream-prompt (provider prompt event-handler &optional session)
+  (stream-request provider
+                  (make-provider-request-from-session prompt session)
+                  event-handler))
 
 (defun normalize-action-type (value)
   (cond
@@ -100,6 +134,18 @@
 
 (defun execute-assistant-actions (response session)
   (execute-assistant-action-list (assistant-response-actions response) session))
+
+(defmethod stream-request ((provider provider) request event-handler)
+  (let ((response (send-request provider request)))
+    (emit-provider-event event-handler :message-start nil)
+    (emit-provider-event event-handler :message-delta (assistant-response-message response))
+    (when (assistant-response-actions response)
+      (emit-provider-event event-handler :action-proposal (assistant-response-actions response)))
+    (emit-provider-event event-handler
+                         :message-complete
+                         (list :response response
+                               :metadata (assistant-response-metadata response)))
+    response))
 
 (defun make-provider (config)
   (let ((provider-name (string-downcase (config-provider config))))

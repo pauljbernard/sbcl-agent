@@ -18,20 +18,22 @@
 (defun tool-fs-read (session &key path)
   (unless path
     (error ":fs/read requires :path"))
-  (let* ((resolved (resolve-session-path session path))
+  (let* ((resolved (ensure-path-within-session session path :must-exist t))
          (content (read-file-contents resolved)))
     (list :tool :fs/read
           :path (namestring resolved)
-          :content content)))
+          :content content
+          :sandbox-profile :in-process)))
 
 (defun tool-fs-list (session &key (path "."))
   (let* ((resolved (uiop:ensure-directory-pathname
-                    (resolve-session-path session path)))
+                    (ensure-path-within-session session path :must-exist t)))
          (entries (sort (mapcar #'namestring (directory (merge-pathnames #P"*" resolved)))
                         #'string<)))
     (list :tool :fs/list
           :path (namestring resolved)
-          :entries entries)))
+          :entries entries
+          :sandbox-profile :in-process)))
 
 (register-tool :fs/read
                "Read a file from the current session workspace."

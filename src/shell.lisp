@@ -1,13 +1,25 @@
 (in-package #:tutor-codex)
 
 (defparameter *shell-package* (find-package '#:tutor-codex-user))
+(defparameter *stream-event-listener* nil)
 
 (defun print-shell-help ()
   (format t "Lisp shell commands:~%")
   (format t "  (ask \"prompt\")                   Send a prompt to the configured provider and stage proposed actions.~%")
+  (format t "  (ask \"prompt\" :stream t)         Stream assistant output while building the final response.~%")
+  (format t "  (ask \"prompt\" :enqueue t)        Queue an agent request instead of executing it inline.~%")
   (format t "  (execute-actions)                  Execute the currently staged assistant actions.~%")
   (format t "  (plan \"goal\")                    Set the current session plan goal.~%")
-  (format t "  (approve :process-run)             Grant a policy approval to the current session.~%")
+  (format t "  (enqueue-task '(tool ...))         Queue a normalized shell form for later execution.~%")
+  (format t "  (list-tasks)                       Show queued and completed task summaries.~%")
+  (format t "  (describe-task \"task-id\")         Show one task summary.~%")
+  (format t "  (monitor-task \"task-id\")          Show recent progress events for one task.~%")
+  (format t "  (run-next-task)                    Execute the next queued task in the current image.~%")
+  (format t "  (start-worker)                     Start a background worker thread for queued tasks.~%")
+  (format t "  (stop-worker \"worker-id\")         Stop a background worker thread.~%")
+  (format t "  (list-workers)                     Show worker summaries for the current session.~%")
+  (format t "  (describe-worker \"worker-id\")     Show one worker summary.~%")
+  (format t "  (approve :process-run)             Grant a capability policy to the current session.~%")
   (format t "  (tool :fs/read :path \"file\")     Read a workspace file.~%")
   (format t "  (tool :fs/list :path \"dir\")      List a workspace directory.~%")
   (format t "  (tool :proc/run :argv '(...))       Run a local process after approval.~%")
@@ -47,7 +59,9 @@
     (unless (keywordp policy)
       (error "APPROVE requires a keyword policy"))
     (approve-policy session policy)
-    (list :approved policy :approved-policies (agent-session-approved-policies session))))
+    (list :approved policy
+          :approved-policies (session-approved-policies session)
+          :capability-grants (session-capability-grants-summary session))))
 
 (defun execute-patch-command (arguments session)
   (let ((operations (first arguments)))
@@ -81,6 +95,171 @@
     (let ((session (load-session path)))
       (values (list :loaded path :summary (session-summary session)) session))))
 
+(defun plist-value (plist indicator &optional default)
+  (if (and (listp plist) (member indicator plist))
+      (getf plist indicator)
+      default))
+
+(defun parse-ask-arguments (arguments)
+  (let ((prompt (first arguments))
+        (options (rest arguments)))
+    (unless (stringp prompt)
+      (error "ASK requires a single string prompt"))
+    (when (oddp (length options))
+      (error "ASK keyword options must be a property list"))
+    (values prompt options)))
+
+(defun render-stream-event (event)
+  (case (provider-event-type event)
+    (:message-start
+     (format t "assistant-stream> "))
+    (:message-delta
+     (format t "~A" (provider-event-payload event))
+     (finish-output))
+    (:message-complete
+     (format t "~%")
+     (finish-output))
+    (:action-proposal nil)
+    (t
+     (format t "~&assistant-stream-event> ~S~%" event))))
+
+(defun handle-provider-stream-event (session event events)
+  (append-session-event session :provider-stream event)
+  (when *task-progress-callback*
+    (funcall *task-progress-callback* :provider-stream event))
+  (when *stream-event-listener*
+    (funcall *stream-event-listener* event))
+  (append events (list event)))
+
+(defun remove-plist-key (plist key)
+  (cond
+    ((null plist) '())
+    ((eq (first plist) key)
+     (remove-plist-key (cddr plist) key))
+    (t
+     (list* (first plist)
+            (second plist)
+            (remove-plist-key (cddr plist) key)))))
+
+(defun ask-task-form (prompt options)
+  (cons 'ask (cons prompt (remove-plist-key options :enqueue))))
+
+(defun execute-ask-command (arguments provider session)
+  (multiple-value-bind (prompt options)
+      (parse-ask-arguments arguments)
+    (if (plist-value options :enqueue nil)
+        (let* ((task-form (ask-task-form prompt options))
+               (task (enqueue-task session
+                                   (normalize-form-command task-form)
+                                   :payload task-form)))
+          (values (list :queued-task (task-summary task)
+                        :enqueued-p t)
+                  :ask
+                  session))
+        (progn
+          (append-transcript-entry session :user prompt)
+          (let ((stream-p (or (plist-value options :stream nil)
+                              (not (null *task-progress-callback*)))))
+            (when *task-progress-callback*
+              (funcall *task-progress-callback* :ask-started (list :prompt prompt :stream-p stream-p)))
+            (if stream-p
+                (let ((events '()))
+                  (let ((response (stream-prompt provider
+                                                 prompt
+                                                 (lambda (event)
+                                                   (setf events (handle-provider-stream-event session event events)))
+                                                 session)))
+                    (let ((staged-actions (stage-response-actions response session)))
+                      (append-transcript-entry session :assistant (assistant-response->string response))
+                      (append-session-event session :assistant-response response)
+                      (when *task-progress-callback*
+                        (funcall *task-progress-callback*
+                                 :ask-response
+                                 (list :message (assistant-response-message response)
+                                       :staged-action-count (length staged-actions)
+                                       :stream-event-count (length events))))
+                      (values (list :response response
+                                    :staged-action-count (length staged-actions)
+                                    :streamed-p t
+                                    :stream-event-count (length events)
+                                    :stream-events events)
+                              :ask
+                              session))))
+                (let* ((response (send-prompt provider prompt session))
+                       (staged-actions (stage-response-actions response session)))
+                  (append-transcript-entry session :assistant (assistant-response->string response))
+                  (append-session-event session :assistant-response response)
+                  (when *task-progress-callback*
+                    (funcall *task-progress-callback*
+                             :ask-response
+                             (list :message (assistant-response-message response)
+                                   :staged-action-count (length staged-actions)
+                                   :stream-event-count 0)))
+                  (values (list :response response
+                                :staged-action-count (length staged-actions)
+                                :streamed-p nil
+                                :stream-event-count 0)
+                          :ask
+                          session))))))))
+
+(defun unwrap-task-form (form)
+  (if (and (consp form)
+           (eq (first form) 'quote)
+           (= (length form) 2))
+      (second form)
+      form))
+
+(defun execute-enqueue-task-command (arguments session)
+  (let* ((raw-form (first arguments))
+         (form (unwrap-task-form raw-form))
+         (priority (or (getf (rest arguments) :priority) 0))
+         (command (normalize-form-command form))
+         (task (enqueue-task session command :priority priority :payload form)))
+    (task-summary task)))
+
+(defun execute-describe-task-command (arguments session)
+  (let ((task-id (first arguments)))
+    (unless (stringp task-id)
+      (error "DESCRIBE-TASK requires a string task id"))
+    (let ((task (find-task session task-id)))
+      (unless task
+        (error "Unknown task ~A" task-id))
+      (task-summary task))))
+
+(defun execute-monitor-task-command (arguments session)
+  (let ((task-id (first arguments)))
+    (unless (stringp task-id)
+      (error "MONITOR-TASK requires a string task id"))
+    (let ((task (find-task session task-id)))
+      (unless task
+        (error "Unknown task ~A" task-id))
+      (task-monitor-view task))))
+
+(defun execute-cancel-task-command (arguments session)
+  (let ((task-id (first arguments)))
+    (unless (stringp task-id)
+      (error "CANCEL-TASK requires a string task id"))
+    (task-summary (cancel-task session task-id))))
+
+(defun execute-start-worker-command (provider session)
+  (let ((worker (start-worker session provider)))
+    (worker-summary worker)))
+
+(defun execute-stop-worker-command (arguments session)
+  (let ((worker-id (first arguments)))
+    (unless (stringp worker-id)
+      (error "STOP-WORKER requires a string worker id"))
+    (worker-summary (stop-worker session worker-id))))
+
+(defun execute-describe-worker-command (arguments session)
+  (let ((worker-id (first arguments)))
+    (unless (stringp worker-id)
+      (error "DESCRIBE-WORKER requires a string worker id"))
+    (let ((worker (find-worker session worker-id)))
+      (unless worker
+        (error "Unknown worker ~A" worker-id))
+      (worker-summary worker))))
+
 (defun execute-command (command provider &optional session)
   (let ((active-session (ensure-session session)))
     (append-session-event active-session :command (command-summary command))
@@ -91,18 +270,7 @@
          (append-transcript-entry active-session :system result)
          (values result :eval active-session)))
       (:ask
-       (let ((prompt (first (command-arguments command))))
-         (unless (stringp prompt)
-           (error "ASK requires a single string prompt"))
-         (append-transcript-entry active-session :user prompt)
-         (let* ((response (send-prompt provider prompt active-session))
-                (staged-actions (stage-response-actions response active-session)))
-           (append-transcript-entry active-session :assistant (assistant-response->string response))
-           (append-session-event active-session :assistant-response response)
-           (values (list :response response
-                         :staged-action-count (length staged-actions))
-                   :ask
-                   active-session))))
+       (execute-ask-command (command-arguments command) provider active-session))
       (:execute-actions
        (let ((result (execute-pending-actions-command active-session)))
          (values result :execute-actions active-session)))
@@ -112,6 +280,42 @@
            (error "PLAN requires a single string goal"))
          (update-session-plan active-session goal)
          (values (format nil "Current plan: ~A" goal) :plan active-session)))
+      (:enqueue-task
+       (values (execute-enqueue-task-command (command-arguments command) active-session)
+               :enqueue-task
+               active-session))
+      (:list-tasks
+       (values (list-task-summaries active-session) :list-tasks active-session))
+      (:describe-task
+       (values (execute-describe-task-command (command-arguments command) active-session)
+               :describe-task
+               active-session))
+      (:cancel-task
+       (values (execute-cancel-task-command (command-arguments command) active-session)
+               :cancel-task
+               active-session))
+      (:monitor-task
+       (values (execute-monitor-task-command (command-arguments command) active-session)
+               :monitor-task
+               active-session))
+      (:run-next-task
+       (values (task-summary (run-next-task active-session provider))
+               :run-next-task
+               active-session))
+      (:start-worker
+       (values (execute-start-worker-command provider active-session)
+               :start-worker
+               active-session))
+      (:stop-worker
+       (values (execute-stop-worker-command (command-arguments command) active-session)
+               :stop-worker
+               active-session))
+      (:list-workers
+       (values (list-worker-summaries active-session) :list-workers active-session))
+      (:describe-worker
+       (values (execute-describe-worker-command (command-arguments command) active-session)
+               :describe-worker
+               active-session))
       (:approve
        (let ((result (execute-approve-command (command-arguments command) active-session)))
          (values result :approve active-session)))
@@ -148,12 +352,17 @@
   (case kind
     (:help nil)
     (:ask
-     (let ((response (getf result :response))
-           (staged-count (getf result :staged-action-count)))
-       (format t "assistant> ~A~%" (assistant-response->string response))
-       (when (assistant-response-actions response)
-         (format t "assistant-actions> ~S~%" (assistant-response-actions response))
-         (format t "assistant-actions-staged> ~D~%" staged-count))))
+     (if (getf result :enqueued-p)
+         (format t "assistant-task> ~S~%" (getf result :queued-task))
+         (let ((response (getf result :response))
+               (staged-count (getf result :staged-action-count)))
+           (unless (getf result :streamed-p)
+             (format t "assistant> ~A~%" (assistant-response->string response)))
+           (when (assistant-response-actions response)
+             (format t "assistant-actions> ~S~%" (assistant-response-actions response))
+             (format t "assistant-actions-staged> ~D~%" staged-count)))))
+    ((:enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker)
+     (format t "tasks> ~S~%" result))
     (:execute-actions
      (format t "assistant-action-results> ~S~%" result))
     (:plan
@@ -180,18 +389,18 @@
     (format t "Starting Lisp-native shell with provider ~A.~%" (provider-name provider))
     (format t "Session: ~A~%" (agent-session-id active-session))
     (format t "Enter (help) for commands. Press Ctrl-D to exit.~%")
-    (loop
-      for form = (read-shell-form active-session)
-      do (cond
-           ((eq form :eof)
-            (format t "~%")
-            (return 0))
-           (t
-            (handler-case
-                (multiple-value-bind (result kind updated-session)
-                    (execute-command (normalize-form-command form) provider active-session)
-                  (setf active-session updated-session
-                        *current-session* updated-session)
-                  (print-shell-result result kind))
-              (error (condition)
-                (format *error-output* "error> ~A~%" condition))))))))
+    (let ((*stream-event-listener* #'render-stream-event))
+      (loop
+        for form = (read-shell-form active-session)
+        do (if (eq form :eof)
+               (progn
+                 (format t "~%")
+                 (return 0))
+               (handler-case
+                   (multiple-value-bind (result kind updated-session)
+                       (execute-command (normalize-form-command form) provider active-session)
+                     (setf active-session updated-session
+                           *current-session* updated-session)
+                     (print-shell-result result kind))
+                 (error (condition)
+                   (format *error-output* "error> ~A~%" condition))))))))

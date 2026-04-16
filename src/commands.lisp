@@ -15,7 +15,10 @@
     (cond
       ((or (null operator)
            (not (member operator '("ask" "plan" "tool" "help" "approve" "patch" "execute-actions"
-                                   "session/save" "session/load" "session/reset" "describe-session")
+                                   "session/save" "session/load" "session/reset" "describe-session"
+                                   "enqueue-task" "list-tasks" "describe-task" "cancel-task"
+                                   "run-next-task" "start-worker" "stop-worker"
+                                   "list-workers" "describe-worker" "monitor-task")
                         :test #'string=)))
        (make-command :kind :eval :form form :arguments (list form)))
       ((string= operator "ask")
@@ -40,6 +43,26 @@
        (make-command :kind :session-reset :form form :arguments (rest form)))
       ((string= operator "describe-session")
        (make-command :kind :describe-session :form form :arguments (rest form)))
+      ((string= operator "enqueue-task")
+       (make-command :kind :enqueue-task :form form :arguments (rest form)))
+      ((string= operator "list-tasks")
+       (make-command :kind :list-tasks :form form :arguments (rest form)))
+      ((string= operator "describe-task")
+       (make-command :kind :describe-task :form form :arguments (rest form)))
+      ((string= operator "cancel-task")
+       (make-command :kind :cancel-task :form form :arguments (rest form)))
+      ((string= operator "run-next-task")
+       (make-command :kind :run-next-task :form form :arguments (rest form)))
+      ((string= operator "start-worker")
+       (make-command :kind :start-worker :form form :arguments (rest form)))
+      ((string= operator "stop-worker")
+       (make-command :kind :stop-worker :form form :arguments (rest form)))
+      ((string= operator "list-workers")
+       (make-command :kind :list-workers :form form :arguments (rest form)))
+      ((string= operator "describe-worker")
+       (make-command :kind :describe-worker :form form :arguments (rest form)))
+      ((string= operator "monitor-task")
+       (make-command :kind :monitor-task :form form :arguments (rest form)))
       (t
        (make-command :kind :eval :form form :arguments (list form))))))
 

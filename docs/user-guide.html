@@ -1,0 +1,146 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>User Guide | sbcl-agent</title>
+    <meta name="description" content="The operator surface is intentionally direct: an SBCL-native CLI, a Common Lisp shell, explicit capability approval, structured tools, and staged actions rather than hidden side effects.">
+    <link rel="stylesheet" href="assets/css/site.css">
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <div>
+          <a class="site-brand" href="index.html">sbcl-agent</a>
+          <p class="site-tagline">Transactional, image-native agent engineering on SBCL</p>
+        </div>
+        <nav class="top-nav" aria-label="Top navigation"><a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html">Architecture and Design</a>
+<a href="user-guide.html" aria-current="page">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html">Implementation Plan</a></nav>
+      </header>
+      <div class="layout-grid">
+        <aside class="sidebar" aria-label="Documentation navigation">
+          <p class="sidebar-label">Documentation</p>
+          <a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html">Architecture and Design</a>
+<a href="user-guide.html" aria-current="page">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html">Implementation Plan</a>
+        </aside>
+        <main class="content-shell">
+          <section class="hero">
+            <p class="eyebrow">Operators</p>
+            <h1>User Guide</h1>
+            <p class="hero-text">The operator surface is intentionally direct: an SBCL-native CLI, a Common Lisp shell, explicit capability approval, structured tools, and staged actions rather than hidden side effects.</p>
+          </section>
+          <article class="doc-content"><h2>What You Can Do Today</h2>
+<p><code>sbcl-agent</code> already supports a practical local workflow:</p>
+<ul><li>inspect environment and configuration with <code>doctor</code></li><li>use an interactive Common Lisp shell with <code>chat</code></li><li>evaluate normal Lisp forms inside the shell</li><li>ask a provider for responses, including streaming mode</li><li>stage assistant-proposed actions before executing them</li><li>run structured tools for files, docs, session state, processes, patches, and git</li><li>create and inspect work-items and workflow records through the shell and tools</li><li>run queued tasks and background workers</li></ul>
+<h2>Installation Expectations</h2>
+<p>The project currently assumes:</p>
+<ul><li>SBCL is installed</li><li>you can run the <code>bin/</code> scripts from a POSIX-like shell</li><li>git is installed if you want git-backed workflows</li></ul>
+<p>From the repository root, the basic verification path is:</p>
+<pre><code class="language-bash">./bin/sbcl-agent doctor
+./bin/run-tests</code></pre>
+<h2>Runtime Configuration</h2>
+<p>Configuration is currently environment-driven with one local-file fallback for the API key and automatic provider selection based on whether a key is available.</p>
+<h3>Environment variables</h3>
+<ul><li><code>TUTOR_CODEX_PROVIDER</code>: provider backend override; when unset, the runtime selects <code>openai-compatible</code> if an API key is available and otherwise falls back to <code>mock</code></li><li><code>TUTOR_CODEX_MODEL</code>: logical model name, defaults to <code>gpt-5</code></li><li><code>TUTOR_CODEX_API_BASE</code>: base URL for the OpenAI-compatible provider</li><li><code>OPENAI_API_KEY</code>: API key for the OpenAI-compatible provider</li></ul>
+<h3>API key fallback file</h3>
+<p>If <code>OPENAI_API_KEY</code> is unset, the runtime falls back to <code>openai-api-key.key</code> in the current working directory.</p>
+<p>That lets you keep the key in a local file in the project root while avoiding shell-history leakage. <code>.key</code> files are ignored by git.</p>
+<h2>CLI Commands</h2>
+<h3><code>./bin/sbcl-agent help</code></h3>
+<p>Shows the available top-level commands.</p>
+<h3><code>./bin/sbcl-agent doctor</code></h3>
+<p>Prints the current runtime state, including provider selection, session metadata, capability state, worker counts, operator status buckets, validator replay groups, image reconciliations, and API-key presence.</p>
+<p>Use this first when startup behavior looks wrong.</p>
+<h3><code>./bin/sbcl-agent chat</code></h3>
+<p>Starts the interactive shell.</p>
+<h3><code>./bin/sbcl-agent exec &lt;cmd...&gt;</code></h3>
+<p>Runs an external command via the CLI surface.</p>
+<h3><code>./bin/run-tests</code></h3>
+<p>Runs the SBCL test suite.</p>
+<h2>Interactive Shell Basics</h2>
+<p>The shell is Common Lisp. Recognized forms are treated as shell commands. Everything else is evaluated as normal Lisp in the <code>SBCL-AGENT-USER</code> package.</p>
+<h3>Example shell session</h3>
+<pre><code class="language-lisp">(+ 100 203)
+(plan &quot;investigate provider flow&quot;)
+(ask &quot;please read src/main.lisp&quot;)
+(execute-actions)
+(describe-session)</code></pre>
+<h3>Examples of normal Lisp use</h3>
+<pre><code class="language-lisp">(defparameter *files* &#x27;(&quot;src/main.lisp&quot; &quot;src/shell.lisp&quot;))
+(mapcar #&#x27;length *files*)
+(remove-if-not #&#x27;oddp &#x27;(1 2 3 4 5))</code></pre>
+<h2>Shell Commands</h2>
+<h3>Querying and planning</h3>
+<ul><li><code>(help)</code></li><li><code>(plan &quot;goal&quot;)</code></li><li><code>(describe-session)</code></li></ul>
+<h3>Asking the provider</h3>
+<ul><li><code>(ask &quot;prompt&quot;)</code></li><li><code>(ask &quot;prompt&quot; :stream t)</code></li><li><code>(ask &quot;prompt&quot; :enqueue t)</code></li></ul>
+<h3>Assistant actions</h3>
+<ul><li><code>(execute-actions)</code></li></ul>
+<p>Assistant actions are staged first. They do not run implicitly.</p>
+<h3>Tasks and workers</h3>
+<ul><li><code>(enqueue-task &#x27;(tool ...))</code></li><li><code>(list-tasks)</code></li><li><code>(describe-task &quot;task-id&quot;)</code></li><li><code>(monitor-task &quot;task-id&quot;)</code></li><li><code>(run-next-task)</code></li><li><code>(start-worker)</code></li><li><code>(stop-worker &quot;worker-id&quot;)</code></li><li><code>(list-workers)</code></li><li><code>(describe-worker &quot;worker-id&quot;)</code></li></ul>
+<h3>Session persistence</h3>
+<ul><li><code>(session/save &quot;path&quot;)</code></li><li><code>(session/load &quot;path&quot;)</code></li><li><code>(session/reset)</code></li></ul>
+<h3>Approvals and tools</h3>
+<ul><li><code>(approve :process-run)</code></li><li><code>(approve :git-read)</code></li><li><code>(approve :git-write)</code></li><li><code>(approve :workspace-write)</code></li><li><code>(tool :tool-id ...)</code></li><li><code>(patch &#x27;((:write &quot;path&quot; &quot;content&quot;)))</code></li></ul>
+<h3>Work-item and operator visibility</h3>
+<ul><li><code>(why-waiting &quot;work-id&quot;)</code></li><li><code>(list-replay-groups)</code></li><li><code>(list-image-reconciliations)</code></li><li><code>(replay-validator-task &quot;work-id&quot; &quot;validator-id&quot; :status :passed)</code></li><li><code>(replay-validator-set &quot;work-id&quot; &quot;replay-id&quot; :status :passed :statuses &#x27;(:live :partial :cold :passed))</code></li><li><code>(reconcile-image-only-source &quot;work-id&quot; &quot;summary&quot;)</code></li></ul>
+<h2>Provider Modes</h2>
+<h3>Mock provider</h3>
+<p>The mock provider is the default. Use it for:</p>
+<ul><li>smoke tests</li><li>development without network dependency</li><li>shell behavior verification</li><li>deterministic local validation</li></ul>
+<h3>OpenAI-compatible provider</h3>
+<p>Use <code>TUTOR_CODEX_PROVIDER=openai-compatible</code> or <code>openai</code> to activate the network-backed provider.</p>
+<p>Typical configuration:</p>
+<pre><code class="language-bash">export TUTOR_CODEX_PROVIDER=openai-compatible
+export TUTOR_CODEX_MODEL=gpt-5
+export TUTOR_CODEX_API_BASE=https://api.openai.com/v1
+export OPENAI_API_KEY=... 
+./bin/sbcl-agent chat</code></pre>
+<p>Or place the key in <code>openai-api-key.key</code> in the repository root and omit the environment variable.</p>
+<h2>Tool Families</h2>
+<h3>Filesystem tools</h3>
+<p>Examples:</p>
+<pre><code class="language-lisp">(tool :fs/read :path &quot;src/main.lisp&quot;)
+(tool :fs/list :path &quot;src&quot;)</code></pre>
+<h3>Docs tools</h3>
+<p>Use these to read project documentation through the tool layer rather than direct shelling.</p>
+<h3>Session tools</h3>
+<p>Examples:</p>
+<pre><code class="language-lisp">(tool :session/summary)
+(tool :session/events)
+(tool :session/operator-status)
+(tool :session/replay-groups)
+(tool :session/image-reconciliations)</code></pre>
+<h3>Process tools</h3>
+<p>Process execution is capability-gated and should be explicitly approved when needed.</p>
+<h3>Git tools</h3>
+<p>Git reads and writes are exposed through CL-native tools, with write paths gated separately from reads.</p>
+<h2>Capability Model</h2>
+<p><code>sbcl-agent</code> does not silently execute risky operations. The current capability model makes these actions explicit.</p>
+<p>Main capability families today:</p>
+<ul><li><code>:safe-read</code></li><li><code>:process-run</code></li><li><code>:git-read</code></li><li><code>:git-write</code></li><li><code>:workspace-write</code></li></ul>
+<p>A typical session grants only what it needs.</p>
+<h2>Recommended First Workflow</h2>
+<ol><li>Run <code>./bin/sbcl-agent doctor</code>.</li><li>Run <code>./bin/run-tests</code>.</li><li>Start <code>./bin/sbcl-agent chat</code>.</li><li>Evaluate <code>(+ 100 203)</code> to verify Lisp evaluation works.</li><li>Use <code>(ask &quot;please summarize src/main.lisp&quot;)</code>.</li><li>Inspect the session with <code>(describe-session)</code>.</li><li>Approve only the capabilities you need before stateful operations.</li></ol>
+<h2>Operational Caveats</h2>
+<ul><li>Live-image success is not the same as cold-start reproducibility.</li><li>The architecture already models this distinction, but not every desired safety mechanism is at full maturity yet.</li><li>Prefer explicit validation after meaningful mutation.</li><li>Treat image-only results as provisional until reconciled back to durable source truth.</li></ul>
+<p>For the design rationale behind those cautions, read <a href="why-sbcl-agent.html">Why sbcl-agent Exists</a> and <a href="architecture.html">Architecture and Design</a>.</p></article>
+        </main>
+      </div>
+      <footer class="site-footer">
+        <p>sbcl-agent documentation published as static GitHub Pages content from <code>/docs</code>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

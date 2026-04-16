@@ -1,0 +1,259 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Implementation Plan | sbcl-agent</title>
+    <meta name="description" content="The roadmap prioritizes live-image transaction discipline first, then dual validation, governance, role isolation, and operator-grade hardening. Multi-agent sophistication comes after mutation safety, not before it.">
+    <link rel="stylesheet" href="assets/css/site.css">
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <div>
+          <a class="site-brand" href="index.html">sbcl-agent</a>
+          <p class="site-tagline">Transactional, image-native agent engineering on SBCL</p>
+        </div>
+        <nav class="top-nav" aria-label="Top navigation"><a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html">Architecture and Design</a>
+<a href="user-guide.html">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html" aria-current="page">Implementation Plan</a></nav>
+      </header>
+      <div class="layout-grid">
+        <aside class="sidebar" aria-label="Documentation navigation">
+          <p class="sidebar-label">Documentation</p>
+          <a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html">Architecture and Design</a>
+<a href="user-guide.html">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html" aria-current="page">Implementation Plan</a>
+        </aside>
+        <main class="content-shell">
+          <section class="hero">
+            <p class="eyebrow">Roadmap</p>
+            <h1>Implementation Plan</h1>
+            <p class="hero-text">The roadmap prioritizes live-image transaction discipline first, then dual validation, governance, role isolation, and operator-grade hardening. Multi-agent sophistication comes after mutation safety, not before it.</p>
+          </section>
+          <article class="doc-content"><h2>North Star</h2>
+<p><code>sbcl-agent</code> should achieve Codex-class functional outcomes for software engineering tasks while deliberately using a different architecture that exploits Common Lisp&#x27;s differentiators.</p>
+<p>The goal is not exact implementation parity.</p>
+<p>The goal is:</p>
+<ul><li>match or exceed Codex-like usefulness where operator outcomes matter</li><li>diverge in mechanism where Lisp offers stronger introspection, mutation, rollback, and evidentiary control</li><li>treat the running image as a first-class engineering substrate rather than a hidden execution detail</li></ul>
+<p>This means the system should eventually be able to do at least the following classes of work:</p>
+<ul><li>inspect and understand source</li><li>inspect and understand a live runtime image</li><li>plan bounded engineering work</li><li>mutate source intentionally</li><li>mutate the live image intentionally</li><li>validate both in-image and from cold start</li><li>explain what it changed and why</li><li>roll changes back safely when necessary</li><li>support bounded multi-agent workflows</li><li>preserve operator trust through provenance and review</li></ul>
+<h2>Design Mandate</h2>
+<p>The architecture must optimize for three explicit truths:</p>
+<ul><li>source truth</li><li>image truth</li><li>workflow truth</li></ul>
+<p>Every meaningful work-item must answer:</p>
+<ul><li>What changed in source?</li><li>What changed in the running image?</li><li>What evidence links the two?</li></ul>
+<p>Functional similarity to Codex is an external benchmark.</p>
+<p>Transactional live-image discipline is the internal design rule.</p>
+<h2>Program Structure</h2>
+<p>The implementation program is divided into nine major workstreams that are delivered across six execution stages.</p>
+<h3>Core Workstreams</h3>
+<ol><li>Work-item and transaction kernel</li><li>Source truth runtime</li><li>Image truth runtime</li><li>Checkpointing and rollback</li><li>Dual validation and reconciliation</li><li>Taint tracking and provenance</li><li>Runtime-governed skills</li><li>Role-isolated multi-agent supervision</li><li>Operator-grade review, replay, and hardening</li></ol>
+<h3>Execution Stages</h3>
+<ol><li>Foundation realignment</li><li>Transactional kernel</li><li>Safety and validation</li><li>Governance and skills</li><li>Multi-agent supervision</li><li>Hardening and functional expansion</li></ol>
+<h2>Stage 1. Foundation Realignment</h2>
+<h3>Objective</h3>
+<p>Align the existing runtime with the new north star without destabilizing the current shell, task, and provider surface.</p>
+<h3>Why This Stage Exists</h3>
+<p>The current codebase already has useful scaffolding:</p>
+<ul><li>CLI shell</li><li>session runtime</li><li>provider abstraction</li><li>structured tool registry</li><li>task queue and workers</li><li>subprocess sandbox path</li><li>basic capability model</li></ul>
+<p>But the current abstractions are still centered on session plus task rather than work-item plus transaction.</p>
+<p>This stage prepares the codebase for the deeper refactor.</p>
+<h3>Deliverables</h3>
+<ul><li>formal north-star statement in architecture docs</li><li>detailed plan and dependency map</li><li>glossary for source truth, image truth, workflow truth, taint, checkpoint, rollback, quarantine, and provenance</li><li>inventory of existing modules mapped to future workstreams</li><li>gap matrix between current runtime primitives and target architecture</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Update <code>docs/architecture.md</code> to include a formal north-star mandate.</li><li>Expand <code>docs/implementation-plan.md</code> into the detailed execution program.</li><li>Add a section to <code>README.md</code> that explains the image-native system thesis in one concise form.</li><li>Inventory the current modules and classify them as:</li><li>reusable as-is</li><li>reusable with refactor</li><li>transitional scaffolding</li><li>likely to be replaced</li><li>Define terminology so later implementation work is consistent.</li></ul>
+<h3>Code Impact</h3>
+<p>Mostly docs and planning artifacts.</p>
+<h3>Exit Criteria</h3>
+<ul><li>architecture docs clearly state that Codex is an outcome benchmark, not an implementation blueprint</li><li>the repo has a detailed, ordered implementation program</li><li>all future code work can be mapped to a named workstream and stage</li></ul>
+<h2>Stage 2. Transactional Kernel</h2>
+<h3>Objective</h3>
+<p>Introduce the first-class work-item and mutation transaction model.</p>
+<h3>Why This Stage Comes First</h3>
+<p>Without transactional discipline, same-image autonomy will create nondeterministic state pollution. This must be solved before more autonomy or parallel mutation.</p>
+<h3>Deliverables</h3>
+<ul><li><code>work-item</code> data model</li><li>transaction lifecycle model</li><li>work-item persistence format</li><li>source snapshot abstraction</li><li>image snapshot reference abstraction</li><li>mutation intent structure</li><li>rollback point record</li><li>closure state model</li></ul>
+<h3>New Primary Data Structures</h3>
+<p>#### Work Item</p>
+<p>Minimum fields:</p>
+<ul><li><code>id</code></li><li><code>goal</code></li><li><code>status</code></li><li><code>created-at</code></li><li><code>updated-at</code></li><li><code>source-snapshot</code></li><li><code>image-snapshot-ref</code></li><li><code>workflow-record-ref</code></li><li><code>introspection-evidence</code></li><li><code>mutation-intent</code></li><li><code>runtime-observations</code></li><li><code>live-validation-result</code></li><li><code>cold-validation-result</code></li><li><code>reconciliation-result</code></li><li><code>rollback-point</code></li><li><code>taint-status</code></li><li><code>closure-decision</code></li></ul>
+<p>#### Mutation Transaction</p>
+<p>Minimum fields:</p>
+<ul><li><code>id</code></li><li><code>work-item-id</code></li><li><code>scope</code></li><li><code>checkpoint-id</code></li><li><code>state</code></li><li><code>source-mutations</code></li><li><code>image-mutations</code></li><li><code>resource-effects</code></li><li><code>rollback-status</code></li><li><code>quarantine-status</code></li></ul>
+<p>#### Image Snapshot Reference</p>
+<p>Minimum fields:</p>
+<ul><li><code>id</code></li><li><code>captured-at</code></li><li><code>packages-in-scope</code></li><li><code>symbols-in-scope</code></li><li><code>thread-registry-ref</code></li><li><code>resource-registry-ref</code></li><li><code>dynamic-scope-ref</code></li><li><code>taint-baseline</code></li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Add a <code>work-item</code> module and persistence layer.</li><li>Refactor the current queue/task runtime so tasks can either:</li><li>remain low-level execution jobs</li><li>or become implementation details under a parent work-item</li><li>Add work-item lifecycle transitions:</li><li><code>:created</code></li><li><code>:inspecting</code></li><li><code>:planned</code></li><li><code>:checkpointed</code></li><li><code>:mutating</code></li><li><code>:observing</code></li><li><code>:live-validating</code></li><li><code>:cold-validating</code></li><li><code>:reconciling</code></li><li><code>:committed</code></li><li><code>:image-only</code></li><li><code>:rolled-back</code></li><li><code>:quarantined</code></li><li><code>:failed</code></li><li>Route nontrivial shell-level asks through work-item creation.</li><li>Preserve the current REPL and command vocabulary while changing the internal execution substrate.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>work-item creation preserves source snapshot and image snapshot references</li><li>work-item transitions reject invalid state moves</li><li>mutation transaction cannot begin without a valid checkpoint policy reference</li><li>work-item persistence survives reload without losing closure or rollback metadata</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>work-item is the primary engineering unit in the runtime</li><li>transaction lifecycle is explicit and test-covered</li><li>the current task queue is no longer the top-level abstraction for meaningful work</li></ul>
+<h2>Stage 3. Source Truth Runtime</h2>
+<h3>Objective</h3>
+<p>Make source truth explicit and durable as a peer to image truth.</p>
+<h3>Deliverables</h3>
+<ul><li>source snapshot service</li><li>diff baseline service</li><li>source mutation ledger</li><li>cold-start source baseline record</li><li>source truth inspection tools</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Add source snapshot capture:</li><li>current repo status</li><li>changed files</li><li>staged diff baseline</li><li>relevant file hashes or contents for touched scope</li><li>Add source truth tools such as:</li><li><code>:source/snapshot</code></li><li><code>:source/diff</code></li><li><code>:source/file-hash</code></li><li><code>:source/changed-files</code></li><li>Associate source mutations with work-item and transaction ids.</li><li>Teach patch application to record source-truth evidence, not just write files.</li><li>Define reproducibility baselines from source truth.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>source snapshot records exact pre-mutation baseline</li><li>source diff after patch can be linked back to work-item id</li><li>source truth records survive rollback attempts and show final disposition clearly</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>source mutations are durable, attributable, and queryable as source truth</li><li>cold-start validation can depend on a formal source baseline instead of ad hoc file state</li></ul>
+<h2>Stage 4. Image Truth Runtime</h2>
+<h3>Objective</h3>
+<p>Treat the live SBCL image as a first-class inspectable and governable domain.</p>
+<h3>Deliverables</h3>
+<ul><li>image snapshot service</li><li>symbol/package inspection registry</li><li>dynamic binding capture hooks</li><li>worker/thread registry abstraction</li><li>resource registry abstraction</li><li>image mutation ledger</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Introduce image introspection tools such as:</li><li><code>:image/snapshot</code></li><li><code>:image/packages</code></li><li><code>:image/symbol</code></li><li><code>:image/bindings</code></li><li><code>:image/threads</code></li><li><code>:image/resources</code></li><li>Add structured capture for:</li><li>definitions likely to be touched</li><li>package membership and current package state</li><li>selected dynamic variable values</li><li>active worker and thread metadata</li><li>runtime resources relevant to the work-item</li><li>Distinguish image mutations from source mutations in the event/workflow log.</li><li>Add image-only experimental mutation support as an explicit closure class.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>image snapshot captures symbols and package scope deterministically for test fixtures</li><li>thread registry capture works before and after starting workers</li><li>image-only mutation can be recorded without source mutation</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>the runtime can describe what changed in the live image independently of what changed on disk</li><li>image truth queries are structured and attributable to a work-item</li></ul>
+<h2>Stage 5. Checkpointing and Rollback</h2>
+<h3>Objective</h3>
+<p>Make same-image mutation safe enough to support real autonomy.</p>
+<h3>Deliverables</h3>
+<ul><li>checkpoint manager</li><li>rollback manager</li><li>rollback confidence model</li><li>unresolved residue model</li><li>quarantine support</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Define checkpoint capture policy for:</li><li>touched definitions</li><li>package and symbol state</li><li>relevant dynamic variables</li><li>worker/thread registry</li><li>resource registry</li><li>source diff baseline</li><li>validation baseline</li><li>Implement rollback handles for:</li><li>source file restoration</li><li>symbol/function redefinition rollback where feasible</li><li>cache clearing or replacement</li><li>thread stop/cleanup tracking</li><li>runtime override removal</li><li>Add quarantine state when full rollback is not possible.</li><li>Add shell-visible rollback status summaries.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>checkpoint can be created before patch and eval mutation</li><li>rollback restores source and image state for a controlled fixture case</li><li>partial rollback marks unresolved residue and quarantines the work-item</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>nontrivial mutation work is checkpointed by default</li><li>rollback availability is explicit, not assumed</li><li>quarantine is a first-class outcome rather than an error afterthought</li></ul>
+<h2>Stage 6. Dual Validation and Reconciliation</h2>
+<h3>Objective</h3>
+<p>Split validation into live validation and reproducibility validation.</p>
+<h3>Deliverables</h3>
+<ul><li>live validator framework</li><li>cold-start validator framework</li><li>reconciliation report format</li><li>validation doctrine hooks for skills</li></ul>
+<h3>Live Validation Scope</h3>
+<p>Live validation should answer:</p>
+<ul><li>Did the runtime symptom improve?</li><li>Did current flows continue correctly?</li><li>Did active threads stabilize?</li><li>Did current in-image behavior improve?</li></ul>
+<h3>Cold Validation Scope</h3>
+<p>Cold validation should answer:</p>
+<ul><li>Does the system load from source?</li><li>Do relevant tests pass from a fresh image?</li><li>Is the fix durable without historical image state?</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Add validator result structs for live and cold validation separately.</li><li>Introduce validator runners for:</li><li>runtime probes</li><li>REPL-based in-image assertions</li><li>fresh SBCL launch/load checks</li><li>test suite segments</li><li>Add reconciliation reporting when live and cold diverge.</li><li>Require explicit acknowledgment when a work-item closes with mismatch.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>live pass plus cold fail produces reconciled &quot;image-local success&quot; result</li><li>live fail plus cold pass is recorded distinctly</li><li>both-pass work-item can close committed without manual discrepancy note</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>no work-item can claim completion on live validation alone without explicit mismatch status</li><li>the system can distinguish runtime healing from durable code correction</li></ul>
+<h2>Stage 7. Taint Tracking and Provenance</h2>
+<h3>Objective</h3>
+<p>Make live-state contamination visible and make every conclusion auditable.</p>
+<h3>Deliverables</h3>
+<ul><li>taint model</li><li>taint propagation rules</li><li>provenance record schema</li><li>provenance persistence and query tools</li></ul>
+<h3>Taint Minimum Scope</h3>
+<p>Track at minimum:</p>
+<ul><li>symbols redefined in the transaction</li><li>objects or caches derived from changed code</li><li>threads influenced by the transaction</li><li>configuration overrides introduced during work</li><li>runtime resources opened or altered</li><li>validations executed against tainted state</li></ul>
+<h3>Provenance Minimum Scope</h3>
+<p>Record at minimum:</p>
+<ul><li>initial source hash/baseline</li><li>initial image snapshot id</li><li>introspection queries used to form the plan</li><li>all executed mutations</li><li>before/after symbol or subsystem map</li><li>runtime observations</li><li>validation outputs</li><li>final source diff</li><li>rollback availability</li><li>taint status</li><li>operator interventions</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Introduce taint tags attached to work-items, image snapshots, and validation results.</li><li>Propagate taint when image mutation occurs.</li><li>Add provenance query tools such as:</li><li><code>:workflow/provenance</code></li><li><code>:workflow/work-item</code></li><li><code>:workflow/evidence</code></li><li>Surface taint in monitor views and final work-item summaries.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>redefining a symbol taints subsequent relevant validation results</li><li>provenance record contains required mandatory fields</li><li>reviewer view can reconstruct mutation chain and validation basis</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>live-image success claims are always accompanied by taint status</li><li>provenance is complete enough to support review and replay work later</li></ul>
+<h2>Stage 8. Runtime-Governed Skills</h2>
+<h3>Objective</h3>
+<p>Turn skills into operational doctrines for live-system work rather than generic prompt bundles.</p>
+<h3>Deliverables</h3>
+<ul><li>skill doctrine schema</li><li>checkpoint doctrine hooks</li><li>rollback doctrine hooks</li><li>live/cold validator doctrine hooks</li><li>approval doctrine hooks</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Define skill metadata fields for:</li><li>mutation class: read-only, source-only, image-only, dual-mutation</li><li>checkpoint requirement</li><li>rollback requirement</li><li>required live validators</li><li>required cold validators</li><li>persistent side-effect policy</li><li>operator approval requirements</li><li>Implement initial skill doctrines:</li><li>live hotfix doctrine</li><li>source refactor doctrine</li><li>runtime diagnostic doctrine</li><li>cold reproducibility verification doctrine</li><li>Ensure work-items inherit doctrine defaults from the selected skill.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>work-item with live hotfix doctrine cannot skip checkpoint or live validation</li><li>source refactor doctrine requires cold-start validation before closure</li><li>read-only observer doctrine prevents mutation entrypoints</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>skills become governance capsules for work-item behavior</li><li>different operational doctrines can be applied to the same shell and tool substrate safely</li></ul>
+<h2>Stage 9. Role-Isolated Multi-Agent Supervision</h2>
+<h3>Objective</h3>
+<p>Support multi-agent work without uncontrolled shared-image mutation.</p>
+<h3>Deliverables</h3>
+<ul><li>observer role</li><li>planner role</li><li>mutation role</li><li>reviewer role</li><li>supervisor role</li><li>state authority enforcement</li></ul>
+<h3>Role Rules</h3>
+<ul><li>Observer agents may inspect source and image but not mutate.</li><li>Planner agents may inspect and propose transactions but not execute.</li><li>Mutation agents may execute only inside a narrow transaction scope.</li><li>Reviewer agents may inspect diffs, image deltas, taint, and evidence but may not alter the active transaction.</li><li>Supervisor agent owns closure, rollback, retry, quarantine, and escalation.</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Add role metadata and authority checks to work-items.</li><li>Restrict mutation entrypoints by agent role.</li><li>Support multiple observers/planners in parallel.</li><li>Forbid parallel mutation until disjointness is proven by:</li><li>file set</li><li>symbol set</li><li>subsystem boundary</li><li>Add supervisor decision surfaces for retry, rollback, quarantine, and operator escalation.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>observer cannot mutate source or image</li><li>planner cannot execute transaction</li><li>mutation agent cannot exceed declared transaction scope</li><li>disjointness gate blocks overlapping parallel mutation attempts</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>multi-agent work is organized around state authority, not only task decomposition</li><li>shared-image mutation risk is bounded by explicit role restrictions</li></ul>
+<h2>Stage 10. Challenge-Based Review and Operator Hardening</h2>
+<h3>Objective</h3>
+<p>Make review and operator workflows attack the real failure modes of live-image engineering.</p>
+<h3>Deliverables</h3>
+<ul><li>challenge-based review framework</li><li>deterministic replay roadmap and first implementation slice</li><li>work-item resume support</li><li>quarantine inspection surfaces</li><li>why-am-I-waiting status surfaces</li></ul>
+<h3>Challenge Functions</h3>
+<p>Review should explicitly ask:</p>
+<ul><li>Did the agent solve the current runtime symptom?</li><li>Did it introduce hidden image-state dependency?</li><li>Is the source patch sufficient from cold start?</li><li>Can the transaction be replayed deterministically?</li><li>Is rollback proven?</li><li>Is the current validation tainted?</li><li>Did the patch overfit to this process instance?</li></ul>
+<h3>Concrete Tasks</h3>
+<ul><li>Add review artifacts attached to work-item closure.</li><li>Add operator views for:</li><li>pending approvals</li><li>missing validation</li><li>rollback uncertainty</li><li>quarantine reasons</li><li>taint warnings</li><li>Add resume support for interrupted work-items.</li><li>Add first deterministic replay primitives where feasible.</li></ul>
+<h3>Required Tests</h3>
+<ul><li>review artifact captures all mandatory challenge questions</li><li>quarantined work-item can be resumed for operator review</li><li>blocked work-item explains what evidence or approval it is waiting on</li></ul>
+<h3>Exit Criteria</h3>
+<ul><li>the system is not only powerful but operator-trustworthy under live-state complexity</li><li>review loops target hidden-state false success rather than just source diff quality</li></ul>
+<h2>Cross-Cutting Engineering Policies</h2>
+<h2>Policy 1. Preserve Current Utility While Refactoring</h2>
+<p>The existing shell, tool registry, tests, and provider abstraction are useful scaffolding. Refactors should preserve day-to-day usefulness wherever practical.</p>
+<h2>Policy 2. Prefer Explicit Structures Over Implicit Conventions</h2>
+<p>If a concept matters architecturally, it needs a real data structure.</p>
+<p>This includes:</p>
+<ul><li>work-items</li><li>transactions</li><li>checkpoints</li><li>taint state</li><li>provenance records</li><li>validation results</li><li>closure decisions</li></ul>
+<h2>Policy 3. Separate Source Mutation From Image Mutation Everywhere</h2>
+<p>No mutation API should blur the difference between:</p>
+<ul><li>changing files</li><li>redefining live symbols</li><li>doing both as one transaction</li></ul>
+<h2>Policy 4. Do Not Add Broad Autonomy Before Rollback Is Trustworthy</h2>
+<p>Checkpointing and rollback are prerequisites for stronger autonomy, not follow-on polish.</p>
+<h2>Policy 5. Measure Against Operator Value, Not Implementation Similarity</h2>
+<p>Success means:</p>
+<ul><li>faster diagnosis of live problems</li><li>safer hot repair</li><li>higher reproducibility from cold start</li><li>clearer rollback confidence</li><li>stronger provenance and reviewability</li></ul>
+<h2>Milestone View</h2>
+<h3>Milestone A. Image-Native Foundations</h3>
+<p>Includes:</p>
+<ul><li>Stage 1</li><li>Stage 2</li><li>Stage 3</li><li>Stage 4</li></ul>
+<p>Outcome:</p>
+<p>The system can represent and persist work-items that distinguish source, image, and workflow truth.</p>
+<h3>Milestone B. Safe Mutation Discipline</h3>
+<p>Includes:</p>
+<ul><li>Stage 5</li><li>Stage 6</li><li>Stage 7</li></ul>
+<p>Outcome:</p>
+<p>The system can mutate safely with checkpointing, rollback, dual validation, taint, and provenance.</p>
+<h3>Milestone C. Governed Scaling</h3>
+<p>Includes:</p>
+<ul><li>Stage 8</li><li>Stage 9</li><li>Stage 10</li></ul>
+<p>Outcome:</p>
+<p>The system can scale to doctrine-bearing skills, bounded multi-agent supervision, and operator-grade review workflows.</p>
+<h2>Success Metrics</h2>
+<p>The project should be measured against its real thesis.</p>
+<p>Primary metrics:</p>
+<ul><li>mean time to identify live-runtime root cause</li><li>mean time to hot-repair a running image safely</li><li>percentage of live fixes that reproduce from cold start</li><li>rollback success rate</li><li>tainted-validation detection rate</li><li>operator interventions per completed work-item</li><li>number of tasks resolved without restart for diagnosis and repair</li><li>delta between runtime symptom resolution and durable source correction</li></ul>
+<p>Secondary metrics:</p>
+<ul><li>time from inspection start to checkpoint creation</li><li>rate of quarantined work-items</li><li>replay success rate once replay exists</li><li>ratio of image-only experimental commits to durable commits</li></ul>
+<h2>Immediate Next Implementation Slice</h2>
+<p>The next concrete engineering slice should be:</p>
+<ol><li>introduce <code>work-item</code> and <code>mutation-transaction</code> structures</li><li>map existing <code>task</code> usage to transitional work-item wrappers</li><li>add source snapshot and image snapshot reference records</li><li>extend session/workflow persistence to include work-item truth</li><li>add shell inspection surfaces for work-item status and truth separation</li></ol>
+<p>That is the minimum viable start on the new architecture.</p>
+<h2>Summary</h2>
+<p><code>sbcl-agent</code> should not chase Codex by copying Codex&#x27;s mechanics.</p>
+<p>It should instead deliver Codex-class engineering outcomes through a stronger Lisp-native architecture built around:</p>
+<ul><li>source truth</li><li>image truth</li><li>workflow truth</li><li>transactional mutation</li><li>checkpointing and rollback</li><li>dual validation</li><li>taint tracking</li><li>provenance</li><li>doctrine-bearing skills</li><li>role-isolated multi-agent supervision</li></ul>
+<p>That is the route to achieving as much functionally, and eventually more, by leveraging the differentiators of Common Lisp rather than suppressing them.</p></article>
+        </main>
+      </div>
+      <footer class="site-footer">
+        <p>sbcl-agent documentation published as static GitHub Pages content from <code>/docs</code>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

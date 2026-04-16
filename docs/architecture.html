@@ -1,0 +1,145 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Architecture and Design | sbcl-agent</title>
+    <meta name="description" content="The design goal is not implementation parity with Codex. The goal is a transactional, image-native engineering environment that leverages SBCL while preserving safety, evidence, and reproducibility.">
+    <link rel="stylesheet" href="assets/css/site.css">
+  </head>
+  <body>
+    <div class="site-shell">
+      <header class="site-header">
+        <div>
+          <a class="site-brand" href="index.html">sbcl-agent</a>
+          <p class="site-tagline">Transactional, image-native agent engineering on SBCL</p>
+        </div>
+        <nav class="top-nav" aria-label="Top navigation"><a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html" aria-current="page">Architecture and Design</a>
+<a href="user-guide.html">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html">Implementation Plan</a></nav>
+      </header>
+      <div class="layout-grid">
+        <aside class="sidebar" aria-label="Documentation navigation">
+          <p class="sidebar-label">Documentation</p>
+          <a href="index.html">Overview</a>
+<a href="why-sbcl-agent.html">Why sbcl-agent Exists</a>
+<a href="architecture.html" aria-current="page">Architecture and Design</a>
+<a href="user-guide.html">User Guide</a>
+<a href="common-lisp-runtime.html">Common Lisp as a Runtime</a>
+<a href="common-lisp-guide.html">Common Lisp Language Guide</a>
+<a href="implementation-plan.html">Implementation Plan</a>
+        </aside>
+        <main class="content-shell">
+          <section class="hero">
+            <p class="eyebrow">Architecture</p>
+            <h1>Architecture and Design</h1>
+            <p class="hero-text">The design goal is not implementation parity with Codex. The goal is a transactional, image-native engineering environment that leverages SBCL while preserving safety, evidence, and reproducibility.</p>
+          </section>
+          <article class="doc-content"><h2>System Objective</h2>
+<p>Build a governed, transactional, image-native agent engineering environment that can inspect and mutate the same running system it is reasoning about, while preserving reproducibility, rollback, provenance, and operator trust.</p>
+<p>This architecture deliberately uses Codex-like systems as an external benchmark for usefulness, not as an implementation blueprint.</p>
+<h2>Architectural Principles</h2>
+<h3>Three explicit truths</h3>
+<p>The system models what the project often calls the three truths: three distinct but connected truth domains.</p>
+<p>#### Source truth</p>
+<p>Source truth covers the checked-in and file-based world:</p>
+<ul><li>source files</li><li>diffs and patches</li><li>tests and fixtures</li><li>generated persistent artifacts</li><li>git state and reproducible build inputs</li></ul>
+<p>#### Image truth</p>
+<p>Image truth covers the live SBCL image:</p>
+<ul><li>loaded definitions</li><li>symbol and package state</li><li>heap objects and object identity</li><li>dynamic bindings</li><li>caches and memoized values</li><li>active threads and workers</li><li>open resources and runtime handles</li></ul>
+<p>#### Workflow truth</p>
+<p>Workflow truth covers the durable record of engineering activity:</p>
+<ul><li>work-items</li><li>plans and hypotheses</li><li>introspection evidence</li><li>mutation intents</li><li>runtime observations</li><li>validations</li><li>approvals and interventions</li><li>rollback and quarantine status</li><li>final conclusions</li></ul>
+<p>Every meaningful task should answer:</p>
+<ul><li>what changed in source?</li><li>what changed in image?</li><li>what evidence links the two?</li></ul>
+<h3>Transactional live-image workflow</h3>
+<p>The core loop is:</p>
+<ol><li>inspect source and image</li><li>plan bounded mutations</li><li>checkpoint the relevant state</li><li>mutate source and image deliberately</li><li>observe runtime effects</li><li>validate in-image</li><li>validate from cold state</li><li>reconcile differences</li><li>commit, roll back, or quarantine</li></ol>
+<p>This is stricter than a basic analyze-plan-execute-validate loop because the live image can both help and mislead.</p>
+<h2>Runtime Layers</h2>
+<h3>CLI and entrypoints</h3>
+<p>The operator-facing executables in <code>bin/</code> launch the SBCL runtime, load the system, and dispatch into the Common Lisp main entrypoint.</p>
+<p>Primary commands today:</p>
+<ul><li><code>doctor</code></li><li><code>chat</code></li><li><code>exec</code></li><li><code>help</code></li><li><code>run-tests</code></li></ul>
+<h3>Shell and command normalization</h3>
+<p>The interactive shell is implemented in Common Lisp and accepts both:</p>
+<ul><li>shell commands such as <code>(ask ...)</code>, <code>(plan ...)</code>, and <code>(tool ...)</code></li><li>ordinary Lisp forms for direct evaluation</li></ul>
+<p>Command normalization turns recognized forms into structured command records while leaving unrecognized forms available for normal Lisp evaluation.</p>
+<h3>Provider boundary</h3>
+<p>The provider layer abstracts model interaction and returns structured Common Lisp data, not raw untyped text.</p>
+<p>Current providers:</p>
+<ul><li>mock provider for local verification and deterministic smoke tests</li><li>OpenAI-compatible provider for external model-backed responses</li></ul>
+<p>The provider contract also supports streaming by emitting structured provider events.</p>
+<h3>Session runtime</h3>
+<p>The session layer owns the operator-facing mutable runtime state:</p>
+<ul><li>transcript and event log</li><li>staged assistant actions</li><li>plan summary</li><li>capability grants</li><li>queued tasks and worker metadata</li><li>work-item and workflow record collections</li></ul>
+<p>Sessions can be saved and restored, which gives the shell continuity across runs.</p>
+<h3>Tool registry</h3>
+<p>Tools are Common Lisp-callable capabilities that expose structured operations.</p>
+<p>Current tool families include:</p>
+<ul><li>filesystem tools</li><li>docs tools</li><li>session tools</li><li>process tools</li><li>git tools</li><li>patch application</li></ul>
+<p>The design intent is that tools remain explicit, reviewable, and capability-gated.</p>
+<h3>Task queue and workers</h3>
+<p>Tasks provide background execution infrastructure. Workers execute queued tasks inside the current runtime and expose status for monitoring.</p>
+<p>In the long-term design, tasks are subordinate execution units. Work-items remain the top-level engineering unit.</p>
+<h3>Work-items and workflow records</h3>
+<p>Work-items are the core transactional units in the system. Workflow records capture governance, approvals, state transitions, and operator-facing evidence.</p>
+<p>Current implementation themes already present in the codebase include:</p>
+<ul><li>checkpoints</li><li>replay identifiers and validator task records</li><li>wait-state reporting</li><li>operator status summaries</li><li>image-only outcomes</li><li>source reconciliation records</li></ul>
+<h2>Data Model Overview</h2>
+<h3>Work-item</h3>
+<p>A work-item represents a bounded engineering effort.</p>
+<p>Typical concerns captured by a work-item:</p>
+<ul><li>goal and scope</li><li>source snapshot and checkpoint references</li><li>image-related observations</li><li>planned and executed validations</li><li>taint and provenance state</li><li>final disposition</li></ul>
+<h3>Mutation transaction</h3>
+<p>A mutation transaction binds a set of source and image changes to a checkpoint and a closure outcome.</p>
+<p>Expected closure states:</p>
+<ul><li>committed to source and image</li><li>committed to image only</li><li>rolled back</li><li>quarantined for operator review</li></ul>
+<h3>Validator task record</h3>
+<p>Validator task records track replayable validation steps, including:</p>
+<ul><li>replay grouping</li><li>validator kind</li><li>checkpoint linkage</li><li>status transitions</li><li>resume and replay metadata</li></ul>
+<h3>Image reconciliation record</h3>
+<p>Image reconciliation records document how an image-only result was later brought back into durable source truth.</p>
+<h2>Safety Model</h2>
+<h3>Capability gates</h3>
+<p>The current runtime uses capability grants to make stateful operations explicit. Present gates include:</p>
+<ul><li>process execution</li><li>git read and git write</li><li>workspace writes</li></ul>
+<h3>Checkpointing</h3>
+<p>Before meaningful mutation, the system should record a checkpoint that ties together the relevant source baseline, image scope, and validation starting point.</p>
+<p>The current implementation has checkpoint metadata in the work-item system. The long-term goal is higher-fidelity image capture and rollback support.</p>
+<h3>Rollback</h3>
+<p>Rollback is a first-class architectural requirement even where implementation fidelity is still growing. The intended rollback surface includes both source and image effects.</p>
+<h3>Quarantine</h3>
+<p>Not every task should end in a clean commit or rollback. The architecture explicitly allows unresolved work to be quarantined for operator review.</p>
+<h2>Validation Model</h2>
+<h3>Live validation</h3>
+<p>Live validation asks whether the mutation improved the currently running image.</p>
+<h3>Reproducibility validation</h3>
+<p>Reproducibility validation asks whether the same result can be reproduced from source in a cold start.</p>
+<h3>Reconciliation</h3>
+<p>If live validation and cold-start validation disagree, the system should preserve that disagreement rather than flattening it into a false binary success.</p>
+<h2>Multi-Agent Direction</h2>
+<p>The intended long-term orchestration model is role isolation rather than unconstrained task fan-out.</p>
+<p>Planned roles:</p>
+<ul><li>observer agents inspect but do not mutate</li><li>planner agents propose transactions but do not execute them</li><li>mutation agents operate inside narrow transaction scopes</li><li>reviewer agents inspect diffs, image deltas, and evidence without altering active work</li><li>a supervisor agent owns closure, escalation, and rollback decisions</li></ul>
+<p>This ordering matters. Strong transaction boundaries come before aggressive parallelism.</p>
+<h2>Module Map</h2>
+<p>The current source tree maps roughly to the architecture like this:</p>
+<ul><li><code>config.lisp</code>: runtime configuration and provider bootstrap</li><li><code>provider-protocol.lisp</code>, <code>provider-mock.lisp</code>, <code>provider-openai.lisp</code>: model interaction boundary</li><li><code>commands.lisp</code>, <code>shell.lisp</code>, <code>repl.lisp</code>, <code>main.lisp</code>: operator interface and command execution</li><li><code>session.lisp</code>, <code>events.lisp</code>, <code>tasks.lisp</code>: session runtime, logging, queues, and workers</li><li><code>tools-*.lisp</code>, <code>tools-registry.lisp</code>: structured capability surface</li><li><code>policy.lisp</code>, <code>sandbox.lisp</code>, <code>patch.lisp</code>: execution governance and workspace mutation controls</li><li><code>work-items.lisp</code>, <code>workflow.lisp</code>: transactional engineering record and workflow evidence</li></ul>
+<h2>Architectural Gaps</h2>
+<p>The codebase already demonstrates the core design direction, but some elements remain only partially implemented.</p>
+<p>Largest remaining gaps:</p>
+<ul><li>higher-fidelity image checkpoint capture</li><li>stronger rollback of live image changes</li><li>more deterministic replay and provenance export</li><li>deeper role isolation for multi-agent work</li><li>richer cold-start validation orchestration</li></ul>
+<p>Those gaps are intentional roadmap items, not hidden assumptions. See <a href="implementation-plan.html">Implementation Plan</a> for delivery sequencing.</p></article>
+        </main>
+      </div>
+      <footer class="site-footer">
+        <p>sbcl-agent documentation published as static GitHub Pages content from <code>/docs</code>.</p>
+      </footer>
+    </div>
+  </body>
+</html>

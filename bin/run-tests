@@ -1,0 +1,13 @@
+#!/usr/bin/env sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname "$0")" && pwd)
+PROJECT_DIR=$(CDPATH= cd -- "$SCRIPT_DIR/.." && pwd)
+export XDG_CACHE_HOME="$PROJECT_DIR/.cache"
+
+exec sbcl --noinform \
+  --non-interactive \
+  --eval '(require :asdf)' \
+  --load "$PROJECT_DIR/tutor-codex.asd" \
+  --eval '(asdf:test-system :tutor-codex)' \
+  --quit

@@ -14,4 +14,4 @@ if ! bundle check >/dev/null 2>&1; then
   exit 1
 fi
 
-bundle exec jekyll serve --source docs --destination docs/_site --livereload
+bundle exec jekyll serve --source docs --destination docs/_site --baseurl "" --livereload

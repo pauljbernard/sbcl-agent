@@ -2,5 +2,7 @@ title: sbcl-agent
 description: SBCL-native agent engineering environment
 markdown: kramdown
 theme: minima
+url: https://pauljbernard.github.io
+baseurl: /sbcl-agent
 source: docs
 destination: docs/_site

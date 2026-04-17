@@ -90,6 +90,7 @@ From the repository root:
 ```bash
 ./bin/sbcl-agent doctor
 ./bin/sbcl-agent chat
+./bin/sbcl-agent chat -i
 ./bin/run-tests
 ```
 
@@ -98,6 +99,8 @@ Top-level CLI commands:
 - `./bin/sbcl-agent help`
 - `./bin/sbcl-agent doctor`
 - `./bin/sbcl-agent chat`
+- `./bin/sbcl-agent chat -i`
+  starts chat with interactive streaming enabled by default
 - `./bin/sbcl-agent exec <cmd...>`
 - `./bin/run-tests`
 
@@ -106,7 +109,8 @@ Top-level CLI commands:
 Environment variables:
 
 - `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime selects `openai-compatible` if an API key is available and otherwise falls back to `mock`
-- `TUTOR_CODEX_MODEL`: logical model name, defaults to `gpt-5`
+- `TUTOR_CODEX_MODEL`: primary model name for deeper asks, defaults to `gpt-5`
+- `TUTOR_CODEX_FAST_MODEL`: low-latency model name for ordinary asks, defaults to `gpt-4.1-mini`
 - `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
 - `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
 
@@ -138,9 +142,12 @@ Start the shell with:
 
 ```bash
 ./bin/sbcl-agent chat
+./bin/sbcl-agent chat -i
 ```
 
 Inside `chat`, the primary interface is Common Lisp. Any form that is not recognized as a shell command is evaluated in the `SBCL-AGENT-USER` package.
+
+Use `./bin/sbcl-agent chat -i` when you want interactive streaming enabled by default for `(ask ...)` calls. In that mode, plain `(ask "prompt")` uses the streaming path automatically. You can still force or suppress streaming per call with the `:stream` option.
 
 Basic examples:
 
@@ -151,6 +158,12 @@ Basic examples:
 (ask "please read src/main.lisp" :stream t)
 (ask "please read src/main.lisp" :enqueue t)
 (describe-session)
+```
+
+With `chat -i`, this is the common interactive pattern:
+
+```lisp
+(ask "create a program which will tell me the current date and time of day")
 ```
 
 ### Shell Commands
@@ -206,6 +219,8 @@ Current provider modes:
 - `openai-compatible`: structured provider adapter using `TUTOR_CODEX_API_BASE` and `OPENAI_API_KEY`
 
 The shell supports both non-streaming and streaming asks. Streaming asks emit provider events during response assembly and still return a final assistant response object.
+
+`chat -i` enables streaming by default for shell asks. Ordinary asks are also routed through the configured fast model when the OpenAI-compatible provider is active, while prompts that look explicitly deep or analytical stay on the primary model.
 
 ## Assistant Actions
 

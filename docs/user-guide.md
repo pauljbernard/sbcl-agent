@@ -2,33 +2,29 @@
 layout: default
 title: User Guide
 hero_title: User Guide
-hero_text: The operator surface is intentionally direct: an SBCL-native CLI, a Common Lisp shell, explicit capability approval, structured tools, and staged actions rather than hidden side effects.
+hero_text: "The operator surface stays direct: an SBCL-native CLI, a Common Lisp shell, explicit approvals, structured tools, and now a thread-and-turn conversation layer on top of the same runtime."
 eyebrow: Operators
 permalink: /user-guide.html
 description: Detailed user guide for sbcl-agent.
 ---
 ## What You Can Do Today
 
-`sbcl-agent` already supports a practical local workflow:
+`sbcl-agent` currently supports two styles of interaction on one runtime:
 
-- inspect environment and configuration with `doctor`
-- use an interactive Common Lisp shell with `chat`
-- evaluate normal Lisp forms inside the shell
-- ask a provider for responses, including streaming mode
-- stage assistant-proposed actions before executing them
-- run structured tools for files, docs, session state, processes, patches, and git
-- create and inspect work-items and workflow records through the shell and tools
-- run queued tasks and background workers
+- REPL-style operation, where you type Lisp forms or shell commands and get results immediately
+- conversation-style operation, where you work in durable threads and turns using `(say ...)`
+
+Both styles share the same provider, tool, session, policy, task, and workflow layers.
 
 ## Installation Expectations
 
-The project currently assumes:
+The current project assumes:
 
 - SBCL is installed
-- you can run the `bin/` scripts from a POSIX-like shell
+- you can run the scripts in [`bin/`](/Volumes/data/development/sbcl-agent/bin) from a POSIX-like shell
 - git is installed if you want git-backed workflows
 
-From the repository root, the basic verification path is:
+Basic verification from the repository root:
 
 ```bash
 ./bin/sbcl-agent doctor
@@ -37,190 +33,160 @@ From the repository root, the basic verification path is:
 
 ## Runtime Configuration
 
-Configuration is currently environment-driven with one local-file fallback for the API key and automatic provider selection based on whether a key is available.
+Environment variables:
 
-### Environment variables
-
-- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime selects `openai-compatible` if an API key is available and otherwise falls back to `mock`
-- `TUTOR_CODEX_MODEL`: logical model name, defaults to `gpt-5`
+- `TUTOR_CODEX_PROVIDER`: provider override; if unset, the runtime chooses `openai-compatible` when an API key is available and otherwise falls back to `mock`
+- `TUTOR_CODEX_MODEL`: primary model name, defaults to `gpt-5`
+- `TUTOR_CODEX_FAST_MODEL`: low-latency model name used for lighter asks, defaults to `gpt-4.1-mini`
 - `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
 - `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
 
-### API key fallback file
-
 If `OPENAI_API_KEY` is unset, the runtime falls back to `openai-api-key.key` in the current working directory.
 
-That lets you keep the key in a local file in the project root while avoiding shell-history leakage. `.key` files are ignored by git.
-
-## CLI Commands
+## Top-Level CLI Commands
 
 ### `./bin/sbcl-agent help`
 
-Shows the available top-level commands.
+Prints the available commands and basic usage.
 
 ### `./bin/sbcl-agent doctor`
 
-Prints the current runtime state, including provider selection, session metadata, capability state, worker counts, operator status buckets, validator replay groups, image reconciliations, and API-key presence.
-
-Use this first when startup behavior looks wrong.
+Prints runtime diagnostics, including provider selection, working directory, shell package, session metadata, pending assistant actions, tasks, work-items, worker counts, approved policies, replay groups, reconciliation counts, and API-key presence.
 
 ### `./bin/sbcl-agent chat`
 
-Starts the interactive shell.
+Starts the interactive Common Lisp shell.
+
+### `./bin/sbcl-agent chat -i`
+
+Starts the shell with interactive streaming enabled by default for `(ask ...)`. This preserves the original streamed-ask operator flow while keeping all of the newer thread and turn commands available.
 
 ### `./bin/sbcl-agent exec <cmd...>`
 
-Runs an external command via the CLI surface.
+Runs an external command through the CLI surface.
 
 ### `./bin/run-tests`
 
-Runs the SBCL test suite.
+Runs the test suite.
+
+### `./bin/run-coverage`
+
+Runs the test suite with coverage collection.
 
 ## Interactive Shell Basics
 
 The shell is Common Lisp. Recognized forms are treated as shell commands. Everything else is evaluated as normal Lisp in the `SBCL-AGENT-USER` package.
 
-### Example shell session
+Example:
 
 ```lisp
 (+ 100 203)
-(plan "investigate provider flow")
-(ask "please read src/main.lisp")
-(execute-actions)
-(describe-session)
-```
-
-### Examples of normal Lisp use
-
-```lisp
 (defparameter *files* '("src/main.lisp" "src/shell.lisp"))
 (mapcar #'length *files*)
-(remove-if-not #'oddp '(1 2 3 4 5))
 ```
 
-## Shell Commands
+That means the shell is both:
 
-### Querying and planning
+- the operator control surface
+- a real Lisp REPL inside the same runtime the agent is using
 
-- `(help)`
-- `(plan "goal")`
-- `(describe-session)`
+## Conversation Workflow
 
-### Asking the provider
+The newer conversation model adds durable threads and turns on top of the shell.
 
-- `(ask "prompt")`
-- `(ask "prompt" :stream t)`
-- `(ask "prompt" :enqueue t)`
+### Create or inspect threads
 
-### Assistant actions
+Available commands:
+
+- `(thread/new :title "provider refactor")`
+- `(thread/list)`
+- `(thread/use "thread-id")`
+- `(thread/show)`
+- `(thread/show "thread-id")`
+
+Practical pattern:
+
+```lisp
+(thread/new :title "docs refresh")
+(thread/list)
+(thread/show)
+```
+
+### Start a conversational turn
+
+Use `(say ...)` to run a conversation-native turn in the current thread.
+
+Examples:
+
+```lisp
+(say "Summarize the current event architecture.")
+(say "Summarize the current event architecture." :stream t)
+```
+
+The runtime records:
+
+- the user message
+- the assistant message
+- the turn
+- any operation records created during the turn
+- any artifacts linked to that turn
+
+### Inspect or resume turns
+
+Useful commands:
+
+- `(turn/status)`
+- `(turn/status "turn-id")`
+- `(turn/resume)`
+- `(turn/resume "turn-id")`
+
+If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied.
+
+## `ask` Versus `say`
+
+Both commands remain valid, but they have different roles now.
+
+### `(ask ...)`
+
+`ask` is the compatibility surface for the original provider-query workflow.
+
+Examples:
+
+```lisp
+(ask "Read src/main.lisp")
+(ask "Read src/main.lisp" :stream t)
+(ask "Read src/main.lisp" :enqueue t)
+```
+
+Use `ask` when you want the older direct query flow or when you are relying on existing scripts and habits.
+
+### `(say ...)`
+
+`say` is the conversation-first path. It binds the interaction to the current thread and turn model and is the clearest expression of the new architecture.
+
+Use `say` when you want:
+
+- durable conversational context
+- thread-level history
+- turn-level status and resume behavior
+- operations and artifacts linked to the interaction
+
+## Assistant Actions and Approvals
+
+`sbcl-agent` does not silently execute risky work just because the model mentioned it.
+
+### Staged assistant actions
+
+Commands:
 
 - `(execute-actions)`
+- `(approve :policy-name)`
 
-Assistant actions are staged first. They do not run implicitly.
+Assistant-proposed actions can be staged before execution. This preserves operator control and keeps shell workflows explicit.
 
-### Tasks and workers
+### Capability grants
 
-- `(enqueue-task '(tool ...))`
-- `(list-tasks)`
-- `(describe-task "task-id")`
-- `(monitor-task "task-id")`
-- `(run-next-task)`
-- `(start-worker)`
-- `(stop-worker "worker-id")`
-- `(list-workers)`
-- `(describe-worker "worker-id")`
-
-### Session persistence
-
-- `(session/save "path")`
-- `(session/load "path")`
-- `(session/reset)`
-
-### Approvals and tools
-
-- `(approve :process-run)`
-- `(approve :git-read)`
-- `(approve :git-write)`
-- `(approve :workspace-write)`
-- `(tool :tool-id ...)`
-- `(patch '((:write "path" "content")))`
-
-### Work-item and operator visibility
-
-- `(why-waiting "work-id")`
-- `(list-replay-groups)`
-- `(list-image-reconciliations)`
-- `(replay-validator-task "work-id" "validator-id" :status :passed)`
-- `(replay-validator-set "work-id" "replay-id" :status :passed :statuses '(:live :partial :cold :passed))`
-- `(reconcile-image-only-source "work-id" "summary")`
-
-## Provider Modes
-
-### Mock provider
-
-The mock provider is the default. Use it for:
-
-- smoke tests
-- development without network dependency
-- shell behavior verification
-- deterministic local validation
-
-### OpenAI-compatible provider
-
-Use `TUTOR_CODEX_PROVIDER=openai-compatible` or `openai` to activate the network-backed provider.
-
-Typical configuration:
-
-```bash
-export TUTOR_CODEX_PROVIDER=openai-compatible
-export TUTOR_CODEX_MODEL=gpt-5
-export TUTOR_CODEX_API_BASE=https://api.openai.com/v1
-export OPENAI_API_KEY=... 
-./bin/sbcl-agent chat
-```
-
-Or place the key in `openai-api-key.key` in the repository root and omit the environment variable.
-
-## Tool Families
-
-### Filesystem tools
-
-Examples:
-
-```lisp
-(tool :fs/read :path "src/main.lisp")
-(tool :fs/list :path "src")
-```
-
-### Docs tools
-
-Use these to read project documentation through the tool layer rather than direct shelling.
-
-### Session tools
-
-Examples:
-
-```lisp
-(tool :session/summary)
-(tool :session/events)
-(tool :session/operator-status)
-(tool :session/replay-groups)
-(tool :session/image-reconciliations)
-```
-
-### Process tools
-
-Process execution is capability-gated and should be explicitly approved when needed.
-
-### Git tools
-
-Git reads and writes are exposed through CL-native tools, with write paths gated separately from reads.
-
-## Capability Model
-
-`sbcl-agent` does not silently execute risky operations. The current capability model makes these actions explicit.
-
-Main capability families today:
+Important current capability and policy families include:
 
 - `:safe-read`
 - `:process-run`
@@ -228,23 +194,153 @@ Main capability families today:
 - `:git-write`
 - `:workspace-write`
 
-A typical session grants only what it needs.
+Typical approval commands:
 
-## Recommended First Workflow
+```lisp
+(approve :process-run)
+(approve :git-read)
+(approve :workspace-write)
+```
+
+### Approval-gated turn flow
+
+A conversation turn can reach an awaiting-approval state when an operation needs explicit authorization. In that case:
+
+1. inspect the turn with `(turn/status)`
+2. grant the needed approval
+3. resume with `(turn/resume)`
+
+## Structured Tools
+
+Tools are explicit CL-callable operations. The shell command is:
+
+```lisp
+(tool :tool-id ...)
+```
+
+Examples:
+
+```lisp
+(tool :fs/read :path "src/main.lisp")
+(tool :fs/list :path "src")
+(tool :session/summary)
+(tool :session/events)
+```
+
+Current tool families include:
+
+- filesystem tools
+- docs tools
+- session visibility tools
+- process tools
+- git tools
+- patch application
+
+## Tasks and Workers
+
+The runtime includes a queue and background worker system.
+
+Commands:
+
+- `(enqueue-task '(tool ...))`
+- `(list-tasks)`
+- `(describe-task "task-id")`
+- `(cancel-task "task-id")`
+- `(monitor-task "task-id")`
+- `(run-next-task)`
+- `(start-worker)`
+- `(stop-worker "worker-id")`
+- `(list-workers)`
+- `(describe-worker "worker-id")`
+
+Use these when work should be queued, monitored, or delegated to background execution rather than run inline in the current shell interaction.
+
+## Work-Items and Workflow Records
+
+The governed engineering layer remains separate from the chat layer.
+
+Useful commands:
+
+- `(list-work-items)`
+- `(describe-work-item "work-id")`
+- `(list-workflow-records)`
+- `(describe-workflow-record "record-id")`
+- `(request-work-item-approval "work-id" :workspace-write :reason "why")`
+- `(quarantine-work-item "work-id" "why")`
+- `(resume-work-item "work-id")`
+- `(why-waiting "work-id")`
+
+This is the layer that preserves:
+
+- workflow evidence
+- approval state
+- quarantine state
+- replayable validator records
+- image-only and reconciliation outcomes
+
+## Replay and Reconciliation
+
+Commands:
+
+- `(list-replay-groups)`
+- `(list-image-reconciliations)`
+- `(replay-validator-task "work-id" "validator-id" :status :passed)`
+- `(replay-validator-set "work-id" "replay-id" :status :passed :statuses '(:live :partial :cold :passed))`
+- `(reconcile-image-only-source "work-id" "summary")`
+
+These commands matter because live-image success and durable source truth are not always the same thing. The runtime preserves that distinction instead of flattening it.
+
+## Session Persistence
+
+Commands:
+
+- `(session/save "path")`
+- `(session/load "path")`
+- `(session/reset)`
+- `(describe-session)`
+
+The session layer now carries both the older runtime state and the newer thread-and-turn state. Persistence is therefore useful both for shell continuity and for recovering conversational context.
+
+## Provider Modes
+
+### Mock provider
+
+Use the mock provider for:
+
+- smoke testing
+- local shell and event behavior validation
+- deterministic development without network dependency
+
+### OpenAI-compatible provider
+
+Typical configuration:
+
+```bash
+export TUTOR_CODEX_PROVIDER=openai-compatible
+export TUTOR_CODEX_MODEL=gpt-5
+export TUTOR_CODEX_API_BASE=https://api.openai.com/v1
+export OPENAI_API_KEY=...
+./bin/sbcl-agent chat
+```
+
+You can also place the key in `openai-api-key.key` at the repository root.
+
+## Recommended First Operator Flow
 
 1. Run `./bin/sbcl-agent doctor`.
 2. Run `./bin/run-tests`.
 3. Start `./bin/sbcl-agent chat`.
-4. Evaluate `(+ 100 203)` to verify Lisp evaluation works.
-5. Use `(ask "please summarize src/main.lisp")`.
-6. Inspect the session with `(describe-session)`.
-7. Approve only the capabilities you need before stateful operations.
+4. Evaluate a simple Lisp form such as `(+ 100 203)`.
+5. Create a thread with `(thread/new :title "first session")`.
+6. Run `(say "Summarize the current architecture." :stream t)`.
+7. Inspect the result with `(turn/status)` and `(thread/show)`.
+8. Grant only the capabilities you actually need before stateful operations.
 
 ## Operational Caveats
 
-- Live-image success is not the same as cold-start reproducibility.
-- The architecture already models this distinction, but not every desired safety mechanism is at full maturity yet.
-- Prefer explicit validation after meaningful mutation.
-- Treat image-only results as provisional until reconciled back to durable source truth.
+- A successful warm-image interaction is not the same thing as a durable source-backed fix.
+- Conversation state, runtime state, and workflow state are related but not interchangeable.
+- Use approvals deliberately. The architecture is designed to make mutating operations visible, not implicit.
+- Treat image-only outcomes as provisional until they are reconciled back to source truth and workflow evidence.
 
-For the design rationale behind those cautions, read [Why sbcl-agent Exists]({{ '/why-sbcl-agent.html' | relative_url }}) and [Architecture and Design]({{ '/architecture.html' | relative_url }}).
+For the rationale behind these constraints, read [Why sbcl-agent Exists]({{ '/why-sbcl-agent.html' | relative_url }}) and [Architecture and Design]({{ '/architecture.html' | relative_url }}).

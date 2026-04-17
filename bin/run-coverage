@@ -1,0 +1,12 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+SCRIPT_PATH="${BASH_SOURCE[0]}"
+PROJECT_DIR="$(cd "$(dirname "$SCRIPT_PATH")/.." && pwd)"
+ASDF_CACHE_DIR="$PROJECT_DIR/.asdf-cache/"
+
+mkdir -p "$ASDF_CACHE_DIR"
+
+exec env \
+  ASDF_OUTPUT_TRANSLATIONS="$ASDF_CACHE_DIR:$ASDF_CACHE_DIR" \
+  sbcl --script "$PROJECT_DIR/scripts/run-coverage.lisp"

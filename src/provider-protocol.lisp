@@ -11,7 +11,15 @@
   payload)
 
 (defstruct provider-event
+  family
   type
+  canonical-type
+  legacy-type
+  entity-id
+  thread-id
+  turn-id
+  visibility
+  metadata
   payload)
 
 (defstruct assistant-response
@@ -23,6 +31,27 @@
 (defgeneric provider-capabilities (provider))
 (defgeneric send-request (provider request))
 (defgeneric stream-request (provider request event-handler))
+
+(defun legacy-provider-event-type->canonical-type (type)
+  (case type
+    (:message-start :run-started)
+    (:message-delta :text-delta)
+    (:action-proposal :tool-intent)
+    (:message-complete :text-complete)
+    (otherwise type)))
+
+(defun provider-event-effective-type (event)
+  (or (provider-event-canonical-type event)
+      (legacy-provider-event-type->canonical-type (provider-event-type event))))
+
+(defun provider-text-delta-event-p (event)
+  (eq (provider-event-effective-type event) :text-delta))
+
+(defun provider-action-intent-event-p (event)
+  (eq (provider-event-effective-type event) :tool-intent))
+
+(defun provider-text-complete-event-p (event)
+  (eq (provider-event-effective-type event) :text-complete))
 
 (defun provider-summary-content (content &key (limit 240))
   (cond
@@ -38,9 +67,15 @@
         :content (provider-summary-content (getf entry :content))))
 
 (defun provider-session-summary (session)
+  (ensure-default-thread session)
   (list :id (agent-session-id session)
         :cwd (agent-session-cwd session)
         :package (agent-session-package session)
+        :current-thread-id (agent-session-current-thread-id session)
+        :thread-count (length (agent-session-threads session))
+        :message-count (length (agent-session-messages session))
+        :turn-count (length (agent-session-turns session))
+        :operation-count (length (agent-session-operations session))
         :plan (agent-session-plan session)
         :approved-policies (session-approved-policies session)
         :pending-action-count (length (agent-session-pending-actions session))
@@ -61,22 +96,33 @@
 (defun send-prompt (provider prompt &optional session)
   (send-request provider (make-provider-request-from-session prompt session)))
 
-(defun emit-provider-event (event-handler type payload)
-  (funcall event-handler (make-provider-event :type type :payload payload)))
+(defun emit-provider-event (event-handler type payload &key family canonical-type entity-id thread-id turn-id (visibility :user) metadata)
+  (funcall event-handler
+           (make-provider-event :family (or family :provider)
+                                :type type
+                                :canonical-type (or canonical-type
+                                                    (legacy-provider-event-type->canonical-type type))
+                                :legacy-type type
+                                :entity-id entity-id
+                                :thread-id thread-id
+                                :turn-id turn-id
+                                :visibility visibility
+                                :metadata metadata
+                                :payload payload)))
 
 (defun stream-response->assistant-response (events)
   (let ((message-fragments '())
         (actions '())
         (metadata '()))
     (dolist (event events)
-      (case (provider-event-type event)
-        (:message-delta
+      (case (provider-event-effective-type event)
+        (:text-delta
          (push (provider-event-payload event) message-fragments))
-        (:action-proposal
+        (:tool-intent
          (let ((payload (provider-event-payload event)))
            (setf actions (append actions
                                  (if (listp payload) payload (list payload))))))
-        (:message-complete
+        (:text-complete
          (let ((payload (provider-event-payload event)))
            (when (and (listp payload) (getf payload :metadata))
              (setf metadata (getf payload :metadata)))))))
@@ -173,7 +219,7 @@
     (t
      payload)))
 
-(defun execute-assistant-action (action session)
+(defun execute-assistant-action (action session &key thread turn operation)
   (case (assistant-action-type action)
     (:TOOL
      (let* ((payload (assistant-action-payload action))
@@ -185,17 +231,25 @@
          (error "Assistant tool action requires keyword tool id, got ~S" tool-id))
        (apply #'invoke-tool tool-id session (or arguments '()))))
     (:PATCH
-     (apply-patch-operations session (assistant-action-payload action)))
+     (apply-patch-operations session
+                             (assistant-action-payload action)
+                             :thread thread
+                             :turn turn
+                             :operation operation))
     (:EVAL
      (eval-user-form (parse-eval-action-form (assistant-action-payload action))))
     (t
      (error "Unsupported assistant action type ~S" (assistant-action-type action)))))
 
-(defun execute-assistant-action-list (actions session)
+(defun execute-assistant-action-list (actions session &key thread turn operation)
   (let ((results
           (mapcar (lambda (action)
                     (list :action action
-                          :result (execute-assistant-action action session)))
+                          :result (execute-assistant-action action
+                                                           session
+                                                           :thread thread
+                                                           :turn turn
+                                                           :operation operation)))
                   actions)))
     (append-session-event session :assistant-actions-executed results)
     results))

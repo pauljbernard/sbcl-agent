@@ -24,7 +24,10 @@
       (error "Unknown sandbox profile ~S" id)))
 
 (defun canonicalize-directory-path (path)
-  (uiop:ensure-directory-pathname (truename path)))
+  (let ((existing (probe-file path)))
+    (uiop:ensure-directory-pathname (if existing
+                                        (truename existing)
+                                        path))))
 
 (defun canonicalize-file-parent-directory (pathname)
   (canonicalize-directory-path (or (uiop:pathname-directory-pathname pathname)

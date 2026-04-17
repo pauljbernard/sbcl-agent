@@ -119,13 +119,14 @@ pre code { background: transparent; padding: 0; color: inherit; }
   backdrop-filter: blur(10px);
 }
 .sidebar-label {
-  margin: 0 0 0.9rem;
+  margin: 1.1rem 0 0.55rem;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   font-size: 0.78rem;
   color: var(--warm);
   font-weight: 700;
 }
+.sidebar-label:first-child { margin-top: 0; }
 .sidebar a {
   display: block;
   margin-bottom: 10px;
@@ -250,6 +251,32 @@ pre code { background: transparent; padding: 0; color: inherit; }
   background: rgba(15, 91, 120, 0.06);
 }
 .callout strong { color: var(--accent-strong); }
+
+.doc-content .quick-links {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 12px;
+  margin: 1.2rem 0 1.6rem;
+}
+
+.doc-content .quick-link {
+  display: block;
+  padding: 0.95rem 1rem;
+  border-radius: 14px;
+  border: 1px solid rgba(15, 91, 120, 0.14);
+  background: rgba(15, 91, 120, 0.04);
+}
+
+.doc-content .quick-link:hover {
+  text-decoration: none;
+  background: rgba(15, 91, 120, 0.08);
+}
+
+.doc-content .quick-link strong {
+  display: block;
+  color: var(--accent-strong);
+  margin-bottom: 0.2rem;
+}
 
 .site-footer {
   padding: 20px 0 0;

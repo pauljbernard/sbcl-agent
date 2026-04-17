@@ -16,7 +16,8 @@
       ((typep form 'assistant-action)
        (make-command :kind :assistant-action :form form :arguments (list form)))
       ((or (null operator)
-           (not (member operator '("ask" "plan" "tool" "help" "approve" "patch" "execute-actions"
+           (not (member operator '("ask" "say" "plan" "tool" "help" "approve" "patch" "execute-actions"
+                                   "thread/new" "thread/list" "thread/use" "thread/show" "turn/status" "turn/resume"
                                    "session/save" "session/load" "session/reset" "describe-session"
                                    "enqueue-task" "list-tasks" "describe-task" "cancel-task"
                                    "run-next-task" "start-worker" "stop-worker"
@@ -25,6 +26,8 @@
        (make-command :kind :eval :form form :arguments (list form)))
       ((string= operator "ask")
        (make-command :kind :ask :form form :arguments (rest form)))
+      ((string= operator "say")
+       (make-command :kind :say :form form :arguments (rest form)))
       ((string= operator "plan")
        (make-command :kind :plan :form form :arguments (rest form)))
       ((string= operator "tool")
@@ -37,6 +40,18 @@
        (make-command :kind :patch :form form :arguments (rest form)))
       ((string= operator "execute-actions")
        (make-command :kind :execute-actions :form form :arguments (rest form)))
+      ((string= operator "thread/new")
+       (make-command :kind :thread-new :form form :arguments (rest form)))
+      ((string= operator "thread/list")
+       (make-command :kind :thread-list :form form :arguments (rest form)))
+      ((string= operator "thread/use")
+       (make-command :kind :thread-use :form form :arguments (rest form)))
+      ((string= operator "thread/show")
+       (make-command :kind :thread-show :form form :arguments (rest form)))
+      ((string= operator "turn/status")
+       (make-command :kind :turn-status :form form :arguments (rest form)))
+      ((string= operator "turn/resume")
+       (make-command :kind :turn-resume :form form :arguments (rest form)))
       ((string= operator "session/save")
        (make-command :kind :session-save :form form :arguments (rest form)))
       ((string= operator "session/load")

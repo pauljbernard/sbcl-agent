@@ -51,6 +51,10 @@
                             "Read-only operations that stay within the current session workspace."
                             :risk-level :low
                             :default-grant-mode :implicit)
+(register-capability-policy :runtime-eval-safe
+                            "Evaluate read-only or low-risk runtime expressions in the current image."
+                            :risk-level :medium
+                            :default-grant-mode :implicit)
 (register-capability-policy :process-run
                             "Execute a local process inside the sandbox runtime."
                             :risk-level :high)

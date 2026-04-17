@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+if ! command -v bundle >/dev/null 2>&1; then
+  echo "bundle is required to serve the docs site" >&2
+  exit 1
+fi
+
+cd "$ROOT_DIR"
+if ! bundle check >/dev/null 2>&1; then
+  echo "docs dependencies are not installed; run: bundle install" >&2
+  exit 1
+fi
+
+bundle exec jekyll serve --source docs --destination docs/_site --livereload

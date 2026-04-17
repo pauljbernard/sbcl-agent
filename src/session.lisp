@@ -4,6 +4,12 @@
   id
   cwd
   package
+  threads
+  current-thread-id
+  messages
+  turns
+  operations
+  artifacts
   transcript
   plan
   events
@@ -22,6 +28,12 @@
    :id (format nil "session-~D" (get-universal-time))
    :cwd cwd
    :package package
+   :threads '()
+   :current-thread-id nil
+   :messages '()
+   :turns '()
+   :operations '()
+   :artifacts '()
    :transcript '()
    :plan nil
    :events '()
@@ -33,12 +45,21 @@
    :workers '()))
 
 (defun ensure-session (&optional session)
-  (or session
-      *current-session*
-      (setf *current-session* (make-default-session))))
+  (let ((active-session (or session
+                            *current-session*
+                            (setf *current-session* (make-default-session)))))
+    (ensure-default-thread active-session)
+    active-session))
 
-(defun append-session-event (session kind payload)
-  (let ((event (make-event-now kind payload)))
+(defun append-session-event (session kind payload &key family entity-id thread-id turn-id (visibility :operator) metadata)
+  (let ((event (make-event-now kind
+                               payload
+                               :family family
+                               :entity-id entity-id
+                               :thread-id thread-id
+                               :turn-id turn-id
+                               :visibility visibility
+                               :metadata metadata)))
     (setf (agent-session-events session)
           (append (agent-session-events session) (list event)))
     event))
@@ -239,9 +260,15 @@
         entries)))
 
 (defun session-summary (session)
+  (ensure-default-thread session)
   (list :id (agent-session-id session)
         :cwd (agent-session-cwd session)
         :package (agent-session-package session)
+        :thread-state (thread-state-summary session)
+        :message-count (length (agent-session-messages session))
+        :turn-count (length (agent-session-turns session))
+        :operation-count (length (agent-session-operations session))
+        :artifact-count (length (agent-session-artifacts session))
         :plan (agent-session-plan session)
         :approved-policies (session-approved-policies session)
         :capability-grants (session-capability-grants-summary session)
@@ -260,10 +287,17 @@
         :event-count (length (agent-session-events session))))
 
 (defun serializable-session-copy (session)
+  (ensure-default-thread session)
   (make-agent-session
    :id (agent-session-id session)
    :cwd (agent-session-cwd session)
    :package (agent-session-package session)
+   :threads (agent-session-threads session)
+   :current-thread-id (agent-session-current-thread-id session)
+   :messages (agent-session-messages session)
+   :turns (agent-session-turns session)
+   :operations (agent-session-operations session)
+   :artifacts (agent-session-artifacts session)
    :transcript (agent-session-transcript session)
    :plan (agent-session-plan session)
    :events (agent-session-events session)
@@ -290,6 +324,7 @@
       (unless (typep session 'agent-session)
         (error "Session file ~A did not contain an AGENT-SESSION" path))
       (normalize-session-capability-grants session)
+      (ensure-default-thread session)
       (setf (agent-session-workers session)
             (serializable-worker-states session))
       (setf *current-session* session)

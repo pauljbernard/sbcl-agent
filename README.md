@@ -1,46 +1,70 @@
 # sbcl-agent
 
-`sbcl-agent` is an SBCL-native Codex-style CLI written in Common Lisp. The command-line entrypoints, the interactive shell, the session model, the tool interface, and the runtime orchestration are all implemented in CL so the system stays "turtles all the way down".
+`sbcl-agent` is an SBCL-native agent runtime and CLI written in Common Lisp. It started as a Codex-style shell, but the codebase is now evolving into a conversation-native engineering environment with three explicit truth domains:
 
-## Documentation Site
+- source truth: files, diffs, tests, and durable artifacts
+- image truth: the live SBCL image, loaded definitions, packages, objects, threads, and runtime resources
+- workflow truth: the governed record of plans, mutations, approvals, validations, checkpoints, and reconciliation
 
-The primary end-user and architectural documentation now lives in `docs/` for GitHub Pages.
+The architectural goal is not to clone Codex literally. The goal is to provide Codex-class engineering usefulness on top of an SBCL-native substrate that can inspect and mutate the same running system it is reasoning about.
+
+## Documentation
+
+The primary docs live in [`docs/`](/Volumes/data/development/sbcl-agent/docs).
 
 Start with:
 
-- `docs/index.md`
-- `docs/why-sbcl-agent.md`
-- `docs/architecture.md`
-- `docs/user-guide.md`
-- `docs/common-lisp-runtime.md`
-- `docs/common-lisp-guide.md`
+- [`docs/index.md`](/Volumes/data/development/sbcl-agent/docs/index.md)
+- [`docs/objectives.md`](/Volumes/data/development/sbcl-agent/docs/objectives.md)
+- [`docs/why-sbcl-agent.md`](/Volumes/data/development/sbcl-agent/docs/why-sbcl-agent.md)
+- [`docs/architecture.md`](/Volumes/data/development/sbcl-agent/docs/architecture.md)
+- [`docs/user-guide.md`](/Volumes/data/development/sbcl-agent/docs/user-guide.md)
+- [`docs/implementation-plan.md`](/Volumes/data/development/sbcl-agent/docs/implementation-plan.md)
 
-## What It Does
+Conversation-runtime design and migration docs:
 
-The current runtime provides:
+- [`docs/conversation-architecture.md`](/Volumes/data/development/sbcl-agent/docs/conversation-architecture.md)
+- [`docs/streaming-event-model.md`](/Volumes/data/development/sbcl-agent/docs/streaming-event-model.md)
+- [`docs/migration-plan-thread-runtime.md`](/Volumes/data/development/sbcl-agent/docs/migration-plan-thread-runtime.md)
 
-- a Common Lisp CLI targeting Steel Bank Common Lisp (SBCL)
-- CL-native executable entrypoints in `bin/`
-- an interactive Lisp shell for agent-style workflows
-- a provider abstraction with a working mock provider and an OpenAI-compatible adapter
-- streamed assistant responses
-- staged assistant actions that require explicit execution
-- session state, transcript logging, and session persistence
-- a capability policy model for controlled operations
-- sandbox-backed process and git execution
-- queued tasks and background worker threads
-- transactional live-image work-items with checkpoints, rollback metadata, provenance, taint, and workflow records
-- validator replay groups and replayable validator task records
-- image-only live fixes that can later be reconciled into durable source-and-image closures
-- CL-native workspace, docs, session, process, patch, and git tools
+Background docs:
+
+- [`docs/common-lisp-runtime.md`](/Volumes/data/development/sbcl-agent/docs/common-lisp-runtime.md)
+- [`docs/common-lisp-guide.md`](/Volumes/data/development/sbcl-agent/docs/common-lisp-guide.md)
+
+## What It Does Today
+
+The current runtime already provides:
+
+- an SBCL-native CLI and interactive Common Lisp shell
+- direct Lisp evaluation in the same environment that hosts the agent
+- a provider boundary with mock and OpenAI-compatible backends
+- streamed responses through a canonical provider-event layer
+- conversation primitives: threads, messages, turns, operations, and artifacts
+- `ask` compatibility plus `say` as the conversation-first turn entrypoint
+- persisted session state with thread-aware shell workflows
+- staged assistant actions, approval-gated turn resume, and explicit capability grants
+- structured tools for files, docs, session visibility, processes, git, and patches
+- queued tasks and background workers
+- governed work-items, workflow records, validator replay groups, image-only outcomes, and reconciliation records
+
+## Design Rule
+
+The refactor direction is organized around one rule:
+
+- conversation owns interaction state
+- runtime owns execution state
+- workflow owns engineering governance
+
+That rule fits the codebase's existing strengths instead of replacing them. The shell stays Lisp-native, the runtime stays image-native, and workflow records remain authoritative for governed engineering work.
 
 ## Requirements
 
 - SBCL
-- Git, if you want to use the git workflow tools
-- A POSIX-like shell environment for the helper entrypoints in `bin/`
+- a POSIX-like shell environment for the helper scripts in [`bin/`](/Volumes/data/development/sbcl-agent/bin)
+- git if you want git-backed tooling and workflows
 
-The project is developed and tested against SBCL. Other Common Lisp runtimes are not a current target.
+The project is developed and tested against SBCL. Other Common Lisp implementations are not current targets.
 
 ## Repository Layout
 
@@ -48,36 +72,37 @@ The project is developed and tested against SBCL. Other Common Lisp runtimes are
 sbcl-agent/
 ├── sbcl-agent.asd
 ├── README.md
-├── docs/
-│   ├── architecture.md
-│   └── implementation-plan.md
 ├── bin/
+│   ├── run-coverage
 │   ├── run-tests
 │   ├── sandbox-runner
 │   └── sbcl-agent
+├── docs/
+│   ├── architecture.md
+│   ├── conversation-architecture.md
+│   ├── implementation-plan.md
+│   ├── migration-plan-thread-runtime.md
+│   ├── streaming-event-model.md
+│   └── user-guide.md
 ├── src/
-│   ├── package.lisp
+│   ├── commands.lisp
 │   ├── config.lisp
-│   ├── json.lisp
-│   ├── provider-protocol.lisp
+│   ├── conversation.lisp
+│   ├── events.lisp
+│   ├── main.lisp
+│   ├── patch.lisp
+│   ├── policy.lisp
 │   ├── provider-mock.lisp
 │   ├── provider-openai.lisp
-│   ├── commands.lisp
-│   ├── events.lisp
-│   ├── policy.lisp
-│   ├── session.lisp
+│   ├── provider-protocol.lisp
 │   ├── sandbox.lisp
-│   ├── tools-registry.lisp
-│   ├── tools-fs.lisp
-│   ├── tools-session.lisp
-│   ├── tools-docs.lisp
-│   ├── tools-process.lisp
-│   ├── tools-git.lisp
-│   ├── patch.lisp
-│   ├── tasks.lisp
+│   ├── session.lisp
 │   ├── shell.lisp
-│   ├── repl.lisp
-│   └── main.lisp
+│   ├── tasks.lisp
+│   ├── tools-*.lisp
+│   ├── turn-orchestrator.lisp
+│   ├── work-items.lisp
+│   └── workflow.lisp
 └── tests/
     ├── package.lisp
     └── smoke.lisp
@@ -100,380 +125,87 @@ Top-level CLI commands:
 - `./bin/sbcl-agent doctor`
 - `./bin/sbcl-agent chat`
 - `./bin/sbcl-agent chat -i`
-  starts chat with interactive streaming enabled by default
 - `./bin/sbcl-agent exec <cmd...>`
 - `./bin/run-tests`
+- `./bin/run-coverage`
+- `./bin/build-docs`
+- `./bin/serve-docs`
+
+`chat -i` enables interactive streaming by default for `(ask ...)` calls while preserving the normal Lisp shell behavior.
+
+## Shell Model
+
+Inside `chat`, recognized forms are treated as shell commands. Everything else is evaluated as normal Lisp in the `SBCL-AGENT-USER` package.
+
+Core interaction paths:
+
+- direct Lisp evaluation for local reasoning and runtime inspection
+- `(ask ...)` for compatibility with the original streamed ask workflow
+- `(say ...)` for thread-based conversational turns
+- thread commands for creating, listing, switching, and inspecting conversations
+- turn commands for status inspection and approval-gated resume
+- tools, tasks, workers, work-items, replay, and reconciliation commands
+
+Example session:
+
+```lisp
+(+ 100 203)
+(thread/new :title "provider refactor")
+(say "Summarize the current provider and event architecture." :stream t)
+(turn/status)
+(describe-session)
+```
 
 ## Runtime Configuration
 
 Environment variables:
 
-- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime selects `openai-compatible` if an API key is available and otherwise falls back to `mock`
-- `TUTOR_CODEX_MODEL`: primary model name for deeper asks, defaults to `gpt-5`
+- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime chooses `openai-compatible` if an API key is available and otherwise falls back to `mock`
+- `TUTOR_CODEX_MODEL`: primary model name, defaults to `gpt-5`
 - `TUTOR_CODEX_FAST_MODEL`: low-latency model name for ordinary asks, defaults to `gpt-4.1-mini`
 - `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
 - `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
 
-If `OPENAI_API_KEY` is unset, `sbcl-agent` falls back to `openai-api-key.key` in the current working directory and trims trailing whitespace from that file. This keeps the local key out of shell history while still allowing the runtime to bootstrap itself from the repository root.
-
-If no provider override is supplied, the runtime automatically selects `openai-compatible` when an API key is available. Otherwise it falls back to `mock`. The mock provider remains the easiest way to validate the environment and exercise the shell without external dependencies.
+If `OPENAI_API_KEY` is unset, `sbcl-agent` falls back to `openai-api-key.key` in the current working directory and trims trailing whitespace.
 
 ## Doctor Command
 
 `./bin/sbcl-agent doctor` reports the current runtime state, including:
 
-- runtime and provider selection
-- working directory
-- current shell package
+- provider and model selection
+- working directory and shell package
 - session id and event counts
-- queued task and active worker counts
-- approved capability grants
-- available sandbox profiles
-- operator status buckets for ready, blocked, quarantined, image-only, and durable work
-- validator replay group and image reconciliation counts
-- whether git tools are registered
-- whether API base and API key are configured
-
-Use `doctor` first if startup behavior looks wrong.
-
-## Interactive Common Lisp Shell
-
-Start the shell with:
-
-```bash
-./bin/sbcl-agent chat
-./bin/sbcl-agent chat -i
-```
-
-Inside `chat`, the primary interface is Common Lisp. Any form that is not recognized as a shell command is evaluated in the `SBCL-AGENT-USER` package.
-
-Use `./bin/sbcl-agent chat -i` when you want interactive streaming enabled by default for `(ask ...)` calls. In that mode, plain `(ask "prompt")` uses the streaming path automatically. You can still force or suppress streaming per call with the `:stream` option.
-
-Basic examples:
-
-```lisp
-(+ 100 203)
-(plan "implement a new tool")
-(ask "please read src/main.lisp")
-(ask "please read src/main.lisp" :stream t)
-(ask "please read src/main.lisp" :enqueue t)
-(describe-session)
-```
-
-With `chat -i`, this is the common interactive pattern:
-
-```lisp
-(ask "create a program which will tell me the current date and time of day")
-```
-
-### Shell Commands
-
-Available shell commands:
-
-- `(help)`
-- `(ask "prompt")`
-- `(ask "prompt" :stream t)`
-- `(ask "prompt" :enqueue t)`
-- `(execute-actions)`
-- `(plan "goal")`
-- `(enqueue-task '(tool ...))`
-- `(list-tasks)`
-- `(describe-task "task-id")`
-- `(monitor-task "task-id")`
-- `(run-next-task)`
-- `(start-worker)`
-- `(stop-worker "worker-id")`
-- `(list-workers)`
-- `(describe-worker "worker-id")`
-- `(approve :policy-name)`
-- `(tool :tool-id ...)`
-- `(patch '((:write "path" "content")))`
-- `(session/save "path")`
-- `(session/load "path")`
-- `(session/reset)`
-- `(describe-session)`
-- `(why-waiting "work-id")`
-- `(list-replay-groups)`
-- `(list-image-reconciliations)`
-- `(replay-validator-task "work-id" "validator-id" :status :passed)`
-- `(replay-validator-set "work-id" "replay-id" :status :passed :statuses '(:live :partial :cold :passed))`
-- `(reconcile-image-only-source "work-id" "summary")`
-
-### Normal Lisp Evaluation
-
-You can use the shell as a regular Lisp REPL for local computation:
-
-```lisp
-(defparameter *x* 42)
-(* *x* 2)
-(mapcar #'1+ '(1 2 3))
-```
-
-## Provider Behavior
-
-The provider boundary returns CL data structures rather than opaque text blobs.
-
-Current provider modes:
-
-- `mock`: local mock responses for smoke tests and environment validation
-- `openai-compatible`: structured provider adapter using `TUTOR_CODEX_API_BASE` and `OPENAI_API_KEY`
-
-The shell supports both non-streaming and streaming asks. Streaming asks emit provider events during response assembly and still return a final assistant response object.
-
-`chat -i` enables streaming by default for shell asks. Ordinary asks are also routed through the configured fast model when the OpenAI-compatible provider is active, while prompts that look explicitly deep or analytical stay on the primary model.
-
-## Assistant Actions
-
-Assistant responses can include staged actions. Actions are not executed implicitly.
-
-Typical flow:
-
-```lisp
-(ask "please read src/main.lisp")
-(execute-actions)
-```
-
-This makes side effects explicit and keeps the runtime control surface in Lisp.
-
-## Capability Policies
-
-Potentially stateful or risky operations are guarded by capability policies.
-
-Current capability policies:
-
-- `:safe-read`: implicit read-only operations inside the current workspace
-- `:process-run`: local process execution
-- `:git-read`: read-only git operations
-- `:git-write`: git mutations such as add, commit, and branch changes
-- `:workspace-write`: patch-based file writes
-
-Grant a capability for the current session with:
-
-```lisp
-(approve :process-run)
-(approve :git-read)
-(approve :git-write)
-(approve :workspace-write)
-```
-
-The session summary includes both the legacy approved-policy view and the richer capability grant summaries.
-
-## Tool Interface
-
-Tools are invoked as Common Lisp forms through `(tool ...)`.
-
-### Workspace Tools
-
-- `:fs/read`
-- `:fs/list`
-
-Examples:
-
-```lisp
-(tool :fs/read :path "src/main.lisp")
-(tool :fs/list :path "src")
-```
-
-### Session Tools
-
-- `:session/summary`
-- `:session/events`
-- `:session/operator-status`
-- `:session/replay-groups`
-- `:session/image-reconciliations`
-
-Examples:
-
-```lisp
-(tool :session/summary)
-(tool :session/events :tail 10)
-```
-
-### Documentation Tools
-
-- `:docs/read`
-- `:docs/list`
-
-Examples:
-
-```lisp
-(tool :docs/read :path "architecture.md")
-(tool :docs/list)
-```
-
-These are constrained to the repository `docs/` tree.
-
-### Process Tool
-
-- `:proc/run`
-
-Example:
-
-```lisp
-(approve :process-run)
-(tool :proc/run :argv '("/bin/echo" "hello"))
-```
-
-Process execution is sandbox-backed and returns stdout, stderr, exit code, and sandbox metadata.
-
-### Git Tools
-
-- `:git/status`
-- `:git/diff`
-- `:git/add`
-- `:git/commit`
-- `:git/branch`
-
-Examples:
-
-```lisp
-(approve :git-read)
-(tool :git/status)
-(tool :git/diff)
-
-(approve :git-write)
-(tool :git/add :paths '("README.md"))
-(tool :git/commit :message "Document README")
-(tool :git/branch :name "feature/readme" :checkout t)
-```
-
-Git commands run through the sandbox process path rather than in-process stubs.
-
-## Patch Workflow
-
-Patch application is represented as Common Lisp data.
-
-Example:
-
-```lisp
-(approve :workspace-write)
-(patch '((:write "notes.txt" "hello from Common Lisp")))
-```
-
-Current patch support is intentionally narrow: `:write` operations within the active session workspace.
-
-## Tasks And Workers
-
-The runtime supports queued work and background processing.
-
-### Queue A Task
-
-```lisp
-(enqueue-task '(tool :fs/read :path "src/main.lisp"))
-(list-tasks)
-(run-next-task)
-```
-
-### Queue An Ask
-
-```lisp
-(ask "please read src/main.lisp" :enqueue t)
-(list-tasks)
-(run-next-task)
-```
-
-### Run Background Workers
-
-```lisp
-(start-worker)
-(list-workers)
-(describe-worker "worker-id")
-(stop-worker "worker-id")
-```
-
-### Inspect Task Progress
-
-```lisp
-(describe-task "task-id")
-(monitor-task "task-id")
-```
-
-Queued asks record streamed provider progress, task lifecycle events, and final assistant results.
-
-## Session Persistence
-
-Sessions can be written to and loaded from s-expression files.
-
-Examples:
-
-```lisp
-(session/save "/tmp/sbcl-agent-session.sexp")
-(session/load "/tmp/sbcl-agent-session.sexp")
-(session/reset)
-```
-
-Persisted session state includes transcript, plan, events, capability grants, tasks, and worker metadata suitable for restoring the logical session state.
+- pending assistant actions
+- queued tasks and active workers
+- approved policies and capability grants
+- work-item, replay-group, and image-reconciliation counts
+- operator status buckets
+- sandbox profiles
+- API base and API key presence
+
+Use `doctor` first when startup or configuration looks wrong.
 
 ## Testing
 
-Run the full smoke suite with:
+The test suite is run through the project scripts:
 
 ```bash
 ./bin/run-tests
+./bin/run-coverage
 ```
 
-The suite covers:
+The mock provider is the fastest way to validate shell, event, and orchestration behavior without external network dependencies.
 
-- SBCL runtime smoke validation
-- provider decoding and streaming
-- shell command dispatch
-- staged assistant actions
-- task queues and workers
-- session save/load flows
-- session and docs tools
-- sandboxed process and git tools
-- capability policy enforcement
-- patch approval and path safety
+## Docs Publishing
 
-The first test validates that SBCL can start, load the system, and execute a basic assertion, so environment failures are caught immediately.
+The docs site is now meant to be generated from the Markdown sources in [`docs/`](/Volumes/data/development/sbcl-agent/docs) through Jekyll rather than maintained as checked-in rendered HTML.
 
-## Architecture And Design Docs
+Local workflows:
 
-Project design documents:
-
-- [docs/architecture.md](docs/architecture.md)
-- [docs/implementation-plan.md](docs/implementation-plan.md)
-
-The architecture target is a self-contained Common Lisp agent runtime in which Lisp is both the user interface and the execution substrate.
-
-## Current Limitations
-
-The runtime is still early-stage. Current known limitations include:
-
-- the OpenAI-compatible provider path is not yet the primary tested workflow
-- sandboxing is stronger than simple in-process gating, but still not a full external isolation system
-- patch operations currently support only `:write`
-- task orchestration is queue-based, not yet dependency-graph-based
-- the CLI remains intentionally small, with most behavior exposed through the Lisp shell
-
-## Development Notes
-
-All executable surfaces in the repository are intended to remain Common Lisp. If you add new runtime entrypoints, they should preserve the CL-native model rather than introducing non-Lisp control scripts.
-
-## Live-Image Workflow Controls
-
-The current north star is not exact Codex implementation parity. `sbcl-agent` treats source truth, image truth, and workflow truth as separate but linked domains.
-
-In practice that means the runtime now has explicit controls for live-image engineering:
-
-- work-items capture checkpoints, rollback metadata, validation state, provenance, and replay ids
-- validator tasks are durable records with ids, replay ids, checkpoint references, and terminal outcomes such as `:passed`, `:failed`, and `:partial`
-- replay groups let you re-run a coordinated validator set by `replay-id`
-- image-only outcomes let the runtime acknowledge “fixed the live image first” without pretending source is already reconciled
-- image reconciliation records capture when an image-only fix is later attached to durable source changes
-
-Typical flow for a live-image fix:
-
-```lisp
-(list-work-items)
-(why-waiting "work-...")
-(list-replay-groups)
-(replay-validator-task "work-..." "validator-..." :status :passed)
-(replay-validator-set "work-..." "validator-replay-..."
-                      :status :passed
-                      :statuses '(:live :partial :cold :passed))
-(list-image-reconciliations)
-(reconcile-image-only-source "work-..." "Captured source patch and tests")
+```bash
+bundle install
+./bin/build-docs
+./bin/serve-docs
 ```
 
-Use `describe-session`, `:session/operator-status`, `:session/replay-groups`, and `:session/image-reconciliations` when you need a summary across the entire current image instead of one work-item.
+The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in [docs.yml](/Volumes/data/development/sbcl-agent/.github/workflows/docs.yml).

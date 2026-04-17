@@ -2,3 +2,12 @@
 .DS_Store
 tmp-patch-shell.txt
 *.key
+.bundle/
+.asdf-cache/
+.vscode/
+Execution
+docs/.jekyll-cache/
+docs/.sass-cache/
+docs/_site/
+tmp/coverage/
+vendor/

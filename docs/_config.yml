@@ -2,3 +2,5 @@ title: sbcl-agent
 description: SBCL-native agent engineering environment
 markdown: kramdown
 theme: minima
+source: docs
+destination: docs/_site

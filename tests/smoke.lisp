@@ -56,6 +56,32 @@
               (get-output-stream-string stdout)
               (get-output-stream-string stderr)))))
 
+(defun with-captured-output (thunk)
+  (let ((stdout (make-string-output-stream))
+        (stderr (make-string-output-stream)))
+    (let ((*standard-output* stdout)
+          (*error-output* stderr))
+      (values (funcall thunk)
+              (get-output-stream-string stdout)
+              (get-output-stream-string stderr)))))
+
+(defun with-fake-command-line-arguments (arguments thunk)
+  (let ((original (symbol-function 'uiop:command-line-arguments)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'uiop:command-line-arguments)
+                 (lambda () arguments))
+           (funcall thunk))
+      (setf (symbol-function 'uiop:command-line-arguments) original))))
+
+(defun run-sandbox-main-with-arguments (arguments)
+  (with-fake-command-line-arguments
+      arguments
+    (lambda ()
+      (with-captured-output
+        (lambda ()
+          (sbcl-agent::sandbox-worker-main))))))
+
 (defun make-test-provider ()
   (sbcl-agent::make-provider
    (sbcl-agent::make-config :provider "mock"
@@ -77,6 +103,23 @@
    :actions (list (sbcl-agent::make-assistant-action :type :eval :payload '(:form "(+ 100 203)"))
                   (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read :arguments (:path "src/main.lisp"))))
    :metadata '(:provider :mixed-action-test)))
+
+(defclass patch-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider patch-action-provider))
+  "patch-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider patch-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider patch-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a patch that requires workspace write approval."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :patch
+                   :payload '((:write "tmp/generated.txt" "hello from patch"))))
+   :metadata '(:provider :patch-action-test)))
 
 (defclass journal-date-time-provider (sbcl-agent::provider) ())
 
@@ -163,6 +206,1357 @@
                            (sbcl-agent::assistant-response-message response))
                    "mock provider should return the scaffold smoke-test marker"))))
 
+(defun direct-sandbox-tool-wrapper-test ()
+  (let ((session (sbcl-agent::make-default-session :cwd "/tmp/")))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-git-status session))
+     "sandbox isolation layer"
+     "tool-git-status should reject direct execution")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-git-diff session :cached t))
+     "sandbox isolation layer"
+     "tool-git-diff should reject direct execution")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-git-add session :paths '("README.md")))
+     "sandbox isolation layer"
+     "tool-git-add should reject direct execution")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-git-commit session :message "msg"))
+     "sandbox isolation layer"
+     "tool-git-commit should reject direct execution")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-git-branch session :name "branch" :checkout t))
+     "sandbox isolation layer"
+     "tool-git-branch should reject direct execution")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-proc-run session :argv '("pwd")))
+     "sandbox isolation layer"
+     "tool-proc-run should reject direct execution")))
+
+(defun repl-alias-test ()
+  (let ((provider (make-test-provider)))
+    (let ((*standard-input* (make-string-input-stream "")))
+      (assert-equal 0
+                    (sbcl-agent::start-chat-repl provider)
+                    "start-chat-repl should delegate to the shell and exit cleanly on EOF"))))
+
+(defun main-command-helper-test ()
+  (assert-equal '("chat")
+                (sbcl-agent::normalize-arguments '("--" "chat"))
+                "normalize-arguments should drop leading --")
+  (assert-equal '("chat")
+                (sbcl-agent::normalize-arguments '("chat"))
+                "normalize-arguments should preserve normal arguments")
+  (assert-equal "mock"
+                (sbcl-agent::resolve-provider-name nil nil)
+                "resolve-provider-name should default to mock")
+  (assert-equal "explicit"
+                (sbcl-agent::resolve-provider-name "explicit" nil)
+                "resolve-provider-name should prefer explicit provider")
+  (assert-equal "openai-compatible"
+                (sbcl-agent::resolve-provider-name nil "secret")
+                "resolve-provider-name should infer openai-compatible when an API key exists")
+  (assert-equal "value"
+                (sbcl-agent::require-option-value "--provider" '("value"))
+                "require-option-value should return the next argument")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::require-option-value "--provider" '()))
+   "Missing value"
+   "require-option-value should reject missing values")
+  (let ((options (sbcl-agent::parse-chat-arguments
+                  '("-i" "--provider" "mock" "--model" "gpt-5" "--api-base" "http://api" "--cwd" "/tmp"))))
+    (assert-true (sbcl-agent::chat-options-default-stream-p options)
+                 "parse-chat-arguments should enable default streaming")
+    (assert-equal "mock" (sbcl-agent::chat-options-provider options)
+                  "parse-chat-arguments should capture provider")
+    (assert-equal "gpt-5" (sbcl-agent::chat-options-model options)
+                  "parse-chat-arguments should capture model")
+    (assert-equal "http://api" (sbcl-agent::chat-options-api-base options)
+                  "parse-chat-arguments should capture api base")
+    (assert-equal "/tmp" (sbcl-agent::chat-options-working-directory options)
+                  "parse-chat-arguments should capture cwd"))
+  (let ((options (sbcl-agent::parse-chat-arguments '("--working-directory" "/tmp"))))
+    (assert-equal "/tmp" (sbcl-agent::chat-options-working-directory options)
+                  "parse-chat-arguments should accept --working-directory"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-chat-arguments '("--unknown")))
+   "Unknown chat option"
+   "parse-chat-arguments should reject unknown options")
+  (let* ((config (sbcl-agent::make-config :provider "mock"
+                                          :model "gpt-5"
+                                          :working-directory "/tmp/"))
+         (created-session nil))
+    (let ((sbcl-agent::*current-session* nil))
+      (setf created-session (sbcl-agent::session-for-chat-config config))
+      (assert-equal "/tmp/" (sbcl-agent::agent-session-cwd created-session)
+                    "session-for-chat-config should create a session rooted at the config working directory")))
+  (let* ((config (sbcl-agent::make-config :provider "mock"
+                                          :model "gpt-5"
+                                          :working-directory "/tmp/"))
+         (existing (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (let ((sbcl-agent::*current-session* existing))
+      (assert-true (eq existing (sbcl-agent::session-for-chat-config config))
+                   "session-for-chat-config should reuse the current session")))
+  (multiple-value-bind (status stdout stderr)
+      (with-captured-output
+        (lambda ()
+          (sbcl-agent::dispatch-command
+           (sbcl-agent::make-config :provider "mock"
+                                    :model "gpt-5"
+                                    :working-directory "/tmp/")
+           '("help"))))
+    (declare (ignore stderr))
+    (assert-equal 0 status "dispatch-command help should return success")
+    (assert-true (search "Usage: sbcl-agent" stdout)
+                 "dispatch-command help should print usage"))
+  (multiple-value-bind (status stdout stderr)
+      (with-captured-output
+        (lambda ()
+          (sbcl-agent::dispatch-command
+           (sbcl-agent::make-config :provider "mock"
+                                    :model "gpt-5"
+                                    :working-directory "/tmp/")
+           '("unknown"))))
+    (declare (ignore stdout))
+    (assert-equal 1 status "dispatch-command unknown should return failure")
+    (assert-true (search "Unknown command" stderr)
+                 "dispatch-command unknown should print an error"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::exec-command '()))
+   "exec requires at least one shell argument"
+   "exec-command should reject empty argument lists")
+  (assert-equal 0
+                (sbcl-agent::exec-command '("true"))
+                "exec-command should return process exit code")
+  (multiple-value-bind (status stdout stderr)
+      (with-captured-output
+        (lambda ()
+          (sbcl-agent::doctor-command
+           (sbcl-agent::make-config :provider "mock"
+                                    :model "gpt-5"
+                                    :working-directory "/tmp/"))))
+    (declare (ignore stderr))
+    (assert-equal 0 status "doctor-command should return success")
+    (assert-true (search "Runtime: SBCL" stdout)
+                 "doctor-command should print runtime information"))
+  (let ((config (sbcl-agent::make-config :provider "mock"
+                                         :model "gpt-5"
+                                         :working-directory "/tmp/"))
+        (original-doctor (symbol-function 'sbcl-agent::doctor-command))
+        (original-exec (symbol-function 'sbcl-agent::exec-command))
+        (original-start-shell (symbol-function 'sbcl-agent::start-shell))
+        (original-load-config (symbol-function 'sbcl-agent::load-config))
+        (original-dispatch (symbol-function 'sbcl-agent::dispatch-command))
+        (original-cli (symbol-function 'uiop:command-line-arguments)))
+    (unwind-protect
+         (progn
+           (setf (symbol-function 'sbcl-agent::doctor-command)
+                 (lambda (cfg)
+                   (declare (ignore cfg))
+                   17))
+           (setf (symbol-function 'sbcl-agent::exec-command)
+                 (lambda (arguments)
+                   (assert-equal '("echo" "hi") arguments
+                                 "dispatch-command should pass exec arguments through")
+                   23))
+           (setf (symbol-function 'sbcl-agent::start-shell)
+                 (lambda (provider session &key default-stream-p)
+                   (declare (ignore provider session))
+                   (if default-stream-p 31 30)))
+           (setf (symbol-function 'sbcl-agent::load-config)
+                 (lambda (&key &allow-other-keys)
+                   config))
+           (setf (symbol-function 'sbcl-agent::dispatch-command)
+                 (lambda (cfg arguments)
+                   (declare (ignore cfg))
+                   (if (equal arguments '("exec" "true"))
+                       41
+                       (funcall original-dispatch config arguments))))
+           (setf (symbol-function 'uiop:command-line-arguments)
+                 (lambda () '("--" "exec" "true")))
+           (assert-equal 17
+                         (sbcl-agent::dispatch-command config '("doctor"))
+                         "dispatch-command should route to doctor-command")
+           (assert-equal 23
+                         (sbcl-agent::dispatch-command config '("exec" "echo" "hi"))
+                         "dispatch-command should route to exec-command")
+           (let ((sbcl-agent::*current-session* nil))
+             (assert-equal 31
+                           (sbcl-agent::dispatch-command config '("chat" "-i"))
+                           "dispatch-command should route chat through start-shell with default streaming enabled"))
+           (assert-equal 41
+                         (sbcl-agent::main)
+                         "main should return the status from dispatch-command"))
+      (setf (symbol-function 'sbcl-agent::doctor-command) original-doctor)
+      (setf (symbol-function 'sbcl-agent::exec-command) original-exec)
+      (setf (symbol-function 'sbcl-agent::start-shell) original-start-shell)
+      (setf (symbol-function 'sbcl-agent::load-config) original-load-config)
+      (setf (symbol-function 'sbcl-agent::dispatch-command) original-dispatch)
+      (setf (symbol-function 'uiop:command-line-arguments) original-cli))))
+
+(defun openai-helper-coverage-test ()
+  (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
+                                  :model "gpt-5"
+                                  :fast-model "gpt-4.1-mini"
+                                  :api-base "https://api.example.com/v1"
+                                  :api-key "secret"))
+         (request (sbcl-agent::make-provider-request
+                   :prompt "Need a quick answer"
+                   :session-summary '(:recent-transcript ((:role :assistant :content "Earlier"))))))
+    (assert-equal "openai-compatible"
+                  (sbcl-agent::provider-name provider)
+                  "openai provider name should match")
+    (assert-true (find :streaming (sbcl-agent::provider-capabilities provider))
+                 "openai provider capabilities should include streaming")
+    (assert-true (search "Return only valid JSON" (sbcl-agent::build-openai-system-prompt))
+                 "system prompt should mention JSON response shape")
+    (let ((stream-prompt (sbcl-agent::build-openai-stream-system-prompt)))
+      (assert-true (search sbcl-agent::+stream-actions-marker+ stream-prompt)
+                   "stream prompt should include start marker")
+      (assert-true (search sbcl-agent::+stream-actions-end-marker+ stream-prompt)
+                   "stream prompt should include end marker"))
+    (assert-true (search "User prompt: Need a quick answer"
+                         (sbcl-agent::build-openai-user-prompt request))
+                 "user prompt should embed provider prompt")
+    (assert-true (sbcl-agent::deep-request-p "Need a detailed architecture review")
+                 "deep-request-p should detect detailed requests")
+    (assert-true (not (sbcl-agent::deep-request-p "short ping"))
+                 "deep-request-p should reject shallow prompts")
+    (assert-equal "gpt-4.1-mini"
+                  (sbcl-agent::openai-request-model provider request)
+                  "openai-request-model should choose fast model for shallow prompts")
+    (assert-equal "gpt-5"
+                  (sbcl-agent::openai-request-model
+                   provider
+                   (sbcl-agent::make-provider-request :prompt "Need a deep architecture review"))
+                  "openai-request-model should choose primary model for deep prompts")
+    (assert-true (search "\"stream\":false"
+                         (sbcl-agent::build-openai-request-body provider request))
+                 "request body should include stream false by default")
+    (assert-true (search "\"stream\":true"
+                         (sbcl-agent::build-openai-request-body provider request :stream t :stream-protocol t))
+                 "request body should include stream true when requested")
+    (assert-equal "hello"
+                  (sbcl-agent::extract-openai-message-content
+                   '(("choices" . ((("message" . (("content" . "hello"))))))))
+                  "extract-openai-message-content should read content")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::extract-openai-message-content
+        '(("error" . (("message" . "boom"))))))
+     "OpenAI API error"
+     "extract-openai-message-content should raise API errors")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::extract-openai-message-content '(("choices" . ()))))
+     "Could not find assistant content"
+     "extract-openai-message-content should fail when content is missing")
+    (assert-equal "delta"
+                  (sbcl-agent::extract-openai-stream-delta
+                   '(("choices" . ((("delta" . (("content" . "delta"))))))))
+                  "extract-openai-stream-delta should read delta content")
+    (assert-true (sbcl-agent::openai-stream-done-p "data: [DONE]")
+                 "openai-stream-done-p should detect completion marker")
+    (assert-true (sbcl-agent::openai-stream-data-line-p "data: {}")
+                 "openai-stream-data-line-p should detect stream data lines")
+    (assert-true (not (sbcl-agent::openai-stream-data-line-p "event: ping"))
+                 "openai-stream-data-line-p should reject non-data lines")
+    (assert-equal "part"
+                  (getf (sbcl-agent::assistant-response-metadata
+                         (sbcl-agent::decode-openai-content-response
+                          "{\"message\":\"done\",\"actions\":[],\"metadata\":{\"step\":\"part\"}}"
+                          "gpt-test"))
+                        :STEP)
+                  "decode-openai-content-response should preserve metadata")
+    (assert-true (sbcl-agent::decoded-action-payload-present-p
+                  (sbcl-agent::make-assistant-action :type :eval :payload "(* 2 3)"))
+                 "decoded-action-payload-present-p should accept string eval payloads")
+    (assert-true (not (sbcl-agent::decoded-action-payload-present-p
+                       (sbcl-agent::make-assistant-action :type :eval :payload '(:note "missing form"))))
+                 "decoded-action-payload-present-p should reject eval payloads without code")
+    (let* ((good (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read)))
+           (bad (sbcl-agent::make-assistant-action :type :eval :payload '(:note "missing"))))
+      (assert-equal 1
+                    (length (sbcl-agent::sanitized-response-actions
+                             (sbcl-agent::make-assistant-response :message "x" :actions (list good bad))))
+                    "sanitized-response-actions should drop invalid eval actions")))
+  (let ((events '()))
+    (let ((sbcl-agent::*provider-timing-listener*
+            (lambda (phase payload)
+              (push (list phase payload) events))))
+      (sbcl-agent::emit-provider-timing :phase :count 1))
+    (assert-equal :phase (first (first events))
+                  "emit-provider-timing should notify listener"))
+  (multiple-value-bind (emit rest found)
+      (sbcl-agent::parse-stream-visible-fragment
+       (concatenate 'string "hello\n" sbcl-agent::+stream-actions-marker+ "{\"actions\":[]}"))
+    (assert-true found
+                 "parse-stream-visible-fragment should detect the marker")
+    (assert-true (search "hello" emit)
+                 "parse-stream-visible-fragment should emit visible text")
+    (assert-true (search "{\"actions\":[]}" rest)
+                 "parse-stream-visible-fragment should return post-marker content"))
+  (multiple-value-bind (emit rest found)
+      (sbcl-agent::parse-stream-visible-fragment "hello<<<SBCL-ACT")
+    (assert-true (not found)
+                 "parse-stream-visible-fragment should retain partial markers")
+    (assert-equal "hello" emit
+                  "parse-stream-visible-fragment should emit the safe prefix")
+    (assert-equal "<<<SBCL-ACT" rest
+                  "parse-stream-visible-fragment should retain marker overlap"))
+  (let ((response (sbcl-agent::finalize-stream-response
+                   "visible text
+"
+                   "{\"actions\":[{\"type\":\"tool\",\"payload\":{\"tool_id\":\":FS/READ\",\"arguments\":[\":path\",\"src/main.lisp\"]}}],\"metadata\":{\"step\":\"done\"}}<<<END-SBCL-ACTIONS>>>"
+                   "gpt-test")))
+    (assert-equal "visible text"
+                  (sbcl-agent::assistant-response-message response)
+                  "finalize-stream-response should trim visible text")
+    (assert-equal "done"
+                  (getf (sbcl-agent::assistant-response-metadata response) :STEP)
+                  "finalize-stream-response should preserve metadata")
+    (assert-equal 1
+                  (length (sbcl-agent::assistant-response-actions response))
+                  "finalize-stream-response should decode actions")))
+
+(defun json-helper-coverage-test ()
+  (assert-true (sbcl-agent::json-whitespace-char-p #\Space)
+               "json-whitespace-char-p should recognize space")
+  (assert-true (not (sbcl-agent::json-whitespace-char-p #\A))
+               "json-whitespace-char-p should reject non-whitespace")
+  (assert-equal 2
+                (sbcl-agent::json-skip-whitespace "  \nabc" 0)
+                "json-skip-whitespace should skip leading whitespace")
+  (multiple-value-bind (value index)
+      (sbcl-agent::json-parse-string "\"line\\ntext\"" 0)
+    (assert-equal "line
+text" value
+                  "json-parse-string should decode escapes")
+    (assert-equal 12 index
+                  "json-parse-string should return the closing index"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::json-parse-string "\"\\u\"" 0))
+   "Unsupported JSON escape"
+   "json-parse-string should reject unsupported escapes")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::json-parse-string "\"unterminated" 0))
+   "Unterminated JSON string"
+   "json-parse-string should reject unterminated strings")
+  (multiple-value-bind (value index)
+      (sbcl-agent::json-parse-number "-12.5e1" 0)
+    (assert-equal -125.0 value
+                  "json-parse-number should parse exponents")
+    (assert-equal 7 index
+                  "json-parse-number should advance the index"))
+  (multiple-value-bind (value index)
+      (sbcl-agent::json-parse-literal "true" 0 "true" t)
+    (assert-true value "json-parse-literal should parse true")
+    (assert-equal 4 index "json-parse-literal should advance"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::json-parse-literal "nope" 0 "true" t))
+   "Expected JSON literal"
+   "json-parse-literal should reject wrong literal")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::json-parse-array "[1 2]" 0))
+   "Expected ',' or ']'"
+   "json-parse-array should reject missing comma")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::json-parse-object "{\"a\" 1}" 0))
+   "Expected ':'"
+   "json-parse-object should reject missing colon")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-json ""))
+   "Unexpected end of JSON input"
+   "parse-json should reject empty input")
+  (assert-equal "a_b"
+                (sbcl-agent::keyword->json-key :a-b)
+                "keyword->json-key should downcase and replace dashes")
+  (assert-true (sbcl-agent::json-plist-p '(:a 1 :b nil))
+               "json-plist-p should accept plists")
+  (assert-true (not (sbcl-agent::json-plist-p '(:a 1 :b)))
+               "json-plist-p should reject odd plists")
+  (assert-true (not (sbcl-agent::json-plist-p '(a 1)))
+               "json-plist-p should reject non-keyword keys")
+  (assert-equal "{\"value\":null,\"ok\":true,\"no\":false,\"items\":[1,\"x\"]}"
+                (sbcl-agent::emit-json '(:value :null :ok t :no nil :items (1 "x")))
+                "emit-json should serialize mixed values")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::emit-json #\A))
+   "Unsupported JSON value"
+   "emit-json should reject unsupported values")
+  (assert-equal nil
+                (sbcl-agent::json-object-value '(("a" . 1)) "missing")
+                "json-object-value should return nil for missing keys"))
+
+(defun sandbox-helper-coverage-test ()
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-sandbox-~D-~D/" (get-universal-time) (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (child (merge-pathnames #P"child/" root))
+         (file (merge-pathnames #P"child/test.txt" root))
+         (session (sbcl-agent::make-default-session :cwd (namestring root))))
+    (declare (ignore ignore))
+    (ensure-directories-exist child)
+    (with-open-file (stream file :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "sandbox" stream))
+    (assert-true (sbcl-agent::find-sandbox-profile :in-process)
+                 "find-sandbox-profile should find registered profiles")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-sandbox-profile :missing))
+     "Unknown sandbox profile"
+     "ensure-sandbox-profile should reject unknown ids")
+    (assert-true (search "/tmp/" (namestring (sbcl-agent::canonicalize-directory-path root)))
+                 "canonicalize-directory-path should normalize directories")
+    (assert-true (search "child/" (namestring (sbcl-agent::canonicalize-file-parent-directory file)))
+                 "canonicalize-file-parent-directory should return parent directory")
+    (assert-true (sbcl-agent::path-within-root-p child root)
+                 "path-within-root-p should accept descendants")
+    (assert-true (not (sbcl-agent::path-within-root-p #P"/etc/" root))
+                 "path-within-root-p should reject escapes")
+    (assert-true (probe-file (sbcl-agent::ensure-path-within-session session "child/test.txt" :must-exist t))
+                 "ensure-path-within-session should return existing files")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-path-within-session session "newdir/new.txt" :must-exist nil))
+     "Path escapes"
+     "ensure-path-within-session currently rejects unresolved nested paths")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-path-within-session session "missing.txt" :must-exist t))
+     "Path does not exist"
+     "ensure-path-within-session should reject missing files when required")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-path-within-session session "../escape.txt" :must-exist nil))
+     "Path escapes"
+     "ensure-path-within-session should reject path escapes")
+    (assert-true (search "bin/sandbox-runner" (namestring (sbcl-agent::sandbox-runner-path)))
+                 "sandbox-runner-path should resolve to the script")
+    (assert-equal '(:ok 1)
+                  (sbcl-agent::parse-sandbox-result "(:ok 1)")
+                  "parse-sandbox-result should read the worker payload")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-execute-process session '()))
+     "requires non-empty :argv"
+     "sandbox-execute-process should reject empty argv")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-execute-git session :add :paths '()))
+     "requires non-empty :paths"
+     "sandbox-execute-git add should reject empty paths")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-execute-git session :commit :message ""))
+     "requires non-empty :message"
+     "sandbox-execute-git commit should reject empty messages")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-execute-git session :branch :name ""))
+     "requires non-empty :name"
+     "sandbox-execute-git branch should reject empty names")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-execute-git session :unknown))
+     "Unsupported git sandbox action"
+     "sandbox-execute-git should reject unknown actions")
+    (assert-true (listp (sbcl-agent::sandbox-worker-environment))
+                 "sandbox-worker-environment should return a list")
+    (let ((proc-result (sbcl-agent::sandbox-worker-proc-run "/" '("/bin/echo" "hello"))))
+      (assert-equal :proc/run (getf proc-result :tool)
+                    "sandbox-worker-proc-run should identify the tool")
+      (assert-true (search "hello" (getf proc-result :stdout))
+                   "sandbox-worker-proc-run should capture stdout")))
+  (let ((repo (make-test-git-repo)))
+    (let ((status (sbcl-agent::sandbox-worker-git-status repo)))
+      (assert-equal :git/status (getf status :tool)
+                    "sandbox-worker-git-status should identify the tool"))
+    (let ((diff (sbcl-agent::sandbox-worker-git-diff repo '())))
+      (assert-equal :git/diff (getf diff :tool)
+                    "sandbox-worker-git-diff should identify the tool"))
+    (let ((add (sbcl-agent::sandbox-worker-git-add repo '("README.md"))))
+      (assert-equal :git/add (getf add :tool)
+                    "sandbox-worker-git-add should identify the tool"))
+    (let ((commit (sbcl-agent::sandbox-worker-git-commit repo '("message"))))
+      (assert-equal :git/commit (getf commit :tool)
+                    "sandbox-worker-git-commit should identify the tool"))
+    (let ((branch (sbcl-agent::sandbox-worker-git-branch repo '("branch-two"))))
+      (assert-equal :git/branch (getf branch :tool)
+                    "sandbox-worker-git-branch should identify the tool")
+      (assert-true (not (getf branch :checkout))
+                   "sandbox-worker-git-branch should report checkout false when omitted"))))
+
+(defun module-reload-coverage-test ()
+  (let ((root (uiop:ensure-directory-pathname "/Volumes/data/development/sbcl-agent/")))
+    (dolist (path '("src/package.lisp"
+                    "src/policy.lisp"
+                    "src/tools-process.lisp"
+                    "src/tools-git.lisp"
+                    "src/tools-fs.lisp"
+                    "src/tools-docs.lisp"
+                    "src/tools-session.lisp"))
+      (load (merge-pathnames path root))))
+  (assert-true (find-package :sbcl-agent)
+               "reloading package.lisp should preserve the sbcl-agent package")
+  (assert-true (eq 'sbcl-agent:main
+                   (find-symbol "MAIN" :sbcl-agent))
+               "reloading package.lisp should preserve the exported MAIN symbol")
+  (assert-true (eq :git/status
+                   (sbcl-agent::tool-definition-id
+                    (sbcl-agent::find-tool :git/status)))
+               "reloading tools-git.lisp should keep git tools registered")
+  (assert-true (eq :proc/run
+                   (sbcl-agent::tool-definition-id
+                    (sbcl-agent::find-tool :proc/run)))
+               "reloading tools-process.lisp should keep process tools registered")
+  (assert-true (eq :fs/read
+                   (sbcl-agent::tool-definition-id
+                    (sbcl-agent::find-tool :fs/read)))
+               "reloading tools-fs.lisp should keep fs tools registered")
+  (assert-true (eq :docs/read
+                   (sbcl-agent::tool-definition-id
+                    (sbcl-agent::find-tool :docs/read)))
+               "reloading tools-docs.lisp should keep docs tools registered")
+  (assert-true (eq :session/events
+                   (sbcl-agent::tool-definition-id
+                    (sbcl-agent::find-tool :session/events)))
+               "reloading tools-session.lisp should keep session tools registered")
+  (assert-true (eq :workspace-write
+                   (sbcl-agent::capability-policy-id
+                    (sbcl-agent::find-capability-policy :workspace-write)))
+               "reloading policy.lisp should keep policies registered"))
+
+(defun tool-helper-coverage-test ()
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-tools-~D-~D/" (get-universal-time) (random 1000000))))
+         (docs-dir (merge-pathnames #P"docs/" root))
+         (nested-dir (merge-pathnames #P"nested/" root))
+         (readme (merge-pathnames #P"README.txt" root))
+         (architecture (merge-pathnames #P"docs/architecture.md" root))
+         (notes (merge-pathnames #P"nested/notes.txt" root))
+         (session (sbcl-agent::make-default-session :cwd (namestring root))))
+    (ensure-directories-exist docs-dir)
+    (ensure-directories-exist nested-dir)
+    (with-open-file (stream readme :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "root readme" stream))
+    (with-open-file (stream architecture :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "architecture details" stream))
+    (with-open-file (stream notes :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string "notes" stream))
+    (assert-true (search (namestring root)
+                         (namestring (sbcl-agent::session-root-pathname session)))
+                 "session-root-pathname should point at the session cwd")
+    (assert-equal (namestring notes)
+                  (namestring (sbcl-agent::resolve-session-path session "nested/notes.txt"))
+                  "resolve-session-path should resolve relative paths")
+    (assert-equal #P"/tmp/example.txt"
+                  (sbcl-agent::resolve-session-path session "/tmp/example.txt")
+                  "resolve-session-path should preserve absolute paths")
+    (assert-equal "root readme"
+                  (sbcl-agent::read-file-contents readme)
+                  "read-file-contents should return file contents")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::tool-fs-read session))
+     "requires :path"
+     "tool-fs-read should require a path")
+    (let ((listing (sbcl-agent::tool-fs-list session :path ".")))
+      (assert-equal :fs/list (getf listing :tool)
+                    "tool-fs-list should identify itself")
+      (assert-true (listp (getf listing :entries))
+                   "tool-fs-list should return an entry list"))
+    (assert-true (search "/docs/"
+                         (namestring (sbcl-agent::docs-root-pathname session)))
+                 "docs-root-pathname should resolve the docs directory")
+    (assert-true (search "architecture.md"
+                         (namestring (sbcl-agent::resolve-doc-path session nil :must-exist t)))
+                 "resolve-doc-path should default to architecture.md")
+    (let ((listing (sbcl-agent::tool-docs-list session)))
+      (assert-equal :docs/list (getf listing :tool)
+                    "tool-docs-list should identify itself")
+      (assert-true (listp (getf listing :entries))
+                   "tool-docs-list should return a docs entry list")))
+  (let ((session (sbcl-agent::make-default-session :cwd "/tmp/")))
+    (assert-equal 10
+                  (sbcl-agent::normalize-tail-count nil)
+                  "normalize-tail-count should default nil to ten")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::normalize-tail-count 0))
+     "positive integer"
+     "normalize-tail-count should reject non-positive values")
+    (assert-equal :session/events
+                  (getf (sbcl-agent::tool-session-events session) :tool)
+                  "tool-session-events should accept a default tail")
+    (assert-equal :session/replay-groups
+                  (getf (sbcl-agent::tool-session-replay-groups session) :tool)
+                  "tool-session-replay-groups should identify itself")
+    (assert-equal :session/image-reconciliations
+                  (getf (sbcl-agent::tool-session-image-reconciliations session) :tool)
+                  "tool-session-image-reconciliations should identify itself")))
+
+(defun policy-helper-coverage-test ()
+  (let* ((policy-id :coverage-test-policy)
+         (registered (sbcl-agent::register-capability-policy policy-id "Coverage policy"))
+         (policy (sbcl-agent::find-capability-policy policy-id))
+         (grant (sbcl-agent::make-capability-grant :policy-id policy-id
+                                                   :granted-at 123
+                                                   :scope :session
+                                                   :metadata '(:why :test))))
+    (declare (ignore grant))
+    (assert-equal policy-id registered
+                  "register-capability-policy should return the policy id")
+    (assert-equal :session
+                  (sbcl-agent::capability-policy-default-grant-mode policy)
+                  "register-capability-policy should default grant mode to :session")
+    (assert-equal :medium
+                  (sbcl-agent::capability-policy-risk-level policy)
+                  "register-capability-policy should default risk level to :medium")
+    (assert-true (eq policy (sbcl-agent::ensure-capability-policy policy))
+                 "ensure-capability-policy should accept policy structs")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-capability-policy :missing-policy))
+     "Unknown capability policy"
+     "ensure-capability-policy should reject missing keywords")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::ensure-capability-policy "bad"))
+     "Invalid capability policy designator"
+     "ensure-capability-policy should reject invalid designators")
+    (let ((policies (sbcl-agent::list-capability-policies)))
+      (assert-true (find policy-id policies :key (lambda (entry) (getf entry :id)))
+                   "list-capability-policies should include custom policies"))))
+
+(defun with-fake-curl (thunk)
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-fake-curl-~D-~D/" (get-universal-time) (random 1000000))))
+         (script (merge-pathnames #P"curl" root))
+         (old-path (uiop:getenv "PATH"))
+         (script-body
+           "#!/bin/sh
+stream=0
+for arg in \"$@\"; do
+  if [ \"$arg\" = \"-N\" ]; then
+    stream=1
+  fi
+done
+if [ \"${FAKE_CURL_FAIL:-0}\" = \"1\" ]; then
+  echo \"fake curl failure\" 1>&2
+  exit 7
+fi
+if [ \"$stream\" = \"1\" ]; then
+  printf '%s\n' 'data: {\"choices\":[{\"delta\":{\"content\":\"Visible text\n<<<SBCL-ACTIONS>>>\"}}]}'
+  printf '%s\n' 'data: {\"choices\":[{\"delta\":{\"content\":\"{\\\"actions\\\":[{\\\"type\\\":\\\"tool\\\",\\\"payload\\\":{\\\"tool_id\\\":\\\":FS/READ\\\",\\\"arguments\\\":[\\\":path\\\",\\\"src/main.lisp\\\"]}}],\\\"metadata\\\":{\\\"origin\\\":\\\"fake-stream\\\"}}<<<END-SBCL-ACTIONS>>>\"}}]}'
+  printf '%s\n' 'data: [DONE]'
+else
+  printf '%s' '{\"choices\":[{\"message\":{\"content\":\"{\\\"message\\\":\\\"fake-response\\\",\\\"actions\\\":[],\\\"metadata\\\":{\\\"origin\\\":\\\"fake-send\\\"}}\"}}]}'
+fi
+"))
+    (ensure-directories-exist root)
+    (with-open-file (stream script :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-string script-body stream))
+    (multiple-value-bind (code stdout stderr)
+        (run-command "chmod" (list "+x" (namestring script)))
+      (declare (ignore stdout stderr))
+      (assert-equal 0 code "fake curl chmod should succeed"))
+    (unwind-protect
+         (progn
+           (setf (uiop:getenv "PATH")
+                 (format nil "~A:~A" (namestring root) (or old-path "")))
+           (funcall thunk))
+      (setf (uiop:getenv "PATH") (or old-path "")))))
+
+(defun openai-provider-io-coverage-test ()
+  (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
+                                  :model "gpt-5"
+                                  :fast-model "gpt-4.1-mini"
+                                  :api-base "https://api.example.com/v1"
+                                  :api-key "secret"))
+         (request (sbcl-agent::make-provider-request
+                   :prompt "Stream this"
+                   :session-summary '(:recent-transcript ()))))
+    (assert-equal "x"
+                  (sbcl-agent::extract-openai-stream-delta
+                   (sbcl-agent::parse-openai-stream-json-line
+                    "data: {\"choices\":[{\"delta\":{\"content\":\"x\"}}]}"))
+                  "parse-openai-stream-json-line should decode stream chunks")
+    (assert-equal 0
+                  (sbcl-agent::longest-marker-overlap "plain text" sbcl-agent::+stream-actions-marker+)
+                  "longest-marker-overlap should return zero when there is no overlap")
+    (let ((fallback-provider (make-instance 'sbcl-agent::openai-compatible-provider
+                                            :model "gpt-5"
+                                            :fast-model nil
+                                            :api-base "https://api.example.com/v1"
+                                            :api-key "secret")))
+      (assert-equal "gpt-5"
+                    (sbcl-agent::openai-request-model
+                     fallback-provider
+                     (sbcl-agent::make-provider-request :prompt "short ping"))
+                    "openai-request-model should fall back to primary model when no fast model is configured")))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::send-request
+      (make-instance 'sbcl-agent::openai-compatible-provider
+                     :model "gpt-5"
+                     :fast-model "gpt-4.1-mini"
+                     :api-base "https://api.example.com/v1"
+                     :api-key nil)
+      (sbcl-agent::make-provider-request :prompt "x" :session-summary '())))
+   "OPENAI_API_KEY is required"
+   "send-request should reject missing API keys")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::stream-request
+      (make-instance 'sbcl-agent::openai-compatible-provider
+                     :model "gpt-5"
+                     :fast-model "gpt-4.1-mini"
+                     :api-base "https://api.example.com/v1"
+                     :api-key nil)
+      (sbcl-agent::make-provider-request :prompt "x" :session-summary '())
+      (lambda (event) (declare (ignore event)))))
+   "OPENAI_API_KEY is required"
+   "stream-request should reject missing API keys")
+  (with-fake-curl
+    (lambda ()
+      (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
+                                      :model "gpt-5"
+                                      :fast-model "gpt-4.1-mini"
+                                      :api-base "https://api.example.com/v1"
+                                      :api-key "secret"))
+             (request (sbcl-agent::make-provider-request
+                       :prompt "Need a fake network round trip"
+                       :session-summary '(:recent-transcript ()))))
+        (assert-true (search "\"choices\"" (sbcl-agent::curl-json-request "https://api.example.com/v1/chat/completions"
+                                                                          "secret"
+                                                                          "{}"))
+                     "curl-json-request should capture stdout from the fake curl binary")
+        (let ((response (sbcl-agent::send-request provider request)))
+          (assert-equal "fake-response"
+                        (sbcl-agent::assistant-response-message response)
+                        "send-request should decode fake curl responses")
+          (assert-equal "fake-send"
+                        (getf (sbcl-agent::assistant-response-metadata response) :ORIGIN)
+                        "send-request should preserve fake metadata"))
+        (let ((events '())
+              (timings '()))
+          (let ((sbcl-agent::*provider-timing-listener*
+                  (lambda (phase payload)
+                    (push (list phase payload) timings))))
+            (let ((response (sbcl-agent::stream-request
+                             provider
+                             request
+                             (lambda (event)
+                               (push event events)))))
+              (assert-true (search "Visible text"
+                                   (sbcl-agent::assistant-response-message response))
+                           "stream-request should decode visible text from fake stream")
+              (assert-true (find :MESSAGE-DELTA events
+                                 :key #'sbcl-agent::provider-event-type)
+                           "stream-request should emit message delta events")
+              (assert-true (find :MESSAGE-COMPLETE events
+                                 :key #'sbcl-agent::provider-event-type)
+                           "stream-request should emit message completion events")
+              (assert-true (find :request-built timings :key #'first)
+                           "stream-request should emit request-built timing")
+              (assert-true (find :response-finalized timings :key #'first)
+                           "stream-request should emit response-finalized timing"))))
+        (setf (uiop:getenv "FAKE_CURL_FAIL") "1")
+        (unwind-protect
+             (progn
+               (assert-signals-error
+                (lambda ()
+                  (sbcl-agent::curl-json-request "https://api.example.com/v1/chat/completions"
+                                                 "secret"
+                                                 "{}"))
+                "OpenAI request failed"
+                "curl-json-request should surface fake curl failures")
+               (assert-signals-error
+                (lambda ()
+                  (sbcl-agent::stream-openai-json-request
+                   "https://api.example.com/v1/chat/completions"
+                   "secret"
+                   "{}"
+                   (lambda (line) (declare (ignore line)))))
+                "OpenAI streaming request failed"
+                "stream-openai-json-request should surface fake curl failures"))
+          (setf (uiop:getenv "FAKE_CURL_FAIL") ""))))))
+
+(defun provider-protocol-helper-coverage-test ()
+  (assert-equal :run-started
+                (sbcl-agent::legacy-provider-event-type->canonical-type :message-start)
+                "legacy-provider-event-type->canonical-type should normalize message-start")
+  (assert-equal :custom
+                (sbcl-agent::legacy-provider-event-type->canonical-type :custom)
+                "legacy-provider-event-type->canonical-type should preserve unknown types")
+  (let ((delta-event (sbcl-agent::make-provider-event :type :message-delta))
+        (complete-event (sbcl-agent::make-provider-event :type :message-complete))
+        (action-event (sbcl-agent::make-provider-event :type :action-proposal))
+        (canonical-event (sbcl-agent::make-provider-event :canonical-type :text-delta)))
+    (assert-equal :text-delta
+                  (sbcl-agent::provider-event-effective-type delta-event)
+                  "provider-event-effective-type should fall back to legacy normalization")
+    (assert-true (sbcl-agent::provider-text-delta-event-p delta-event)
+                 "provider-text-delta-event-p should detect deltas")
+    (assert-true (sbcl-agent::provider-text-delta-event-p canonical-event)
+                 "provider-text-delta-event-p should honor canonical types")
+    (assert-true (sbcl-agent::provider-text-complete-event-p complete-event)
+                 "provider-text-complete-event-p should detect completion events")
+    (assert-true (sbcl-agent::provider-action-intent-event-p action-event)
+                 "provider-action-intent-event-p should detect tool intents"))
+  (assert-equal '(:A 1)
+                (sbcl-agent::provider-summary-content '(:a 1))
+                "provider-summary-content should preserve non-string values")
+  (assert-equal :FS/READ
+                (sbcl-agent::normalize-json-derived-value ":fs/read")
+                "normalize-json-derived-value should convert keyword-like strings")
+  (assert-equal '(:TOOL-ID :FS/READ :ARGUMENTS (:PATH "src/main.lisp"))
+                (sbcl-agent::normalize-json-derived-value
+                 '(("tool_id" . ":fs/read")
+                   ("arguments" . (":path" "src/main.lisp"))))
+                "normalize-json-derived-value should convert JSON objects recursively")
+  (assert-equal '(:FS/READ "plain")
+                (sbcl-agent::normalize-json-derived-value '(":fs/read" "plain"))
+                "normalize-json-derived-value should map plain lists recursively")
+  (let ((action (sbcl-agent::decode-assistant-action
+                 '(("type" . "eval")
+                   ("payload" . "(+ 7 8)")))))
+    (assert-equal :EVAL
+                  (sbcl-agent::assistant-action-type action)
+                  "decode-assistant-action should normalize action type strings")
+    (assert-equal "(+ 7 8)"
+                  (sbcl-agent::assistant-action-payload action)
+                  "decode-assistant-action should preserve scalar payloads"))
+  (assert-true (sbcl-agent::valid-assistant-action-p
+                (sbcl-agent::make-assistant-action :type :patch :payload '((:write "x" "y"))))
+               "valid-assistant-action-p should accept patch actions")
+  (assert-true (not (sbcl-agent::valid-assistant-action-p
+                     (sbcl-agent::make-assistant-action :type :note :payload '(:message "x"))))
+               "valid-assistant-action-p should reject unsupported action types")
+  (assert-equal '(+ 9 1)
+                (sbcl-agent::parse-eval-action-form '(:expression "(+ 9 1)"))
+                "parse-eval-action-form should accept :expression payloads")
+  (assert-equal '(:raw 1)
+                (sbcl-agent::parse-eval-action-form '(:raw 1))
+                "parse-eval-action-form should return payloads that do not embed source")
+  (assert-equal 42
+                (sbcl-agent::parse-eval-action-form 42)
+                "parse-eval-action-form should preserve non-list payloads")
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-provider-protocol-~D-~D/"
+                        (get-universal-time)
+                        (random 1000000))))
+         (session (sbcl-agent::make-default-session :cwd (namestring root))))
+    (ensure-directories-exist root)
+    (sbcl-agent::approve-policy session :workspace-write)
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-assistant-action
+        (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id "fs/read"))
+        session))
+     "requires keyword tool id"
+     "execute-assistant-action should reject non-keyword tool ids")
+    (let* ((patch-result (sbcl-agent::execute-assistant-action
+                          (sbcl-agent::make-assistant-action
+                           :type :patch
+                           :payload '((:write "artifact.txt" "patched content")))
+                          session))
+           (patched (merge-pathnames #P"artifact.txt" root)))
+      (assert-equal :patch (first patch-result)
+                    "execute-assistant-action should apply patch actions")
+      (assert-equal "patched content"
+                    (sbcl-agent::read-file-contents patched)
+                    "execute-assistant-action should write patched content"))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-assistant-action
+        (sbcl-agent::make-assistant-action :type :unknown :payload nil)
+        session))
+     "Unsupported assistant action type"
+     "execute-assistant-action should reject unknown action types")
+    (let* ((results (sbcl-agent::execute-assistant-actions
+                     (sbcl-agent::make-assistant-response
+                      :message "eval"
+                      :actions (list (sbcl-agent::make-assistant-action
+                                      :type :eval
+                                      :payload "(+ 1 2)")))
+                     session)))
+      (assert-equal 1
+                    (length results)
+                    "execute-assistant-actions should execute response actions")
+      (assert-equal 3
+                    (getf (first results) :result)
+                    "execute-assistant-actions should return evaluation results")))
+  (let* ((request (sbcl-agent::make-provider-request :prompt "stream me" :session-summary '()))
+         (events '())
+         (response (sbcl-agent::stream-request
+                    (make-instance 'mixed-action-provider)
+                    request
+                    (lambda (event)
+                      (push event events)))))
+    (assert-true (typep response 'sbcl-agent::assistant-response)
+                 "default provider stream-request should return the response object")
+    (assert-equal 4
+                  (length events)
+                  "default provider stream-request should emit start, delta, action, and complete events"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::make-provider
+      (sbcl-agent::make-config :provider "unknown"
+                               :model "gpt-5"
+                               :working-directory "/tmp/")))
+   "Unsupported provider"
+   "make-provider should reject unknown provider names"))
+
+(defun sandbox-main-coverage-test ()
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::sandbox-worker-proc-run "/" '()))
+   "requires argv"
+   "sandbox-worker-proc-run should reject empty argv")
+  (let ((repo (make-test-git-repo)))
+    (let ((branch (sbcl-agent::sandbox-worker-git-branch repo '("branch-checkout" "--checkout"))))
+      (assert-equal :git/branch (getf branch :tool)
+                    "sandbox-worker-git-branch should identify checkout operations")
+      (assert-true (getf branch :checkout)
+                   "sandbox-worker-git-branch should report checkout true when requested"))))
+  (assert-signals-error
+   (lambda ()
+     (with-fake-command-line-arguments
+         nil
+       (lambda ()
+         (sbcl-agent::sandbox-worker-main))))
+   "requires a command"
+   "sandbox-worker-main should reject missing commands")
+  (multiple-value-bind (ignored stdout stderr)
+      (run-sandbox-main-with-arguments '("proc-run" "/" "/bin/echo" "sandbox-main"))
+    (declare (ignore ignored stderr))
+    (assert-true (search ":PROC/RUN" stdout)
+                 "sandbox-worker-main should dispatch proc-run commands"))
+  (multiple-value-bind (ignored stdout stderr)
+      (run-sandbox-main-with-arguments (list "git-status" (make-test-git-repo)))
+    (declare (ignore ignored stderr))
+    (assert-true (search ":GIT/STATUS" stdout)
+                 "sandbox-worker-main should dispatch git-status commands"))
+  (assert-signals-error
+   (lambda ()
+     (with-fake-command-line-arguments
+         '("unknown" "/tmp")
+       (lambda ()
+         (sbcl-agent::sandbox-worker-main))))
+   "Unknown sandbox command"
+   "sandbox-worker-main should reject unknown commands")
+
+(defun turn-orchestrator-helper-coverage-test ()
+  (let* ((eval-action (sbcl-agent::make-assistant-action :type :eval :payload "(* 2 3)"))
+         (tool-action (sbcl-agent::make-assistant-action :type :tool :payload '(:tool_id :fs/read)))
+         (unknown-tool-action (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :unknown/tool)))
+         (patch-action (sbcl-agent::make-assistant-action :type :patch :payload '((:write "x" "y"))))
+         (other-action (sbcl-agent::make-assistant-action :type :note :payload '(:message "hi"))))
+    (assert-equal :safe-read
+                  (getf (sbcl-agent::policy-decision-summary :safe-read) :policy-id)
+                  "policy-decision-summary should default decision to :allowed")
+    (assert-equal :allowed
+                  (getf (sbcl-agent::say-provider-operation-policy-decision) :decision)
+                  "say-provider-operation-policy-decision should mark provider runs allowed")
+    (assert-equal :runtime-eval-safe
+                  (getf (sbcl-agent::assistant-action-policy-decision eval-action :allowed) :policy-id)
+                  "assistant-action-policy-decision should map eval actions")
+    (assert-equal :safe-read
+                  (getf (sbcl-agent::assistant-action-policy-decision tool-action :staged) :policy-id)
+                  "assistant-action-policy-decision should accept :tool_id payloads")
+    (assert-equal nil
+                  (getf (sbcl-agent::assistant-action-policy-decision unknown-tool-action :staged) :policy-id)
+                  "assistant-action-policy-decision should fall back when a tool is unknown")
+    (assert-equal :workspace-write
+                  (getf (sbcl-agent::assistant-action-policy-decision patch-action :approval-required) :policy-id)
+                  "assistant-action-policy-decision should map patch actions")
+    (assert-equal nil
+                  (getf (sbcl-agent::assistant-action-policy-decision other-action :staged) :policy-id)
+                  "assistant-action-policy-decision should handle unknown action types")
+    (assert-equal :staged
+                  (sbcl-agent::staged-assistant-action-disposition tool-action)
+                  "staged-assistant-action-disposition should stage non-patch actions")
+    (assert-equal :staged
+                  (sbcl-agent::staged-assistant-action-status tool-action)
+                  "staged-assistant-action-status should mark non-patch actions staged")
+    (assert-equal "assistant-action"
+                  (sbcl-agent::action-operation-name other-action)
+                  "action-operation-name should fall back for unknown action types"))
+  (let* ((failed-op (sbcl-agent::make-operation :status :failed))
+         (completed-op (sbcl-agent::make-operation :status :completed)))
+    (assert-equal :failed
+                  (sbcl-agent::turn-status-from-action-operations (list failed-op completed-op))
+                  "turn-status-from-action-operations should surface failures"))
+  (let ((session (sbcl-agent::make-default-session))
+        (progress '()))
+    (let ((sbcl-agent::*task-progress-callback*
+            (lambda (phase payload)
+              (push (list phase payload) progress))))
+      (sbcl-agent::emit-say-progress :phase '(:ok t)))
+    (assert-equal :phase (first (first progress))
+                  "emit-say-progress should notify the task progress callback")))
+
+(defun shell-helper-coverage-test ()
+  (let ((help-text (with-output-to-string (stream)
+                     (let ((*standard-output* stream))
+                       (sbcl-agent::print-shell-help)))))
+    (assert-true (search "(say \"prompt\")" help-text)
+                 "print-shell-help should mention SAY"))
+  (let* ((session (sbcl-agent::make-default-session))
+         (prompt-text (with-output-to-string (stream)
+                        (let ((*query-io* stream))
+                          (sbcl-agent::shell-prompt session)))))
+    (assert-true (search (sbcl-agent::agent-session-id session) prompt-text)
+                 "shell-prompt should include the session id"))
+  (let* ((input (make-string-input-stream "(help)"))
+         (output (make-string-output-stream))
+         (*query-io* (make-two-way-stream input output)))
+    (assert-equal "HELP"
+                  (symbol-name (first (sbcl-agent::read-shell-form (sbcl-agent::make-default-session))))
+                  "read-shell-form should read one form from query io"))
+  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-tool-command nil session))
+     "TOOL requires a tool id"
+     "execute-tool-command should reject missing tool ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-tool-command '("bad") session))
+     "TOOL id must be a keyword"
+     "execute-tool-command should reject non-keyword tool ids")
+    (assert-equal :fs/read
+                  (getf (sbcl-agent::execute-tool-command '(:fs/read :path "src/main.lisp") session) :tool)
+                  "execute-tool-command should invoke tools directly")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-approve-command '("bad") session))
+     "APPROVE requires a keyword policy"
+     "execute-approve-command should reject non-keyword policies")
+    (sbcl-agent::approve-policy session :workspace-write)
+    (assert-equal :write
+                  (getf (first (getf (sbcl-agent::execute-patch-command '(((:write "tmp/shell-helper.txt" "ok"))) session) :patch)) :operation)
+                  "execute-patch-command should apply approved patches")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-assistant-action-command '("bad") session))
+     "assistant-action object"
+     "execute-assistant-action-command should reject invalid arguments")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-pending-actions-command session))
+     "No pending assistant actions"
+     "execute-pending-actions-command should reject missing staged actions")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-session-save-command '(42) session))
+     "SESSION/SAVE requires a string path"
+     "execute-session-save-command should require a string path")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-thread-new-command '(:title 7) session))
+     "THREAD/NEW :TITLE must be a string"
+     "execute-thread-new-command should validate titles")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-thread-use-command '(7) session))
+     "THREAD/USE requires a string thread id"
+     "execute-thread-use-command should validate thread ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-thread-show-command '(7) session))
+     "THREAD/SHOW requires a string thread id"
+     "execute-thread-show-command should validate thread ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-turn-status-command '(7) session))
+     "TURN/STATUS requires a string turn id"
+     "execute-turn-status-command should validate turn ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::resume-turn-command-target session "missing"))
+     "Unknown turn"
+     "resume-turn-command-target should reject unknown turns")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::resume-turn-command-target session nil))
+     "No turns recorded"
+     "resume-turn-command-target should reject empty sessions")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-describe-task-command '(7) session))
+     "DESCRIBE-TASK requires a string task id"
+     "execute-describe-task-command should validate task ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-monitor-task-command '(7) session))
+     "MONITOR-TASK requires a string task id"
+     "execute-monitor-task-command should validate task ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-cancel-task-command '(7) session))
+     "CANCEL-TASK requires a string task id"
+     "execute-cancel-task-command should validate task ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-stop-worker-command '(7) session))
+     "STOP-WORKER requires a string worker id"
+     "execute-stop-worker-command should validate worker ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-describe-worker-command '(7) session))
+     "DESCRIBE-WORKER requires a string worker id"
+     "execute-describe-worker-command should validate worker ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-describe-work-item-command '(7) session))
+     "DESCRIBE-WORK-ITEM requires a string work-item id"
+     "execute-describe-work-item-command should validate work-item ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-describe-workflow-record-command '(7) session))
+     "DESCRIBE-WORKFLOW-RECORD requires a string workflow record id"
+     "execute-describe-workflow-record-command should validate workflow ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-request-work-item-approval-command '("x" "bad") session))
+     "requires a keyword policy"
+     "execute-request-work-item-approval-command should validate policy ids")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-quarantine-work-item-command '("x" 7) session))
+     "requires a string reason"
+     "execute-quarantine-work-item-command should validate reasons")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-why-waiting-command '(7) session))
+     "WHY-WAITING requires a string work-item id"
+     "execute-why-waiting-command should validate work-item ids"))
+  (let ((eval-action (sbcl-agent::make-assistant-action :type :eval :payload "(+ 1 2)"))
+        (tool-action (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read))))
+    (multiple-value-bind (immediate staged)
+        (sbcl-agent::split-assistant-actions (list tool-action eval-action))
+      (assert-equal 1 (length immediate)
+                    "split-assistant-actions should collect eval actions")
+      (assert-equal 1 (length staged)
+                    "split-assistant-actions should stage non-eval actions")))
+  (assert-equal :fallback
+                (sbcl-agent::plist-value '(:a 1) :missing :fallback)
+                "plist-value should return defaults")
+  (assert-true (not (sbcl-agent::option-present-p '(:a 1) :b))
+               "option-present-p should return nil for missing keys")
+  (assert-equal '(:b 2)
+                (sbcl-agent::remove-plist-key '(:a 1 :b 2) :a)
+                "remove-plist-key should drop keys")
+  (let ((task-form (sbcl-agent::ask-task-form "ping" '(:stream t :enqueue t))))
+    (assert-equal "ASK"
+                  (symbol-name (first task-form))
+                  "ask-task-form should preserve the ASK operator")
+    (assert-equal '("ping" :stream t)
+                  (rest task-form)
+                  "ask-task-form should remove :enqueue"))
+  (assert-equal '(tool :fs/read)
+                (sbcl-agent::unwrap-task-form '(quote (tool :fs/read)))
+                "unwrap-task-form should unwrap quoted forms")
+  (assert-equal '(tool :fs/read)
+                (sbcl-agent::unwrap-task-form '(tool :fs/read))
+                "unwrap-task-form should preserve bare forms")
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result '(:x 1) :tool)))))
+    (assert-true (search "tool>" result)
+                 "print-shell-result should render tool results"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result nil :help)))))
+    (assert-equal "" result
+                  "print-shell-result should print nothing for help")))
+
+(defun shell-stream-rendering-coverage-test ()
+  (multiple-value-bind (ignored stdout stderr)
+      (with-captured-output
+        (lambda ()
+          (sbcl-agent::render-provider-timing :phase '(:count 1))
+          (sbcl-agent::render-stream-event
+           (sbcl-agent::make-provider-event :canonical-type :run-started))
+          (sbcl-agent::render-stream-event
+           (sbcl-agent::make-provider-event :canonical-type :text-delta
+                                            :payload "hello"))
+          (sbcl-agent::render-stream-event
+           (sbcl-agent::make-provider-event :canonical-type :text-complete))
+          (sbcl-agent::render-stream-event
+           (sbcl-agent::make-provider-event :canonical-type :other
+                                            :payload '(:x 1)))))
+    (declare (ignore ignored stderr))
+    (assert-true (search "assistant-timing>" stdout)
+                 "render-provider-timing should print timing information")
+    (assert-true (search "assistant-stream> hello" stdout)
+                 "render-stream-event should print streamed text")
+    (assert-true (search "assistant-stream-event>" stdout)
+                 "render-stream-event should print fallback events"))
+  (let* ((session (sbcl-agent::make-default-session))
+         (event (sbcl-agent::make-provider-event :family :provider
+                                                 :type :message-delta
+                                                 :canonical-type :text-delta
+                                                 :legacy-type :message-delta
+                                                 :visibility :user
+                                                 :payload "delta"))
+         (progress '())
+         (stream-events '())
+         (events nil))
+    (let ((sbcl-agent::*task-progress-callback*
+            (lambda (phase payload)
+              (push (list phase payload) progress)))
+          (sbcl-agent::*stream-event-listener*
+            (lambda (payload)
+              (push payload stream-events))))
+      (setf events (sbcl-agent::handle-provider-stream-event session event '())))
+    (assert-equal 1
+                  (length events)
+                  "handle-provider-stream-event should append the new event")
+    (assert-equal 1
+                  (length stream-events)
+                  "handle-provider-stream-event should notify the stream listener")
+    (assert-equal :provider-stream
+                  (first (first progress))
+                  "handle-provider-stream-event should notify task progress listeners"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-ask-arguments '(42)))
+   "ASK requires a single string prompt"
+   "parse-ask-arguments should reject non-string prompts")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-ask-arguments '("ok" :stream)))
+   "property list"
+   "parse-ask-arguments should reject odd keyword option lists"))
+
+(defun turn-orchestrator-run-coverage-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (thread (sbcl-agent::current-thread session))
+         (progress '()))
+    (let ((sbcl-agent::*task-progress-callback*
+            (lambda (phase payload)
+              (push (list phase payload) progress))))
+      (let ((result (sbcl-agent::run-say-turn-sync
+                     (make-instance 'mixed-action-provider)
+                     session
+                     thread
+                     "sync prompt")))
+        (assert-equal nil
+                      (getf result :streamed-p)
+                      "run-say-turn-sync should report non-streaming turns")
+        (assert-equal 1
+                      (getf result :immediate-action-count)
+                      "run-say-turn-sync should record immediate actions")
+        (assert-equal 1
+                      (getf result :staged-action-count)
+                      "run-say-turn-sync should record staged actions")
+        (assert-equal :completed
+                      (sbcl-agent::turn-status
+                       (first (last (sbcl-agent::agent-session-turns session))))
+                      "run-say-turn-sync should complete the turn after staging follow-up actions")
+        (assert-equal 1
+                      (length (sbcl-agent::agent-session-pending-actions session))
+                      "run-say-turn-sync should stage non-immediate actions")))
+    (assert-true (find :say-response progress :key #'first)
+                 "run-say-turn-sync should emit say-response progress"))
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (thread (sbcl-agent::current-thread session))
+         (result (sbcl-agent::run-say-turn-streaming
+                  (make-instance 'mixed-action-provider)
+                  session
+                  thread
+                  "stream prompt")))
+    (assert-true (getf result :streamed-p)
+                 "run-say-turn-streaming should report streamed turns")
+    (assert-equal 4
+                  (getf result :stream-event-count)
+                  "run-say-turn-streaming should capture provider stream events")
+    (assert-equal 4
+                  (length (getf result :stream-events))
+                  "run-say-turn-streaming should return the captured stream events")
+    (assert-equal 1
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "run-say-turn-streaming should stage tool actions")
+    (assert-true (find :provider-stream
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "run-say-turn-streaming should log provider stream events"))
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (result (sbcl-agent::run-say-turn
+                  (make-instance 'mixed-action-provider)
+                  session
+                  "wrapped prompt"
+                  :stream-p nil)))
+    (assert-equal nil
+                  (getf result :streamed-p)
+                  "run-say-turn should dispatch the sync path when stream-p is false")))
+
+(defun conversation-helper-coverage-test ()
+  (let* ((session (sbcl-agent::make-default-session))
+         (existing (sbcl-agent::make-session-thread :title "Existing")))
+    (setf (sbcl-agent::agent-session-threads session) (list existing)
+          (sbcl-agent::agent-session-current-thread-id session) nil)
+    (assert-true (eq existing (sbcl-agent::ensure-default-thread session))
+                 "ensure-default-thread should reuse an existing thread when the current thread id is missing")
+    (assert-equal (sbcl-agent::thread-id existing)
+                  (sbcl-agent::agent-session-current-thread-id session)
+                  "ensure-default-thread should restore the current thread id"))
+  (let* ((session (sbcl-agent::make-default-session))
+         (thread (sbcl-agent::create-thread session)))
+    (assert-true (search "Thread " (sbcl-agent::thread-title thread))
+                 "create-thread should synthesize a default title when none is provided")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::use-thread session "missing-thread"))
+     "Unknown thread"
+     "use-thread should reject missing thread ids"))
+  (let* ((awaiting (sbcl-agent::make-operation :status :awaiting-approval))
+         (failed (sbcl-agent::make-operation :status :failed)))
+    (assert-equal :failed
+                  (sbcl-agent::turn-status-from-operations '() :current-error-state :boom)
+                  "turn-status-from-operations should prefer explicit error state")
+    (assert-equal :awaiting-approval
+                  (sbcl-agent::turn-status-from-operations (list awaiting))
+                  "turn-status-from-operations should detect approval waits")
+    (assert-equal :failed
+                  (sbcl-agent::turn-status-from-operations (list failed))
+                  "turn-status-from-operations should detect failed operations")))
+
+(defun sandbox-branch-coverage-test ()
+  (let ((repo (make-test-git-repo)))
+    (let ((diff (sbcl-agent::sandbox-execute-git
+                 (sbcl-agent::make-default-session :cwd (namestring repo))
+                 :diff
+                 :cached t)))
+      (assert-true (getf diff :cached)
+                   "sandbox-execute-git should preserve the cached diff flag"))))
+  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::sandbox-worker-command "not-a-command" session '()))
+     "Sandbox worker failed"
+     "sandbox-worker-command should surface worker failures"))
+
 (defun json-roundtrip-test ()
   (let* ((json (sbcl-agent::emit-json (list :message "hello"
                                              :actions (list (list :type "tool"))
@@ -194,6 +1588,43 @@
     (assert-equal :PATH
                   (first (getf (sbcl-agent::assistant-action-payload (first (sbcl-agent::assistant-response-actions response))) :ARGUMENTS))
                   "provider decoder should normalize argument keywords")))
+
+(defun mock-provider-helper-coverage-test ()
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please read src/main.lisp"))
+                "mock-actions-for-prompt should create a read action")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "can you list src"))
+                "mock-actions-for-prompt should create a list action")
+  (assert-equal nil
+                (sbcl-agent::mock-actions-for-prompt "no tool request here")
+                "mock-actions-for-prompt should return nil for plain prompts")
+  (let ((response (sbcl-agent::build-mock-response "plain prompt" '(:id "s"))))
+    (assert-true (search "SBCL scaffold" (sbcl-agent::assistant-response-message response))
+                 "build-mock-response should return the scaffold message when no actions are needed")
+    (assert-equal :mock
+                  (getf (sbcl-agent::assistant-response-metadata response) :provider)
+                  "build-mock-response should mark metadata with the provider id"))
+  (assert-equal '("abc" "def" "ghi")
+                (sbcl-agent::split-stream-message "abcdefghi")
+                "split-stream-message should divide messages into chunks")
+  (let* ((provider (make-instance 'sbcl-agent::mock-provider :model "gpt-5"))
+         (request (sbcl-agent::make-provider-request
+                   :prompt "please read src/main.lisp"
+                   :session-summary '(:recent-transcript ()))))
+    (let ((response (sbcl-agent::send-request provider request)))
+      (assert-equal 1
+                    (length (sbcl-agent::assistant-response-actions response))
+                    "mock provider send-request should return proposed actions"))
+    (let ((events '()))
+      (sbcl-agent::stream-request provider
+                                  request
+                                  (lambda (event)
+                                    (push event events)))
+      (assert-true (find :ACTION-PROPOSAL events :key #'sbcl-agent::provider-event-type)
+                   "mock provider stream-request should emit action proposals")
+      (assert-true (> (count :MESSAGE-DELTA events :key #'sbcl-agent::provider-event-type) 1)
+                   "mock provider stream-request should emit multiple message deltas"))))
 
 (defun openai-provider-selection-test ()
   (let ((config (sbcl-agent::make-config :provider "openai-compatible"
@@ -280,6 +1711,33 @@
     (assert-true (search "/tmp/override/" (sbcl-agent::config-working-directory updated))
                  "config-with-overrides should normalize the working directory")))
 
+(defun config-helper-coverage-test ()
+  (assert-equal nil
+                (sbcl-agent::normalize-config-string (format nil "   ~C~C  " #\Newline #\Tab))
+                "normalize-config-string should collapse blank strings to nil")
+  (let* ((root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-config-extra-~D-~D/"
+                        (get-universal-time)
+                        (random 1000000))))
+         (ignore (ensure-directories-exist root)))
+    (declare (ignore ignore))
+    (assert-equal nil
+                  (sbcl-agent::load-api-key-from-file (namestring root))
+                  "load-api-key-from-file should return nil when no key file exists"))
+  (let* ((base (sbcl-agent::make-config :provider "mock"
+                                        :model "gpt-5"
+                                        :fast-model "gpt-4.1-mini"
+                                        :api-base nil
+                                        :api-key nil
+                                        :api-key-present-p nil
+                                        :working-directory nil))
+         (updated (sbcl-agent::config-with-overrides base)))
+    (assert-true (stringp (sbcl-agent::config-working-directory updated))
+                 "config-with-overrides should fall back to the current directory when no working directory exists")
+    (assert-equal "mock"
+                  (sbcl-agent::config-provider updated)
+                  "config-with-overrides should preserve the existing provider by default")))
+
 (defun openai-request-model-selection-test ()
   (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
                                   :model "gpt-5"
@@ -329,6 +1787,13 @@
 
 (defun command-normalization-test ()
   (let ((ask-command (sbcl-agent::normalize-form-command '(ask "inspect src/main.lisp")))
+        (say-command (sbcl-agent::normalize-form-command '(say "inspect src/main.lisp")))
+        (thread-new-command (sbcl-agent::normalize-form-command '(thread/new :title "Conversation")))
+        (thread-list-command (sbcl-agent::normalize-form-command '(thread/list)))
+        (thread-use-command (sbcl-agent::normalize-form-command '(thread/use "thread-1")))
+        (thread-show-command (sbcl-agent::normalize-form-command '(thread/show "thread-1")))
+        (turn-status-command (sbcl-agent::normalize-form-command '(turn/status "turn-1")))
+        (turn-resume-command (sbcl-agent::normalize-form-command '(turn/resume "turn-1")))
         (execute-actions-command (sbcl-agent::normalize-form-command '(execute-actions)))
         (describe-session-command (sbcl-agent::normalize-form-command '(describe-session)))
         (enqueue-task-command (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp"))))
@@ -343,6 +1808,20 @@
         (patch-command (sbcl-agent::normalize-form-command '(patch '((:write "x" "y"))))))
     (assert-equal :ask (sbcl-agent::command-kind ask-command)
                   "ask form should normalize to :ask")
+    (assert-equal :say (sbcl-agent::command-kind say-command)
+                  "say form should normalize to :say")
+    (assert-equal :thread-new (sbcl-agent::command-kind thread-new-command)
+                  "thread/new form should normalize to :thread-new")
+    (assert-equal :thread-list (sbcl-agent::command-kind thread-list-command)
+                  "thread/list form should normalize to :thread-list")
+    (assert-equal :thread-use (sbcl-agent::command-kind thread-use-command)
+                  "thread/use form should normalize to :thread-use")
+    (assert-equal :thread-show (sbcl-agent::command-kind thread-show-command)
+                  "thread/show form should normalize to :thread-show")
+    (assert-equal :turn-status (sbcl-agent::command-kind turn-status-command)
+                  "turn/status form should normalize to :turn-status")
+    (assert-equal :turn-resume (sbcl-agent::command-kind turn-resume-command)
+                  "turn/resume form should normalize to :turn-resume")
     (assert-equal :execute-actions (sbcl-agent::command-kind execute-actions-command)
                   "execute-actions form should normalize to :execute-actions")
     (assert-equal :describe-session (sbcl-agent::command-kind describe-session-command)
@@ -392,6 +1871,103 @@
         (assert-equal 5 (length (sbcl-agent::agent-session-events updated-session))
                       "ask dispatch should record command, transcript, pending-action reset, and response events")))))
 
+(defun say-dispatch-test ()
+  (let ((provider (make-test-provider))
+        (session (sbcl-agent::make-default-session))
+        (command (sbcl-agent::normalize-form-command '(say "ping"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (let ((response (getf result :response)))
+        (assert-equal :say kind "say command should dispatch as :say")
+        (assert-true (typep response 'sbcl-agent::assistant-response)
+                     "say command should return an assistant response")
+        (assert-true (search "Mock response: ping" (sbcl-agent::assistant-response-message response))
+                     "say command should be handled by the provider")
+        (assert-equal 0 (getf result :staged-action-count)
+                      "say without actions should stage zero actions")
+        (assert-equal 0 (getf result :immediate-action-count)
+                      "say without eval actions should auto-execute nothing")
+        (assert-true (stringp (getf (getf result :thread) :id))
+                     "say should return the active thread summary")
+        (assert-true (stringp (getf (getf result :turn) :id))
+                     "say should return a persisted turn summary")
+        (assert-equal :completed (getf (getf result :turn) :status)
+                      "say should finalize the turn as completed")
+        (assert-equal 2 (length (sbcl-agent::agent-session-messages updated-session))
+                      "say should persist user and assistant messages")
+        (assert-equal 1 (length (sbcl-agent::agent-session-turns updated-session))
+                      "say should persist one completed turn")
+        (assert-equal 1 (length (sbcl-agent::agent-session-operations updated-session))
+                      "say should persist one provider operation when no assistant actions exist")
+        (assert-equal :safe-read
+                      (getf (getf (sbcl-agent::operation-record-summary
+                                   (first (sbcl-agent::agent-session-operations updated-session)))
+                                  :policy-decision)
+                            :policy-id)
+                      "say provider operation should record a safe-read policy decision")
+        (assert-equal 11 (length (sbcl-agent::agent-session-events updated-session))
+                      "say should record turn and operation lifecycle events")))))
+
+(defun say-mixed-action-operations-test ()
+  (let ((provider (make-instance 'mixed-action-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (command (sbcl-agent::normalize-form-command '(say "execute and inspect"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (declare (ignore result))
+      (assert-equal :say kind "mixed-action say should dispatch as :say")
+      (assert-equal 3 (length (sbcl-agent::agent-session-operations updated-session))
+                    "mixed-action say should persist provider, immediate, and staged action operations")
+      (let* ((operations (sbcl-agent::agent-session-operations updated-session))
+             (eval-op (find "assistant-eval" operations :key #'sbcl-agent::operation-name :test #'string=))
+             (tool-op (find "assistant-tool" operations :key #'sbcl-agent::operation-name :test #'string=)))
+        (assert-true eval-op "mixed-action say should record an eval action operation")
+        (assert-true tool-op "mixed-action say should record a tool action operation")
+        (assert-equal :completed (sbcl-agent::operation-status eval-op)
+                      "immediate eval action operation should complete")
+        (assert-equal :staged (sbcl-agent::operation-status tool-op)
+                      "tool action operation should be marked staged")
+        (assert-equal :allowed
+                      (getf (sbcl-agent::operation-policy-decision eval-op) :decision)
+                      "immediate eval action should be marked allowed")
+        (assert-equal :runtime-eval-safe
+                      (getf (sbcl-agent::operation-policy-decision eval-op) :policy-id)
+                      "immediate eval action should record runtime-eval-safe policy")
+        (assert-equal :staged
+                      (getf (sbcl-agent::operation-policy-decision tool-op) :decision)
+                      "staged tool action should record staged decision")
+        (assert-equal :safe-read
+                      (getf (sbcl-agent::operation-policy-decision tool-op) :policy-id)
+                      "staged fs/read action should record its tool policy")))))
+
+(defun say-patch-action-approval-test ()
+  (let ((provider (make-instance 'patch-action-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (command (sbcl-agent::normalize-form-command '(say "prepare patch"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "patch-action say should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf result :turn) :status)
+                    "patch-action say should leave the turn awaiting approval")
+      (assert-equal 2 (length (sbcl-agent::agent-session-operations updated-session))
+                    "patch-action say should persist provider and patch action operations")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "patch-action say should leave the patch action staged for later")
+      (let ((patch-op (find "assistant-patch"
+                            (sbcl-agent::agent-session-operations updated-session)
+                            :key #'sbcl-agent::operation-name
+                            :test #'string=)))
+        (assert-true patch-op "patch-action say should record a patch action operation")
+        (assert-equal :awaiting-approval (sbcl-agent::operation-status patch-op)
+                      "patch action operation should wait for approval")
+        (assert-equal :approval-required
+                      (getf (sbcl-agent::operation-policy-decision patch-op) :decision)
+                      "patch action should record approval-required policy decision")
+        (assert-equal :workspace-write
+                      (getf (sbcl-agent::operation-policy-decision patch-op) :policy-id)
+                      "patch action should record workspace-write policy")))))
+
 (defun streaming-provider-test ()
   (let* ((provider (make-test-provider))
          (events '())
@@ -404,6 +1980,9 @@
     (assert-equal :MESSAGE-START
                   (sbcl-agent::provider-event-type (first events))
                   "stream should begin with a message-start event")
+    (assert-equal :RUN-STARTED
+                  (sbcl-agent::provider-event-effective-type (first events))
+                  "stream should normalize the first event to a run-started canonical type")
     (assert-true (search "Mock response: please read src/main.lisp"
                          (sbcl-agent::assistant-response-message response))
                  "streaming response should preserve the mock prefix")
@@ -414,6 +1993,19 @@
       (assert-equal 1
                     (length (sbcl-agent::assistant-response-actions assembled))
                     "stream assembly should preserve proposed actions"))))
+
+(defun provider-event-normalization-test ()
+  (let ((event (sbcl-agent::make-provider-event :type :action-proposal
+                                                :legacy-type :action-proposal
+                                                :canonical-type :tool-intent
+                                                :family :provider
+                                                :visibility :user
+                                                :payload '(:demo t))))
+    (assert-equal :TOOL-INTENT
+                  (sbcl-agent::provider-event-effective-type event)
+                  "provider events should expose the canonical tool-intent type")
+    (assert-true (sbcl-agent::provider-action-intent-event-p event)
+                 "provider action intent predicate should recognize canonical tool-intent events")))
 
 (defun openai-stream-line-parser-test ()
   (let* ((line (concatenate 'string "data: " "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"))
@@ -1679,6 +3271,16 @@
     (let ((summary (sbcl-agent::provider-session-summary session)))
       (assert-true (null (getf summary :wait-summary))
                    "provider session summary should omit heavyweight workflow fields")
+      (assert-true (stringp (getf summary :current-thread-id))
+                   "provider session summary should expose the active thread id")
+      (assert-true (>= (getf summary :thread-count) 1)
+                   "provider session summary should expose thread count")
+      (assert-true (integerp (getf summary :message-count))
+                   "provider session summary should expose persisted message count")
+      (assert-true (integerp (getf summary :turn-count))
+                   "provider session summary should expose persisted turn count")
+      (assert-true (integerp (getf summary :operation-count))
+                   "provider session summary should expose persisted operation count")
       (assert-equal 1
                     (length (getf summary :recent-transcript))
                     "provider session summary should keep recent transcript entries")
@@ -1733,14 +3335,203 @@
          (session (sbcl-agent::make-default-session)))
     (sbcl-agent::update-session-plan session "Persist session")
     (sbcl-agent::append-transcript-entry session :user "hello")
+    (sbcl-agent::create-thread session :title "Saved thread")
+    (let* ((thread (sbcl-agent::current-thread session))
+           (user-message (sbcl-agent::create-message session thread :user "saved prompt"))
+           (turn (sbcl-agent::start-turn session thread user-message))
+           (assistant-message (sbcl-agent::create-message session thread :assistant "saved response")))
+      (sbcl-agent::complete-turn session thread turn assistant-message))
     (sbcl-agent::save-session session path)
     (let ((loaded (sbcl-agent::load-session path)))
       (assert-equal "Persist session"
                     (sbcl-agent::agent-session-plan loaded)
                     "loaded session should preserve plan")
+      (assert-true (>= (length (sbcl-agent::agent-session-threads loaded)) 2)
+                   "loaded session should preserve created threads")
+      (assert-equal 2
+                    (length (sbcl-agent::agent-session-messages loaded))
+                    "loaded session should preserve persisted messages")
+      (assert-equal 1
+                    (length (sbcl-agent::agent-session-turns loaded))
+                    "loaded session should preserve persisted turns")
+      (assert-equal 0
+                    (length (sbcl-agent::agent-session-operations loaded))
+                    "manually created saved conversation should preserve operation collection when absent")
       (assert-equal 1
                     (length (sbcl-agent::agent-session-transcript loaded))
                     "loaded session should preserve transcript entries"))))
+
+(defun thread-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (multiple-value-bind (list-result list-kind list-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(thread/list))
+         provider
+         session)
+      (declare (ignore list-session))
+      (assert-equal :thread-list list-kind "thread/list should dispatch correctly")
+      (assert-true (>= (length list-result) 1)
+                   "thread/list should synthesize a default thread"))
+    (multiple-value-bind (new-result new-kind new-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(thread/new :title "Feature work"))
+         provider
+         session)
+      (assert-equal :thread-new new-kind "thread/new should dispatch correctly")
+      (assert-equal "Feature work"
+                    (getf new-result :title)
+                    "thread/new should use the requested title")
+      (assert-equal (getf new-result :id)
+                    (sbcl-agent::agent-session-current-thread-id new-session)
+                    "thread/new should select the created thread"))
+    (let* ((target (sbcl-agent::create-thread session :title "Switch target"))
+           (target-id (sbcl-agent::thread-id target)))
+      (multiple-value-bind (use-result use-kind used-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(thread/use ,target-id))
+           provider
+           session)
+        (assert-equal :thread-use use-kind "thread/use should dispatch correctly")
+        (assert-equal target-id
+                      (getf use-result :id)
+                      "thread/use should return the selected thread summary")
+        (assert-equal target-id
+                      (sbcl-agent::agent-session-current-thread-id used-session)
+                      "thread/use should update the active thread id")))))
+
+(defun thread-show-and-turn-status-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "inspect thread state"))
+     provider
+     session)
+    (multiple-value-bind (thread-result thread-kind thread-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(thread/show))
+         provider
+         session)
+      (declare (ignore thread-session))
+      (assert-equal :thread-show thread-kind "thread/show should dispatch correctly")
+      (assert-equal 2 (length (getf thread-result :messages))
+                    "thread/show should expose persisted thread messages")
+      (assert-equal 1 (length (getf thread-result :turns))
+                    "thread/show should expose persisted thread turns"))
+    (multiple-value-bind (turn-result turn-kind turn-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore turn-session))
+      (assert-equal :turn-status turn-kind "turn/status should dispatch correctly")
+      (assert-equal :completed (getf turn-result :status)
+                    "turn/status should expose the persisted turn status")
+      (assert-equal :user (getf (getf turn-result :user-message) :role)
+                    "turn/status should expose the user message")
+      (assert-equal :assistant (getf (getf turn-result :assistant-message) :role)
+                    "turn/status should expose the assistant message")
+      (assert-equal 1 (length (getf turn-result :operations))
+                    "turn/status should expose persisted operations")
+      (assert-equal :completed (getf (first (getf turn-result :operations)) :status)
+                    "turn/status should expose completed operation status")
+      (assert-equal :safe-read
+                    (getf (getf (first (getf turn-result :operations)) :policy-decision) :policy-id)
+                    "turn/status should expose operation policy decisions")
+      (assert-true (not (getf (getf turn-result :awaiting-approval) :awaiting-approval-p))
+                   "completed turn/status should report no approval wait")
+      (assert-equal 0
+                    (getf (getf turn-result :awaiting-approval) :blocked-operation-count)
+                    "completed turn/status should report zero blocked operations"))))
+
+(defun turn-status-approval-summary-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (multiple-value-bind (turn-result turn-kind turn-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore turn-session))
+      (assert-equal :turn-status turn-kind "turn/status should dispatch correctly for approval case")
+      (assert-equal :awaiting-approval (getf turn-result :status)
+                    "turn/status should surface awaiting-approval turn state")
+      (assert-true (getf (getf turn-result :awaiting-approval) :awaiting-approval-p)
+                   "turn/status should expose approval wait summary")
+      (assert-equal 1
+                    (getf (getf turn-result :awaiting-approval) :blocked-operation-count)
+                    "turn/status should report one blocked operation")
+      (assert-equal :workspace-write
+                    (getf (first (getf (getf turn-result :awaiting-approval) :blocked-operations)) :policy-id)
+                    "turn/status should report the waiting policy id"))))
+
+(defun turn-resume-approval-flow-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(turn/resume))
+        provider
+        session))
+     "Approval required"
+     "turn/resume should require approval before executing awaiting patch actions")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :workspace-write))
+     provider
+     session)
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume resume-kind "turn/resume should dispatch correctly")
+      (assert-equal 1 (getf resume-result :resumed-operation-count)
+                    "turn/resume should resume one blocked action operation")
+      (assert-equal 1 (getf resume-result :action-result-count)
+                    "turn/resume should execute one pending action")
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions resumed-session))
+                    "turn/resume should clear pending actions after execution"))
+    (multiple-value-bind (turn-result turn-kind turn-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore turn-session))
+      (assert-equal :turn-status turn-kind "turn/status should dispatch correctly after resume")
+      (assert-equal :completed (getf turn-result :status)
+                    "turn/resume should move the turn to completed")
+      (assert-true (not (getf (getf turn-result :awaiting-approval) :awaiting-approval-p))
+                   "turn/resume should clear approval wait summary")
+      (assert-equal 1 (length (getf turn-result :artifacts))
+                    "turn/resume should attach one artifact for the resumed patch write")
+      (assert-equal "generated.txt"
+                    (getf (first (getf turn-result :artifacts)) :title)
+                    "turn/resume should expose the created file artifact")
+      (let ((patch-op (find "assistant-patch"
+                            (getf turn-result :operations)
+                            :key (lambda (entry) (getf entry :name))
+                            :test #'string=)))
+        (assert-true patch-op "turn/status should still expose the patch operation after resume")
+        (assert-equal :completed (getf patch-op :status)
+                      "turn/resume should mark the patch operation completed")))
+    (multiple-value-bind (thread-result thread-kind thread-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(thread/show))
+         provider
+         session)
+      (declare (ignore thread-session))
+      (assert-equal :thread-show thread-kind "thread/show should dispatch after turn resume")
+      (assert-equal 1 (length (getf thread-result :artifacts))
+                    "thread/show should expose persisted thread artifacts after resume"))))
 
 (defun session-shell-commands-test ()
   (let* ((provider (make-test-provider))
@@ -2023,13 +3814,47 @@
         (sbcl-agent::execute-command (sbcl-agent::normalize-form-command patch-command)
                                       provider
                                       session)
-      (declare (ignore updated-session))
+      (assert-equal 1 (length (sbcl-agent::agent-session-artifacts updated-session))
+                    "direct patch command should create one artifact")
       (assert-equal :patch kind "patch command should dispatch as :patch after approval")
       (assert-equal :write (getf (first (getf result :patch)) :operation)
                     "patch should apply write operation")
+      (assert-equal "sbcl-agent-patch-test.txt"
+                    (getf (sbcl-agent::artifact-record-summary
+                           (first (sbcl-agent::agent-session-artifacts updated-session)))
+                          :title)
+                    "direct patch artifact should expose the written filename")
       (with-open-file (stream path :direction :input)
         (let ((line (read-line stream nil nil)))
           (assert-equal "patched" line "patch should write file contents"))))))
+
+(defun artifact-persistence-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (save-path "/tmp/sbcl-agent-artifact-session.sexp")
+         (patch-command '(patch ((:write "sbcl-agent-artifact-persist.txt" "persisted artifact")))))
+    (when (probe-file save-path)
+      (delete-file save-path))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :workspace-write))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command patch-command)
+     provider
+     session)
+    (sbcl-agent::save-session session save-path)
+    (let ((loaded (sbcl-agent::load-session save-path)))
+      (assert-equal 1 (length (sbcl-agent::agent-session-artifacts loaded))
+                    "saved sessions should restore artifact records")
+      (assert-equal "sbcl-agent-artifact-persist.txt"
+                    (getf (sbcl-agent::artifact-record-summary
+                           (first (sbcl-agent::agent-session-artifacts loaded)))
+                          :title)
+                    "loaded artifact records should preserve title")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::thread-detail loaded) :artifacts))
+                    "thread/show data should preserve artifacts after load"))))
 
 (defun patch-path-escape-test ()
   (let* ((provider (make-test-provider))
@@ -2049,10 +3874,46 @@
   (format t "Running sbcl-agent test suite...~%")
   (runtime-smoke-test)
   (format t "PASS runtime-smoke-test~%")
+  (direct-sandbox-tool-wrapper-test)
+  (format t "PASS direct-sandbox-tool-wrapper-test~%")
+  (repl-alias-test)
+  (format t "PASS repl-alias-test~%")
+  (main-command-helper-test)
+  (format t "PASS main-command-helper-test~%")
+  (openai-helper-coverage-test)
+  (format t "PASS openai-helper-coverage-test~%")
+  (json-helper-coverage-test)
+  (format t "PASS json-helper-coverage-test~%")
+  (sandbox-helper-coverage-test)
+  (format t "PASS sandbox-helper-coverage-test~%")
+  (tool-helper-coverage-test)
+  (format t "PASS tool-helper-coverage-test~%")
+  (policy-helper-coverage-test)
+  (format t "PASS policy-helper-coverage-test~%")
+  (openai-provider-io-coverage-test)
+  (format t "PASS openai-provider-io-coverage-test~%")
+  (provider-protocol-helper-coverage-test)
+  (format t "PASS provider-protocol-helper-coverage-test~%")
+  (sandbox-main-coverage-test)
+  (format t "PASS sandbox-main-coverage-test~%")
+  (turn-orchestrator-helper-coverage-test)
+  (format t "PASS turn-orchestrator-helper-coverage-test~%")
+  (shell-helper-coverage-test)
+  (format t "PASS shell-helper-coverage-test~%")
+  (shell-stream-rendering-coverage-test)
+  (format t "PASS shell-stream-rendering-coverage-test~%")
+  (turn-orchestrator-run-coverage-test)
+  (format t "PASS turn-orchestrator-run-coverage-test~%")
+  (conversation-helper-coverage-test)
+  (format t "PASS conversation-helper-coverage-test~%")
+  (sandbox-branch-coverage-test)
+  (format t "PASS sandbox-branch-coverage-test~%")
   (json-roundtrip-test)
   (format t "PASS json-roundtrip-test~%")
   (provider-decode-test)
   (format t "PASS provider-decode-test~%")
+  (mock-provider-helper-coverage-test)
+  (format t "PASS mock-provider-helper-coverage-test~%")
   (openai-provider-selection-test)
   (format t "PASS openai-provider-selection-test~%")
   (config-key-file-fallback-test)
@@ -2063,6 +3924,8 @@
   (format t "PASS config-legacy-key-filename-test~%")
   (config-with-overrides-test)
   (format t "PASS config-with-overrides-test~%")
+  (config-helper-coverage-test)
+  (format t "PASS config-helper-coverage-test~%")
   (openai-request-model-selection-test)
   (format t "PASS openai-request-model-selection-test~%")
   (invalid-eval-action-dropped-test)
@@ -2075,8 +3938,16 @@
   (format t "PASS shell-eval-test~%")
   (ask-dispatch-test)
   (format t "PASS ask-dispatch-test~%")
+  (say-dispatch-test)
+  (format t "PASS say-dispatch-test~%")
+  (say-mixed-action-operations-test)
+  (format t "PASS say-mixed-action-operations-test~%")
+  (say-patch-action-approval-test)
+  (format t "PASS say-patch-action-approval-test~%")
   (streaming-provider-test)
   (format t "PASS streaming-provider-test~%")
+  (provider-event-normalization-test)
+  (format t "PASS provider-event-normalization-test~%")
   (openai-stream-line-parser-test)
   (format t "PASS openai-stream-line-parser-test~%")
   (openai-stream-response-decode-test)
@@ -2211,6 +4082,14 @@
   (format t "PASS capability-grant-session-test~%")
   (session-save-load-test)
   (format t "PASS session-save-load-test~%")
+  (thread-shell-commands-test)
+  (format t "PASS thread-shell-commands-test~%")
+  (thread-show-and-turn-status-test)
+  (format t "PASS thread-show-and-turn-status-test~%")
+  (turn-status-approval-summary-test)
+  (format t "PASS turn-status-approval-summary-test~%")
+  (turn-resume-approval-flow-test)
+  (format t "PASS turn-resume-approval-flow-test~%")
   (session-shell-commands-test)
   (format t "PASS session-shell-commands-test~%")
   (list-tools-test)
@@ -2239,6 +4118,8 @@
   (format t "PASS git-write-flow-test~%")
   (patch-approval-and-apply-test)
   (format t "PASS patch-approval-and-apply-test~%")
+  (artifact-persistence-test)
+  (format t "PASS artifact-persistence-test~%")
   (patch-path-escape-test)
   (format t "PASS patch-path-escape-test~%")
   (format t "All tests passed.~%")

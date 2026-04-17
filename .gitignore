@@ -1,6 +1,9 @@
 .cache/
 .DS_Store
 tmp-patch-shell.txt
+tmp/generated.txt
+tmp/shell-helper.txt
+tmp/followup-generated.txt
 *.key
 .bundle/
 .gem/

@@ -94,6 +94,8 @@ Top-level entrypoints in [`bin/`](/Volumes/data/development/sbcl-agent/bin) disp
 
 Streaming is now more event-aware than the original shell implementation, although the OpenAI path still carries some transitional behavior while the event model continues to harden.
 
+Provider requests are also becoming more structured. The provider boundary now carries thread, turn, runtime, workspace, and policy context instead of relying only on a flat prompt string.
+
 ### Conversation layer
 
 [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp) introduces durable interaction objects:
@@ -119,6 +121,8 @@ These records make interaction state explicit instead of treating transcript ent
 - finalizing artifacts and turn outcomes
 
 This is the structural shift from "one streamed response" to "one interaction lifecycle."
+
+That lifecycle now includes resumed-turn follow-up in the implemented path: after approval-gated actions execute, a provider can be called again to continue and complete the same turn.
 
 ### Session runtime
 
@@ -171,7 +175,7 @@ The user types Lisp forms or shell commands and gets results immediately. This i
 
 The user works through persistent threads and turns. Assistant text can stream, operations can be represented explicitly, approvals can pause the turn, and artifacts can be attached to the result.
 
-`(say ...)` is the clearest expression of this direction today, while `(ask ...)` remains as a compatibility surface.
+`(say ...)` is the clearest expression of this direction today, while `(ask ...)` remains as a compatibility surface. Internally, both now share the same turn runner, so they persist the same core turn, operation, and assistant-message records.
 
 ## Transactional Engineering Model
 
@@ -216,13 +220,15 @@ The runtime uses explicit capability grants for stateful operations. Important c
 - `:process-run`
 - `:git-read`
 - `:git-write`
+- `:runtime-eval-safe`
+- `:runtime-eval-mutate`
 - `:workspace-write`
 
 The conversation runtime is being built to consume the same gates rather than creating a second, less-governed execution path.
 
 ### Approval checkpoints
 
-Assistant-proposed actions and certain turn operations can pause in an approval state. The user can then inspect the turn and explicitly resume it.
+Assistant-proposed actions and certain turn operations can pause in an approval state. The user can then inspect the turn and explicitly resume it. Governed mutation turns now create or attach workflow evidence more directly, including work-item linkage and checkpoint metadata before execution continues.
 
 ### Checkpointing, replay, and reconciliation
 

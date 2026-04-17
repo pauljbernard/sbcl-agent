@@ -55,6 +55,9 @@
                             "Evaluate read-only or low-risk runtime expressions in the current image."
                             :risk-level :medium
                             :default-grant-mode :implicit)
+(register-capability-policy :runtime-eval-mutate
+                            "Evaluate runtime expressions that intentionally mutate the current image."
+                            :risk-level :high)
 (register-capability-policy :process-run
                             "Execute a local process inside the sandbox runtime."
                             :risk-level :high)

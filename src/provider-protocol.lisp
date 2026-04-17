@@ -4,7 +4,14 @@
 
 (defstruct provider-request
   prompt
-  session-summary)
+  session-summary
+  thread-context
+  turn-context
+  runtime-summary
+  workspace-summary
+  policy-summary
+  operator-mode
+  stream-p)
 
 (defstruct assistant-action
   type
@@ -31,6 +38,9 @@
 (defgeneric provider-capabilities (provider))
 (defgeneric send-request (provider request))
 (defgeneric stream-request (provider request event-handler))
+
+(defun provider-turn-followup-p (provider)
+  (member :turn-followup (provider-capabilities provider)))
 
 (defun legacy-provider-event-type->canonical-type (type)
   (case type
@@ -84,17 +94,68 @@
         :recent-transcript (mapcar #'provider-transcript-entry
                                    (recent-session-transcript session))))
 
-(defun make-provider-request-from-session (prompt session)
+(defun provider-runtime-summary (session)
+  (ensure-default-thread session)
+  (list :cwd (agent-session-cwd session)
+        :package (agent-session-package session)
+        :approved-policies (session-approved-policies session)
+        :pending-action-count (length (agent-session-pending-actions session))
+        :active-worker-count (active-worker-count session)))
+
+(defun provider-workspace-summary (session)
+  (ensure-default-thread session)
+  (list :cwd (agent-session-cwd session)
+        :artifact-count (length (agent-session-artifacts session))
+        :work-item-count (length (agent-session-work-items session))
+        :workflow-record-count (length (agent-session-workflow-records session))))
+
+(defun provider-policy-summary (session)
+  (ensure-default-thread session)
+  (list :approved-policies (session-approved-policies session)
+        :capability-grants (session-capability-grants-summary session)))
+
+(defun provider-thread-context (session &optional thread)
+  (let ((active-thread (or thread (current-thread session))))
+    (when active-thread
+      (thread-record-summary active-thread))))
+
+(defun provider-turn-context (session &optional turn)
+  (let ((active-turn (or turn (most-recent-thread-turn session))))
+    (when active-turn
+      (turn-detail session (turn-id active-turn)))))
+
+(defun make-provider-request-from-session (prompt session
+                                          &key thread turn
+                                            (operator-mode :repl-bridge)
+                                            stream-p)
   (let ((active-session (or session (ignore-errors (ensure-session)))))
     (make-provider-request :prompt prompt
                            :session-summary (when active-session
-                                              (provider-session-summary active-session)))))
+                                              (provider-session-summary active-session))
+                           :thread-context (when active-session
+                                             (provider-thread-context active-session thread))
+                           :turn-context (when active-session
+                                           (provider-turn-context active-session turn))
+                           :runtime-summary (when active-session
+                                              (provider-runtime-summary active-session))
+                           :workspace-summary (when active-session
+                                                (provider-workspace-summary active-session))
+                           :policy-summary (when active-session
+                                             (provider-policy-summary active-session))
+                           :operator-mode operator-mode
+                           :stream-p stream-p)))
 
 (defun assistant-response->string (response)
   (assistant-response-message response))
 
-(defun send-prompt (provider prompt &optional session)
-  (send-request provider (make-provider-request-from-session prompt session)))
+(defun send-prompt (provider prompt &optional session &key thread turn (operator-mode :repl-bridge))
+  (send-request provider
+                (make-provider-request-from-session prompt
+                                                   session
+                                                   :thread thread
+                                                   :turn turn
+                                                   :operator-mode operator-mode
+                                                   :stream-p nil)))
 
 (defun emit-provider-event (event-handler type payload &key family canonical-type entity-id thread-id turn-id (visibility :user) metadata)
   (funcall event-handler
@@ -131,9 +192,15 @@
      :actions actions
      :metadata metadata)))
 
-(defun stream-prompt (provider prompt event-handler &optional session)
+(defun stream-prompt (provider prompt event-handler &optional session
+                         &key thread turn (operator-mode :repl-bridge))
   (stream-request provider
-                  (make-provider-request-from-session prompt session)
+                  (make-provider-request-from-session prompt
+                                                     session
+                                                     :thread thread
+                                                     :turn turn
+                                                     :operator-mode operator-mode
+                                                     :stream-p t)
                   event-handler))
 
 (defun normalize-action-type (value)
@@ -218,6 +285,15 @@
            payload)))
     (t
      payload)))
+
+(defun mutating-eval-action-p (action)
+  (and (eq (assistant-action-type action) :eval)
+       (let ((payload (assistant-action-payload action)))
+         (and (listp payload)
+              (or (getf payload :MUTATING)
+                  (getf payload :mutating)
+                  (eq (getf payload :MODE) :mutate)
+                  (eq (getf payload :mode) :mutate))))))
 
 (defun execute-assistant-action (action session &key thread turn operation)
   (case (assistant-action-type action)

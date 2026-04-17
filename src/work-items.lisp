@@ -884,8 +884,12 @@
                      :transactions (list transaction)
                      :checkpoints '()
                      :provenance (make-initial-provenance-record source-snapshot image-snapshot-ref))))
-    (setf (agent-session-work-items session)
-          (append (agent-session-work-items session) (list work-item)))
+    (multiple-value-bind (work-items tail)
+        (append-linked-item (agent-session-work-items session)
+                            (agent-session-work-items-tail session)
+                            work-item)
+      (setf (agent-session-work-items session) work-items
+            (agent-session-work-items-tail session) tail))
     (append-work-item-workflow-entry session work-item :inspect :work-item-created (work-item-summary work-item) :status :open)
     (refresh-work-item-pending-validations session work-item)
     (append-session-event session :work-item-created (work-item-summary work-item))
@@ -1059,6 +1063,182 @@
                                            :closure-decision closure-decision
                                            :rollback-point (work-item-rollback-point work-item)
                                            :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item)))
+                                     :status (case status
+                                               (:committed :committed)
+                                               (:failed :quarantined)
+                                               (:rolled-back :rolled-back)
+                                               (t :closed))
+                                                 :evidence (work-item-summary work-item)))))
+      work-item))))
+
+(defun operation-bound-work-item (session operation)
+  (let ((work-item-id (getf (operation-metadata operation) :work-item-id)))
+    (and work-item-id
+         (find-work-item session work-item-id))))
+
+(defun update-work-item-status-from-operation (session operation status
+                                               &key closure-decision error result)
+  (let ((work-item (operation-bound-work-item session operation)))
+    (when work-item
+      (let ((transaction (current-work-item-transaction work-item))
+            (result-payload (and (listp result) (getf result :result)))
+            (patch-results (and (listp (and (listp result) (getf result :result)))
+                                (getf (getf result :result) :patch)))
+            (policy-id (getf (operation-policy-decision operation) :policy-id)))
+        (when transaction
+          (setf (mutation-transaction-state transaction)
+                (case status
+                  (:planned (if (mutation-transaction-checkpoint-id transaction)
+                                (mutation-transaction-state transaction)
+                                :planned))
+                  (:checkpointed :checkpointed)
+                  (:mutating :mutating)
+                  (:committed :committed)
+                  (:rolled-back :rolled-back)
+                  (:failed :failed)
+                  (t (or (mutation-transaction-state transaction) :created)))
+                (mutation-transaction-rollback-status transaction)
+                (case status
+                  (:rolled-back :rolled-back)
+                  (:failed :required)
+                  (:committed :not-needed)
+                  (:quarantined :required)
+                  (t (mutation-transaction-rollback-status transaction)))
+                (mutation-transaction-rollback-detail transaction)
+                (case status
+                  (:failed (list :reason error :recommended-action :rollback-or-quarantine))
+                  (:rolled-back (list :reason :cancelled :restored-p nil))
+                  (:quarantined (list :reason error :recommended-action :operator-review))
+                  (:committed (list :reason :commit-succeeded
+                                    :operation-id (operation-id operation)
+                                    :turn-id (operation-turn-id operation)))
+                  (t (mutation-transaction-rollback-detail transaction)))))
+        (setf (work-item-status work-item) status
+              (work-item-updated-at work-item) (get-universal-time)
+              (work-item-closure-decision work-item) closure-decision
+              (work-item-rollback-point work-item)
+              (list :transaction-id (first (last (work-item-transaction-ids work-item)))
+                    :rollback-status (if (member status '(:rolled-back :failed) :test #'eq)
+                                         :available
+                                         :captured))
+              (provenance-record-rollback-availability (work-item-provenance work-item))
+              (if (member status '(:rolled-back :failed) :test #'eq) :available :captured))
+        (when (and patch-results (member status '(:mutating :committed) :test #'eq))
+          (append-work-item-source-mutation
+           work-item
+           (list :kind :conversation-patch
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :result patch-results)
+           session))
+        (when (and (eq policy-id :git-write)
+                   (member status '(:mutating :committed) :test #'eq))
+          (append-work-item-source-mutation
+           work-item
+           (list :kind :conversation-tool-write
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :operation-name (operation-name operation)
+                 :result result-payload)
+           session))
+        (when (and (eq policy-id :runtime-eval-mutate)
+                   (member status '(:mutating :committed) :test #'eq))
+          (append-work-item-image-mutation
+           work-item
+           (list :kind :conversation-runtime-mutation
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :operation-name (operation-name operation)
+                 :result result-payload)
+           session))
+        (append-work-item-resource-effect
+         work-item
+         (list :kind :conversation-operation-result
+               :operation-id (operation-id operation)
+               :turn-id (operation-turn-id operation)
+               :operation-name (operation-name operation)
+               :policy-id policy-id
+               :status status
+               :result result-payload)
+         session)
+        (refresh-work-item-taint-state work-item)
+        (refresh-work-item-pending-validations session work-item)
+        (set-work-item-next-action session work-item
+                                   (case status
+                                     (:planned (list :type :checkpoint :suggested-step :checkpoint))
+                                     (:checkpointed (list :type :mutate :suggested-step :resume-turn))
+                                     (:mutating (list :type :observe-runtime :suggested-step :await-runtime-effects))
+                                     (:committed nil)
+                                     (:failed (list :type :review-failure :suggested-step :quarantine-or-rollback))
+                                     (:rolled-back nil)
+                                     (:quarantined (list :type :operator-review :suggested-step :resume-or-rollback))
+                                     (t (work-item-next-action work-item))))
+        (set-work-item-resume-payload session work-item
+                                      (case status
+                                        (:planned (list :resume-command :checkpoint
+                                                        :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                        :replay-id (mutation-transaction-replay-id transaction)
+                                                        :rollback-point (work-item-rollback-point work-item)))
+                                        (:checkpointed (list :resume-command :turn/resume
+                                                             :turn-id (operation-turn-id operation)
+                                                             :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                             :replay-id (mutation-transaction-replay-id transaction)))
+                                        (:mutating (list :resume-command :observe-runtime
+                                                         :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                         :replay-id (mutation-transaction-replay-id transaction)
+                                                         :operation-id (operation-id operation)))
+                                        (:committed nil)
+                                        (:rolled-back nil)
+                                        (:failed (list :resume-command :quarantine-or-rollback
+                                                       :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                       :replay-id (mutation-transaction-replay-id transaction)
+                                                       :error error))
+                                        (:quarantined (work-item-resume-payload work-item))
+                                        (t (work-item-resume-payload work-item))))
+        (append-work-item-runtime-observation
+         session
+         work-item
+         :conversation-operation-state
+         (list :operation-id (operation-id operation)
+               :turn-id (operation-turn-id operation)
+               :operation-name (operation-name operation)
+               :work-item-status status
+               :error error))
+        (append-work-item-workflow-entry session work-item :reconcile :conversation-operation-status-transition
+                                         (list :operation-id (operation-id operation)
+                                               :turn-id (operation-turn-id operation)
+                                               :operation-name (operation-name operation)
+                                               :status status
+                                               :closure-decision closure-decision
+                                               :error error)
+                                         :status (case status
+                                                   (:planned :planned)
+                                                   (:mutating :in-progress)
+                                                   (:committed :ready-to-close)
+                                                   (:failed :requires-review)
+                                                   (:rolled-back :rolled-back)
+                                                   (t :open)))
+        (when (member status '(:committed :failed :rolled-back) :test #'eq)
+          (update-work-item-validation-results
+           session
+           work-item
+           (if (eq status :committed) :passed :failed)
+           (list :operation-id (operation-id operation)
+                 :status status
+                 :result-summary result-payload)
+           (if (eq status :committed) :passed :failed)
+           (list :operation-id (operation-id operation)
+                 :status status
+                 :requires-fresh-run-p t))
+          (let ((record (work-item-workflow-record session work-item)))
+            (when record
+              (close-workflow-record session
+                                     record
+                                     (list :work-item-status status
+                                           :closure-decision closure-decision
+                                           :rollback-point (work-item-rollback-point work-item)
+                                           :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item))
+                                           :operation-id (operation-id operation))
                                      :status (case status
                                                (:committed :committed)
                                                (:failed :quarantined)

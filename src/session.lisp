@@ -5,20 +5,32 @@
   cwd
   package
   threads
+  threads-tail
   current-thread-id
   messages
+  messages-tail
   turns
+  turns-tail
   operations
+  operations-tail
   artifacts
+  artifacts-tail
   transcript
+  transcript-tail
   plan
   events
+  events-tail
   capability-grants
+  capability-grants-tail
   pending-actions
   tasks
+  tasks-tail
   work-items
+  work-items-tail
   workflow-records
-  workers)
+  workflow-records-tail
+  workers
+  workers-tail)
 
 (defparameter *current-session* nil)
 
@@ -29,20 +41,55 @@
    :cwd cwd
    :package package
    :threads '()
+   :threads-tail nil
    :current-thread-id nil
    :messages '()
+   :messages-tail nil
    :turns '()
+   :turns-tail nil
    :operations '()
+   :operations-tail nil
    :artifacts '()
+   :artifacts-tail nil
    :transcript '()
+   :transcript-tail nil
    :plan nil
    :events '()
+   :events-tail nil
    :capability-grants '()
+   :capability-grants-tail nil
    :pending-actions '()
    :tasks '()
+   :tasks-tail nil
    :work-items '()
+   :work-items-tail nil
    :workflow-records '()
-   :workers '()))
+   :workflow-records-tail nil
+   :workers '()
+   :workers-tail nil))
+
+(defun append-linked-item (list tail item)
+  (let ((cell (list item)))
+    (if list
+        (progn
+          (setf (cdr tail) cell)
+          (values list cell))
+        (values cell cell))))
+
+(defun rebuild-agent-session-tails (session)
+  (setf (agent-session-threads-tail session) (last (agent-session-threads session))
+        (agent-session-messages-tail session) (last (agent-session-messages session))
+        (agent-session-turns-tail session) (last (agent-session-turns session))
+        (agent-session-operations-tail session) (last (agent-session-operations session))
+        (agent-session-artifacts-tail session) (last (agent-session-artifacts session))
+        (agent-session-transcript-tail session) (last (agent-session-transcript session))
+        (agent-session-events-tail session) (last (agent-session-events session))
+        (agent-session-capability-grants-tail session) (last (agent-session-capability-grants session))
+        (agent-session-tasks-tail session) (last (agent-session-tasks session))
+        (agent-session-work-items-tail session) (last (agent-session-work-items session))
+        (agent-session-workflow-records-tail session) (last (agent-session-workflow-records session))
+        (agent-session-workers-tail session) (last (agent-session-workers session)))
+  session)
 
 (defun ensure-session (&optional session)
   (let ((active-session (or session
@@ -60,14 +107,22 @@
                                :turn-id turn-id
                                :visibility visibility
                                :metadata metadata)))
-    (setf (agent-session-events session)
-          (append (agent-session-events session) (list event)))
+    (multiple-value-bind (events tail)
+        (append-linked-item (agent-session-events session)
+                            (agent-session-events-tail session)
+                            event)
+      (setf (agent-session-events session) events
+            (agent-session-events-tail session) tail))
     event))
 
 (defun append-transcript-entry (session role content)
   (let ((entry (list :role role :content content)))
-    (setf (agent-session-transcript session)
-          (append (agent-session-transcript session) (list entry)))
+    (multiple-value-bind (transcript tail)
+        (append-linked-item (agent-session-transcript session)
+                            (agent-session-transcript-tail session)
+                            entry)
+      (setf (agent-session-transcript session) transcript
+            (agent-session-transcript-tail session) tail))
     (append-session-event session :transcript entry)
     entry))
 
@@ -80,6 +135,19 @@
   (setf (agent-session-pending-actions session) actions)
   (append-session-event session :pending-actions actions)
   actions)
+
+(defun remove-pending-actions (session actions)
+  (let* ((current (agent-session-pending-actions session))
+         (remaining (set-difference current
+                                    actions
+                                    :test #'eq))
+         (removed-count (- (length current) (length remaining))))
+    (setf (agent-session-pending-actions session) remaining)
+    (append-session-event session
+                          :pending-actions-removed
+                          (list :removed-count removed-count
+                                :remaining-count (length remaining)))
+    remaining))
 
 (defun clear-pending-actions (session)
   (setf (agent-session-pending-actions session) '())
@@ -119,8 +187,12 @@
                                             :granted-at (get-universal-time)
                                             :scope scope
                                             :metadata metadata))
-      (setf (agent-session-capability-grants session)
-            (append (agent-session-capability-grants session) (list existing))))
+      (multiple-value-bind (grants tail)
+          (append-linked-item (agent-session-capability-grants session)
+                              (agent-session-capability-grants-tail session)
+                              existing)
+        (setf (agent-session-capability-grants session) grants
+              (agent-session-capability-grants-tail session) tail)))
     (append-session-event session :capability-granted (capability-grant-summary existing))
     existing))
 
@@ -325,8 +397,13 @@
         (error "Session file ~A did not contain an AGENT-SESSION" path))
       (normalize-session-capability-grants session)
       (ensure-default-thread session)
+      (rebuild-agent-session-tails session)
+      (rebuild-conversation-tails session)
+      (rebuild-workflow-record-tails session)
       (setf (agent-session-workers session)
             (serializable-worker-states session))
+      (setf (agent-session-workers-tail session)
+            (last (agent-session-workers session)))
       (setf *current-session* session)
       session)))
 

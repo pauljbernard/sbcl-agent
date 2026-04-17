@@ -53,7 +53,11 @@ Implemented or substantially in place:
 - canonical provider-event normalization
 - thread, message, turn, operation, and artifact records
 - shell commands for `say`, thread management, turn status, and turn resume
+- shared `ask` and `say` turn execution with `ask` kept as the REPL-bridge compatibility path
 - approval-aware turn orchestration
+- governed mutation binding for patch turns, mutating runtime eval turns, and write-class tool turns
+- provider follow-up after resumed turns when the provider supports turn continuation
+- richer shell rendering for turn status and turn resume results
 - session persistence, tasks, workers, work-items, replay groups, and image reconciliation records
 
 Still incomplete or still planned:
@@ -132,10 +136,11 @@ Already in place:
 - a dedicated turn orchestration module
 - turn creation, streaming, action recording, policy handling, and completion flow
 - approval-aware pause and resume behavior
+- provider follow-up after resumed mutation turns, including follow-up event visibility
 
 Remaining work:
 
-- richer provider follow-up loops with structured operation results
+- richer multi-step provider follow-up loops with fuller structured operation/result payloads
 - stronger operation-state transitions and artifact finalization
 - clearer separation between conversation orchestration and shell rendering
 
@@ -165,11 +170,12 @@ Already in place:
 
 - artifact records linked to turns and operations
 - existing workflow structures for validation, replay, and reconciliation
+- work-item creation and checkpointing for governed mutation turns
 
 Remaining work:
 
 - emit and attach richer artifacts for file writes, diffs, tests, checkpoints, and validations
-- make mutating turns attach more consistently to work-items and workflow records
+- make every governed mutating turn attach consistently to work-items and workflow records
 - improve operator rendering of evidence
 
 ### Stage 6. Operator UX refinement

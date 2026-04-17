@@ -7,8 +7,11 @@
   updated-at
   summary
   message-ids
+  message-ids-tail
   turn-ids
+  turn-ids-tail
   artifact-ids
+  artifact-ids-tail
   status
   metadata)
 
@@ -33,7 +36,9 @@
   started-at
   completed-at
   operation-ids
+  operation-ids-tail
   artifact-ids
+  artifact-ids-tail
   error-state
   metadata)
 
@@ -89,10 +94,31 @@
                  :updated-at timestamp
                  :summary summary
                  :message-ids '()
+                 :message-ids-tail nil
                  :turn-ids '()
+                 :turn-ids-tail nil
                  :artifact-ids '()
+                 :artifact-ids-tail nil
                  :status :active
                  :metadata metadata)))
+
+(defun rebuild-thread-tails (thread)
+  (setf (thread-message-ids-tail thread) (last (thread-message-ids thread))
+        (thread-turn-ids-tail thread) (last (thread-turn-ids thread))
+        (thread-artifact-ids-tail thread) (last (thread-artifact-ids thread)))
+  thread)
+
+(defun rebuild-turn-tails (turn)
+  (setf (turn-operation-ids-tail turn) (last (turn-operation-ids turn))
+        (turn-artifact-ids-tail turn) (last (turn-artifact-ids turn)))
+  turn)
+
+(defun rebuild-conversation-tails (session)
+  (dolist (thread (agent-session-threads session))
+    (rebuild-thread-tails thread))
+  (dolist (turn (agent-session-turns session))
+    (rebuild-turn-tails turn))
+  session)
 
 (defun thread-record-summary (thread)
   (list :id (thread-id thread)
@@ -117,11 +143,15 @@
         (if existing
             (progn
               (setf (agent-session-current-thread-id session) (thread-id existing))
+              (unless (agent-session-threads-tail session)
+                (setf (agent-session-threads-tail session)
+                      (last (agent-session-threads session))))
               existing)
             (let ((thread (make-session-thread :title "Default Thread"
                                                :summary "Auto-created default conversation thread."
                                                :metadata '(:default-p t))))
               (setf (agent-session-threads session) (list thread)
+                    (agent-session-threads-tail session) (last (agent-session-threads session))
                     (agent-session-current-thread-id session) (thread-id thread))
               thread)))))
 
@@ -135,9 +165,13 @@
                                                         (1+ (length (agent-session-threads session)))))
                                      :summary summary
                                      :metadata metadata)))
-    (setf (agent-session-threads session)
-          (append (agent-session-threads session) (list thread))
-          (agent-session-current-thread-id session) (thread-id thread))
+    (multiple-value-bind (threads tail)
+        (append-linked-item (agent-session-threads session)
+                            (agent-session-threads-tail session)
+                            thread)
+      (setf (agent-session-threads session) threads
+            (agent-session-threads-tail session) tail))
+    (setf (agent-session-current-thread-id session) (thread-id thread))
     (append-session-event session
                           :thread-created
                           (thread-record-summary thread)
@@ -254,6 +288,11 @@
                    (string= thread-id (message-thread-id message)))
                  (agent-session-messages session)))
 
+(defun list-turn-messages (session turn-id)
+  (remove-if-not (lambda (message)
+                   (string= turn-id (message-turn-id message)))
+                 (agent-session-messages session)))
+
 (defun list-thread-turns (session thread-id)
   (remove-if-not (lambda (turn)
                    (string= thread-id (turn-thread-id turn)))
@@ -285,11 +324,19 @@
                                :stream-fragments stream-fragments
                                :finalized-p finalized-p
                                :metadata metadata)))
-    (setf (agent-session-messages session)
-          (append (agent-session-messages session) (list message))
-          (thread-message-ids thread)
-          (append (thread-message-ids thread) (list (message-id message)))
-          (thread-updated-at thread) (get-universal-time))
+    (multiple-value-bind (messages tail)
+        (append-linked-item (agent-session-messages session)
+                            (agent-session-messages-tail session)
+                            message)
+      (setf (agent-session-messages session) messages
+            (agent-session-messages-tail session) tail))
+    (multiple-value-bind (message-ids tail)
+        (append-linked-item (thread-message-ids thread)
+                            (thread-message-ids-tail thread)
+                            (message-id message))
+      (setf (thread-message-ids thread) message-ids
+            (thread-message-ids-tail thread) tail))
+    (setf (thread-updated-at thread) (get-universal-time))
     (append-session-event session
                           :message-created
                           (message-record-summary message)
@@ -311,12 +358,20 @@
                          :artifact-ids '()
                          :error-state nil
                          :metadata metadata)))
-    (setf (message-turn-id user-message) (turn-id turn)
-          (agent-session-turns session)
-          (append (agent-session-turns session) (list turn))
-          (thread-turn-ids thread)
-          (append (thread-turn-ids thread) (list (turn-id turn)))
-          (thread-updated-at thread) (get-universal-time))
+    (setf (message-turn-id user-message) (turn-id turn))
+    (multiple-value-bind (turns tail)
+        (append-linked-item (agent-session-turns session)
+                            (agent-session-turns-tail session)
+                            turn)
+      (setf (agent-session-turns session) turns
+            (agent-session-turns-tail session) tail))
+    (multiple-value-bind (turn-ids tail)
+        (append-linked-item (thread-turn-ids thread)
+                            (thread-turn-ids-tail thread)
+                            (turn-id turn))
+      (setf (thread-turn-ids thread) turn-ids
+            (thread-turn-ids-tail thread) tail))
+    (setf (thread-updated-at thread) (get-universal-time))
     (append-session-event session
                           :turn-started
                           (turn-record-summary turn)
@@ -366,6 +421,54 @@
                           :visibility :operator)
     turn))
 
+(defun remove-turn-metadata-key (turn key)
+  (labels ((strip (plist)
+             (cond
+               ((null plist) '())
+               ((eq (first plist) key)
+                (strip (cddr plist)))
+               (t
+                (list* (first plist)
+                       (second plist)
+                       (strip (cddr plist)))))))
+    (setf (turn-metadata turn) (strip (turn-metadata turn)))
+    turn))
+
+(defun mark-turn-followup-started (session turn &key metadata)
+  (let ((thread (find-thread session (turn-thread-id turn))))
+    (remove-turn-metadata-key turn :followup-state)
+    (setf (turn-status turn) :running
+          (turn-metadata turn) (append (turn-metadata turn)
+                                       (append (list :followup-state :running) metadata)))
+    (when thread
+      (setf (thread-updated-at thread) (get-universal-time)))
+    (append-session-event session
+                          :turn-followup-started
+                          (turn-record-summary turn)
+                          :family :conversation
+                          :entity-id (turn-id turn)
+                          :thread-id (turn-thread-id turn)
+                          :turn-id (turn-id turn)
+                          :visibility :operator)
+    turn))
+
+(defun mark-turn-followup-completed (session turn &key metadata)
+  (let ((thread (find-thread session (turn-thread-id turn))))
+    (remove-turn-metadata-key turn :followup-state)
+    (setf (turn-metadata turn) (append (turn-metadata turn)
+                                       (append (list :followup-state :completed) metadata)))
+    (when thread
+      (setf (thread-updated-at thread) (get-universal-time)))
+    (append-session-event session
+                          :turn-followup-completed
+                          (turn-record-summary turn)
+                          :family :conversation
+                          :entity-id (turn-id turn)
+                          :thread-id (turn-thread-id turn)
+                          :turn-id (turn-id turn)
+                          :visibility :operator)
+    turn))
+
 (defun start-operation (session thread turn kind name input &key policy-decision metadata)
   (let ((operation (make-operation :id (make-operation-id)
                                    :thread-id (thread-id thread)
@@ -379,10 +482,18 @@
                                    :started-at (get-universal-time)
                                    :completed-at nil
                                    :metadata metadata)))
-    (setf (agent-session-operations session)
-          (append (agent-session-operations session) (list operation))
-          (turn-operation-ids turn)
-          (append (turn-operation-ids turn) (list (operation-id operation))))
+    (multiple-value-bind (operations tail)
+        (append-linked-item (agent-session-operations session)
+                            (agent-session-operations-tail session)
+                            operation)
+      (setf (agent-session-operations session) operations
+            (agent-session-operations-tail session) tail))
+    (multiple-value-bind (operation-ids tail)
+        (append-linked-item (turn-operation-ids turn)
+                            (turn-operation-ids-tail turn)
+                            (operation-id operation))
+      (setf (turn-operation-ids turn) operation-ids
+            (turn-operation-ids-tail turn) tail))
     (append-session-event session
                           :operation-started
                           (operation-record-summary operation)
@@ -425,14 +536,26 @@
                                  :image-ref image-ref
                                  :created-at (get-universal-time)
                                  :metadata metadata)))
-    (setf (agent-session-artifacts session)
-          (append (agent-session-artifacts session) (list artifact))
-          (thread-artifact-ids thread)
-          (append (thread-artifact-ids thread) (list (artifact-id artifact)))
-          (thread-updated-at thread) (get-universal-time))
+    (multiple-value-bind (artifacts tail)
+        (append-linked-item (agent-session-artifacts session)
+                            (agent-session-artifacts-tail session)
+                            artifact)
+      (setf (agent-session-artifacts session) artifacts
+            (agent-session-artifacts-tail session) tail))
+    (multiple-value-bind (artifact-ids tail)
+        (append-linked-item (thread-artifact-ids thread)
+                            (thread-artifact-ids-tail thread)
+                            (artifact-id artifact))
+      (setf (thread-artifact-ids thread) artifact-ids
+            (thread-artifact-ids-tail thread) tail))
+    (setf (thread-updated-at thread) (get-universal-time))
     (when turn
-      (setf (turn-artifact-ids turn)
-            (append (turn-artifact-ids turn) (list (artifact-id artifact)))))
+      (multiple-value-bind (artifact-ids tail)
+          (append-linked-item (turn-artifact-ids turn)
+                              (turn-artifact-ids-tail turn)
+                              (artifact-id artifact))
+        (setf (turn-artifact-ids turn) artifact-ids
+              (turn-artifact-ids-tail turn) tail)))
     (append-session-event session
                           :artifact-created
                           (artifact-record-summary artifact)
@@ -520,6 +643,8 @@
          (thread (find-thread session (turn-thread-id turn)))
          (user-message (find-message session (turn-user-message-id turn)))
          (assistant-message (find-message session (turn-assistant-message-id turn)))
+         (messages (mapcar #'message-record-summary
+                           (list-turn-messages session (turn-id turn))))
          (operation-records (list-turn-operations session (turn-id turn)))
          (operations (mapcar #'operation-record-summary operation-records))
          (approval-summary (turn-awaiting-approval-summary operation-records))
@@ -529,6 +654,7 @@
             (list :thread (and thread (thread-record-summary thread))
                   :user-message (and user-message (message-record-summary user-message))
                   :assistant-message (and assistant-message (message-record-summary assistant-message))
+                  :messages messages
                   :operations operations
                   :artifacts artifacts
                   :awaiting-approval approval-summary))))

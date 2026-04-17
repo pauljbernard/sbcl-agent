@@ -140,7 +140,9 @@ Useful commands:
 - `(turn/resume)`
 - `(turn/resume "turn-id")`
 
-If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied.
+`turn/status` now reports the current turn state with message, operation, and artifact counts plus the active assistant message and approval summary when relevant.
+
+If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied. A resumed turn may also trigger a provider follow-up run so the turn can finish with a fresh assistant message instead of stopping at raw action execution.
 
 ## `ask` Versus `say`
 
@@ -159,6 +161,12 @@ Examples:
 ```
 
 Use `ask` when you want the older direct query flow or when you are relying on existing scripts and habits.
+
+Internally, `ask` now uses the same turn runner as `say`. The main difference is operator intent and presentation:
+
+- `ask` keeps the older REPL-bridge semantics
+- `say` is the clearer thread-first conversational surface
+- both now persist thread, turn, operation, and assistant-message state consistently
 
 ### `(say ...)`
 
@@ -192,6 +200,8 @@ Important current capability and policy families include:
 - `:process-run`
 - `:git-read`
 - `:git-write`
+- `:runtime-eval-safe`
+- `:runtime-eval-mutate`
 - `:workspace-write`
 
 Typical approval commands:
@@ -209,6 +219,8 @@ A conversation turn can reach an awaiting-approval state when an operation needs
 1. inspect the turn with `(turn/status)`
 2. grant the needed approval
 3. resume with `(turn/resume)`
+
+Patch turns, mutating runtime eval turns, and write-class tool turns such as `git-write` now bind more directly into workflow governance. When those governed actions appear, the turn can create a work-item, record a checkpoint, and carry approval state as part of the workflow evidence rather than only as transcript text.
 
 ## Structured Tools
 

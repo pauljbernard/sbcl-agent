@@ -124,17 +124,23 @@
                    (< (task-created-at left) (task-created-at right)))))))
 
 (defun update-session-task-list (session tasks)
-  (setf (agent-session-tasks session) tasks)
+  (setf (agent-session-tasks session) tasks
+        (agent-session-tasks-tail session) (last tasks))
   tasks)
 
 (defun enqueue-task (session command &key (priority 0) payload)
   (let* ((task (make-queued-task session command :priority priority :payload payload))
-         (work-item (create-work-item-for-task session task))
-         (tasks (append (agent-session-tasks session) (list task))))
+         (work-item (create-work-item-for-task session task)))
     (setf (task-work-item-id task) (work-item-id work-item))
     (append-work-item-checkpoint session work-item)
     (update-work-item-status-from-task session task :planned)
-    (update-session-task-list session (sort-tasks tasks))
+    (multiple-value-bind (tasks tail)
+        (append-linked-item (agent-session-tasks session)
+                            (agent-session-tasks-tail session)
+                            task)
+      (setf (agent-session-tasks session) tasks
+            (agent-session-tasks-tail session) tail))
+    (update-session-task-list session (sort-tasks (agent-session-tasks session)))
     (append-session-event session :task-enqueued (task-summary task))
     task))
 
@@ -244,8 +250,12 @@
            (lambda ()
              (worker-loop session provider worker))
            :name worker-id))
-    (setf (agent-session-workers session)
-          (append (agent-session-workers session) (list worker)))
+    (multiple-value-bind (workers tail)
+        (append-linked-item (agent-session-workers session)
+                            (agent-session-workers-tail session)
+                            worker)
+      (setf (agent-session-workers session) workers
+            (agent-session-workers-tail session) tail))
     (append-session-event session :worker-started (worker-summary worker))
     worker))
 

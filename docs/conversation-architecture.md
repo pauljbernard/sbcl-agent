@@ -32,9 +32,12 @@ Present in code now:
 - durable `thread`, `message`, `turn`, `operation`, and `artifact` records in [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
 - thread-aware shell commands in [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp) and [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
 - `say` as a conversation-first command
+- `ask` routed through the same turn runner with `:repl-bridge` operator semantics
 - `turn/status` and `turn/resume`
 - turn orchestration in [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
 - canonical provider-event normalization in [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
+- governed mutation binding for patches, mutating eval, and write-class tool actions
+- provider follow-up after turn resume, with follow-up lifecycle metadata and events
 
 Still transitional:
 
@@ -155,7 +158,8 @@ Its responsibilities are:
 4. Record structured operation intents when the assistant proposes actions.
 5. Apply policy decisions and pause when approval is needed.
 6. Resume the turn after approval.
-7. Finalize turn, operation, and artifact state.
+7. Optionally resume the provider after the operation phase when the provider supports structured turn follow-up.
+8. Finalize turn, operation, and artifact state.
 
 This keeps behavior in Lisp rather than encoding it in prompt tricks.
 
@@ -165,6 +169,7 @@ The migration strategy is compatibility first.
 
 - `(ask ...)` remains supported as the original shell-oriented interaction
 - `(say ...)` is the conversation-first entrypoint
+- both commands now share one conversation turn runner and persist the same core turn records
 
 The long-term design is for `ask` to remain a thin compatibility surface while the runtime increasingly treats thread-and-turn interaction as the primary operator model.
 
@@ -177,6 +182,8 @@ The conversation runtime depends on one architectural rule:
 
 This is partly implemented now through provider-event normalization and shell handling, but the OpenAI-backed path still contains transitional behavior. The goal is to let the orchestrator and shell consume one canonical event stream regardless of provider specifics.
 
+The event model now also includes explicit follow-up lifecycle signals for resumed turns, which keeps provider continuation visible without collapsing it into assistant text.
+
 ## Relationship To Workflow Governance
 
 Conversation does not replace work-items. It feeds them.
@@ -185,6 +192,7 @@ Rules of thumb:
 
 - a read-only turn may not need a work-item
 - a mutating turn should usually create or attach to governed workflow state
+- approval-gated mutation turns should record checkpoint and approval evidence before execution continues
 - validation, reconciliation, quarantine, and replay remain workflow-owned concerns
 
 This matters because the value of the system is not just that it can chat about changes. The value is that it can preserve evidence about what it changed and why the result should be trusted.
@@ -195,7 +203,7 @@ The biggest remaining gaps in the conversation architecture are:
 
 - cleaner internal separation of conversation, runtime, and engineering state
 - richer operation coverage beyond the current assistant-action and tool-oriented paths
-- fuller artifact surfacing for patches, validations, and checkpoints
+- fuller artifact surfacing for every validation and reconciliation path
 - stronger interrupted-turn recovery and resumability
 - governed runtime tooling for image-native inspection and mutation
 

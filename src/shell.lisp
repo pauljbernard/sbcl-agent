@@ -86,7 +86,8 @@
   (let ((immediate '())
         (staged '()))
     (dolist (action actions)
-      (if (eq (assistant-action-type action) :eval)
+      (if (and (eq (assistant-action-type action) :eval)
+               (not (mutating-eval-action-p action)))
           (push action immediate)
           (push action staged)))
     (values (nreverse immediate) (nreverse staged))))
@@ -127,6 +128,27 @@
                                                   :turn turn
                                                   :operation operation)))
       (clear-pending-actions session)
+      results)))
+
+(defun operation-assistant-action (operation)
+  (getf (operation-metadata operation) :assistant-action))
+
+(defun execute-turn-pending-actions (session operations &key thread turn)
+  (let ((actions (remove nil (mapcar #'operation-assistant-action operations))))
+    (unless actions
+      (error "No assistant actions are attached to the selected turn"))
+    (let ((results
+            (mapcar (lambda (operation)
+                      (let ((action (operation-assistant-action operation)))
+                        (list :action action
+                              :result (execute-assistant-action action
+                                                               session
+                                                               :thread thread
+                                                               :turn turn
+                                                               :operation operation))))
+                    operations)))
+      (append-session-event session :assistant-actions-executed results)
+      (remove-pending-actions session actions)
       results)))
 
 (defun execute-session-save-command (arguments session)
@@ -219,63 +241,18 @@
                         :enqueued-p t)
                   :ask
                   session))
-        (progn
-          (append-transcript-entry session :user prompt)
-          (let ((stream-p (or (and (option-present-p options :stream)
-                                   (plist-value options :stream nil))
-                              *default-ask-streaming*
-                              (not (null *task-progress-callback*)))))
-            (when *task-progress-callback*
-              (funcall *task-progress-callback* :ask-started (list :prompt prompt :stream-p stream-p)))
-            (if stream-p
-                (let ((events '()))
-                  (let ((response (stream-prompt provider
-                                                 prompt
-                                                 (lambda (event)
-                                                   (setf events (handle-provider-stream-event session event events)))
-                                                 session)))
-                    (let* ((action-report (process-response-actions response session))
-                           (staged-actions (getf action-report :staged-actions))
-                           (immediate-results (getf action-report :immediate-results)))
-                      (append-transcript-entry session :assistant (assistant-response->string response))
-                      (append-session-event session :assistant-response response)
-                      (when *task-progress-callback*
-                        (funcall *task-progress-callback*
-                                 :ask-response
-                                 (list :message (assistant-response-message response)
-                                       :staged-action-count (length staged-actions)
-                                       :immediate-action-count (length (getf action-report :immediate-actions))
-                                       :stream-event-count (length events))))
-                      (values (list :response response
-                                    :staged-action-count (length staged-actions)
-                                    :immediate-action-count (length (getf action-report :immediate-actions))
-                                    :action-results immediate-results
-                                    :streamed-p t
-                                    :stream-event-count (length events)
-                                    :stream-events events)
-                              :ask
-                              session))))
-                (let* ((response (send-prompt provider prompt session))
-                       (action-report (process-response-actions response session))
-                       (staged-actions (getf action-report :staged-actions))
-                       (immediate-results (getf action-report :immediate-results)))
-                  (append-transcript-entry session :assistant (assistant-response->string response))
-                  (append-session-event session :assistant-response response)
-                  (when *task-progress-callback*
-                    (funcall *task-progress-callback*
-                             :ask-response
-                             (list :message (assistant-response-message response)
-                                   :staged-action-count (length staged-actions)
-                                   :immediate-action-count (length (getf action-report :immediate-actions))
-                                   :stream-event-count 0)))
-                  (values (list :response response
-                                :staged-action-count (length staged-actions)
-                                :immediate-action-count (length (getf action-report :immediate-actions))
-                                :action-results immediate-results
-                                :streamed-p nil
-                          :stream-event-count 0)
-                          :ask
-                          session))))))))
+        (let ((stream-p (or (and (option-present-p options :stream)
+                                 (plist-value options :stream nil))
+                            *default-ask-streaming*
+                            (not (null *task-progress-callback*)))))
+          (values (run-conversation-turn provider
+                                         session
+                                         prompt
+                                         :stream-p stream-p
+                                         :source :ask
+                                         :operator-mode :repl-bridge)
+                  :ask
+                  session)))))
 
 (defun execute-say-command (arguments provider session)
   (multiple-value-bind (prompt options)
@@ -331,13 +308,14 @@
       (or (most-recent-thread-turn session)
           (error "No turns recorded for the current thread"))))
 
-(defun resume-turn-operation-results (turn operations results)
+(defun resume-turn-operation-results (turn operations results &key followup)
   (list :turn-id (turn-id turn)
         :resumed-operation-count (length operations)
         :action-result-count (length results)
-        :action-results results))
+        :action-results results
+        :followup followup))
 
-(defun execute-turn-resume-command (arguments session)
+(defun execute-turn-resume-command (arguments session &optional provider)
   (let* ((turn-id (first arguments))
          (turn (resume-turn-command-target session turn-id))
          (operations (remove-if-not (lambda (operation)
@@ -353,12 +331,18 @@
           (ensure-policy-approved session policy-id))))
     (let* ((thread (or (find-thread session (turn-thread-id turn))
                        (current-thread session)))
-           (results (execute-pending-actions-command-with-context session
-                                                                  :thread thread
-                                                                  :turn turn))
-           (remaining-results nil))
+           (results (execute-turn-pending-actions session
+                                                  operations
+                                                  :thread thread
+                                                  :turn turn))
+           (remaining-results nil)
+           (followup nil))
       (setf remaining-results results)
       (dolist (operation operations)
+        (update-work-item-status-from-operation session
+                                                operation
+                                                :mutating
+                                                :closure-decision :conversation-mutation-in-progress)
         (let ((next-result (first remaining-results)))
           (setf remaining-results (rest remaining-results))
           (complete-operation session
@@ -367,9 +351,23 @@
                               operation
                               (or next-result (list :resumed-p t))
                               :status :completed
-                              :metadata '(:execution :resumed))))
+                              :metadata '(:execution :resumed))
+          (update-work-item-status-from-operation session
+                                                  operation
+                                                  :committed
+                                                  :closure-decision :committed-to-source-and-image
+                                                  :result next-result)))
       (refresh-turn-status session turn :metadata '(:resumed-p t))
-      (resume-turn-operation-results turn operations results))))
+      (when (and provider
+                 (provider-turn-followup-p provider)
+                 (eq (turn-status turn) :completed))
+        (setf followup (continue-conversation-turn provider
+                                                   session
+                                                   thread
+                                                   turn
+                                                   :source (or (getf (turn-metadata turn) :source) :say)
+                                                   :operator-mode :conversation)))
+      (resume-turn-operation-results turn operations results :followup followup))))
 
 (defun unwrap-task-form (form)
   (if (and (consp form)
@@ -588,7 +586,7 @@
                :turn-status
                active-session))
       (:turn-resume
-       (values (execute-turn-resume-command (command-arguments command) active-session)
+       (values (execute-turn-resume-command (command-arguments command) active-session provider)
                :turn-resume
                active-session))
       (:execute-actions
@@ -731,7 +729,31 @@
            (when (assistant-response-actions response)
              (format t "assistant-actions> ~S~%" (assistant-response-actions response))
              (format t "assistant-actions-staged> ~D~%" staged-count)))))
-    ((:thread-new :thread-list :thread-use :thread-show :turn-status :turn-resume :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source)
+    (:turn-status
+     (format t "turn> ~A status=~A messages=~D operations=~D artifacts=~D~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :status) :unknown)
+             (length (or (getf result :messages) '()))
+             (length (or (getf result :operations) '()))
+             (length (or (getf result :artifacts) '())))
+     (let ((assistant-message (getf result :assistant-message)))
+       (when assistant-message
+         (format t "assistant> ~A~%" (getf assistant-message :content))))
+     (let ((approval (getf result :awaiting-approval)))
+       (when (and approval (getf approval :awaiting-approval-p))
+         (format t "approval> blocked=~D~%" (getf approval :blocked-operation-count)))))
+    (:turn-resume
+     (format t "turn-resume> turn=~A resumed=~D results=~D~%"
+             (or (getf result :turn-id) "<unknown>")
+             (or (getf result :resumed-operation-count) 0)
+             (or (getf result :action-result-count) 0))
+     (let ((followup (getf result :followup)))
+       (when followup
+         (let ((response (getf followup :response)))
+           (when response
+             (format t "followup> ~A~%" (assistant-response->string response))))))
+     (finish-output))
+    ((:thread-new :thread-list :thread-use :thread-show :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source)
      (format t "tasks> ~S~%" result))
     (:execute-actions
      (format t "assistant-action-results> ~S~%" result))

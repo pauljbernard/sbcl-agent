@@ -41,12 +41,13 @@ The current runtime already provides:
 - a provider boundary with mock and OpenAI-compatible backends
 - streamed responses through a canonical provider-event layer
 - conversation primitives: threads, messages, turns, operations, and artifacts
-- `ask` compatibility plus `say` as the conversation-first turn entrypoint
+- a shared turn runtime for both `ask` and `say`, with `say` as the conversation-first turn entrypoint
 - persisted session state with thread-aware shell workflows
-- staged assistant actions, approval-gated turn resume, and explicit capability grants
+- staged assistant actions, approval-gated turn resume, provider follow-up after resume, and explicit capability grants
 - structured tools for files, docs, session visibility, processes, git, and patches
 - queued tasks and background workers
 - governed work-items, workflow records, validator replay groups, image-only outcomes, and reconciliation records
+- policy-governed mutation turns for patches, mutating runtime eval, and write-class tools such as git-write
 
 ## Design Rule
 
@@ -140,10 +141,10 @@ Inside `chat`, recognized forms are treated as shell commands. Everything else i
 Core interaction paths:
 
 - direct Lisp evaluation for local reasoning and runtime inspection
-- `(ask ...)` for compatibility with the original streamed ask workflow
+- `(ask ...)` for compatibility with the original streamed ask workflow, now backed by the same turn runner as `say`
 - `(say ...)` for thread-based conversational turns
 - thread commands for creating, listing, switching, and inspecting conversations
-- turn commands for status inspection and approval-gated resume
+- turn commands for status inspection, approval-gated resume, and follow-up-aware completion
 - tools, tasks, workers, work-items, replay, and reconciliation commands
 
 Example session:
@@ -203,9 +204,10 @@ The docs site is now meant to be generated from the Markdown sources in [`docs/`
 Local workflows:
 
 ```bash
+gem install bundler:2.5.23
 bundle install
 ./bin/build-docs
 ./bin/serve-docs
 ```
 
-The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in [docs.yml](/Volumes/data/development/sbcl-agent/.github/workflows/docs.yml).
+If your local Ruby setup does not already provide the locked Bundler version, install it first. The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in [docs.yml](/Volumes/data/development/sbcl-agent/.github/workflows/docs.yml) and republishes automatically when docs-related changes land on `main`.

@@ -24,7 +24,7 @@
   (concatenate
    'string
    "You are an SBCL-based coding assistant operating inside a live Common Lisp shell. "
-   "You have session context through the supplied session summary, including recent transcript entries. "
+   "You have structured conversation, runtime, workspace, and policy context through the supplied request object. "
    "The operator interface is Common Lisp, and ordinary Lisp forms are evaluated directly by the host runtime when the operator enters them. "
    "You cannot create effects by prose alone. When execution or inspection is needed, return structured actions. "
    "Return only valid JSON with keys message, actions, and metadata. Actions must be an array. "
@@ -54,8 +54,15 @@
 
 (defun build-openai-user-prompt (request)
   (format nil
-          "User prompt: ~A~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against :recent-transcript when available."
+          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against the structured conversation context and :recent-transcript when available."
           (provider-request-prompt request)
+          (provider-request-operator-mode request)
+          (provider-request-stream-p request)
+          (provider-request-thread-context request)
+          (provider-request-turn-context request)
+          (provider-request-runtime-summary request)
+          (provider-request-workspace-summary request)
+          (provider-request-policy-summary request)
           (provider-request-session-summary request)))
 
 (defun deep-request-p (prompt)

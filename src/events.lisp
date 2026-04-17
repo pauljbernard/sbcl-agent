@@ -20,6 +20,7 @@
       (case kind
         (:provider-stream :provider)
         (:transcript :conversation)
+        ((:turn-followup-started :turn-followup-completed) :conversation)
         ((:assistant-response :assistant-actions-executed :pending-actions :pending-actions-cleared)
          :assistant)
         ((:task-enqueued :task-started :task-completed :task-failed :task-cancelled :worker-started :worker-stopped)

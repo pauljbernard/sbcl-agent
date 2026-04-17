@@ -14,6 +14,7 @@
   created-at
   updated-at
   entries
+  entries-tail
   conclusion
   evidence
   waiting-on
@@ -25,6 +26,12 @@
   quarantine-reason
   resume-count
   operator-interventions)
+
+(defun rebuild-workflow-record-tails (session)
+  (dolist (record (agent-session-workflow-records session))
+    (setf (workflow-record-entries-tail record)
+          (last (workflow-record-entries record))))
+  session)
 
 (defun make-workflow-record-id ()
   (format nil "wf-~D-~D" (get-universal-time) (random 1000000)))
@@ -76,6 +83,7 @@
                   :created-at (get-universal-time)
                   :updated-at (get-universal-time)
                   :entries '()
+                  :entries-tail nil
                   :conclusion nil
                   :evidence '()
                   :waiting-on nil
@@ -87,8 +95,12 @@
                   :quarantine-reason nil
                   :resume-count 0
                   :operator-interventions '())))
-    (setf (agent-session-workflow-records session)
-          (append (agent-session-workflow-records session) (list record)))
+    (multiple-value-bind (records tail)
+        (append-linked-item (agent-session-workflow-records session)
+                            (agent-session-workflow-records-tail session)
+                            record)
+      (setf (agent-session-workflow-records session) records
+            (agent-session-workflow-records-tail session) tail))
     (when (or initial-phase initial-kind initial-payload)
       (append-workflow-record-entry session record
                                     (or initial-phase :inspect)
@@ -102,9 +114,13 @@
                                     :kind kind
                                     :timestamp (get-universal-time)
                                     :payload payload)))
-    (setf (workflow-record-entries record)
-          (append (workflow-record-entries record) (list entry))
-          (workflow-record-updated-at record) (get-universal-time))
+    (multiple-value-bind (entries tail)
+        (append-linked-item (workflow-record-entries record)
+                            (workflow-record-entries-tail record)
+                            entry)
+      (setf (workflow-record-entries record) entries
+            (workflow-record-entries-tail record) tail))
+    (setf (workflow-record-updated-at record) (get-universal-time))
     (when status
       (setf (workflow-record-status record) status))
     entry))

@@ -2,7 +2,9 @@
 
 (defun create-patch-result-artifacts (session results &key thread turn operation)
   (let ((target-thread (or thread
-                           (current-thread session))))
+                           (current-thread session)))
+        (work-item-id (and operation
+                           (getf (operation-metadata operation) :work-item-id))))
     (when target-thread
       (mapcar (lambda (entry)
                 (let ((path (getf entry :path)))
@@ -14,6 +16,7 @@
                                    path
                                    :title (and path (file-namestring path))
                                    :summary "Patch write completed."
+                                   :work-item-id work-item-id
                                    :metadata (list :source :patch
                                                    :bytes (getf entry :bytes)
                                                    :operation (getf entry :operation)

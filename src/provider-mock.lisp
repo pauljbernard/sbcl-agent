@@ -26,8 +26,13 @@
     (t
      nil)))
 
-(defun build-mock-response (prompt session-summary)
-  (let ((actions (mock-actions-for-prompt prompt)))
+(defun build-mock-response (request-or-prompt &optional session-summary)
+  (let* ((request (if (typep request-or-prompt 'provider-request)
+                      request-or-prompt
+                      (make-provider-request :prompt request-or-prompt
+                                             :session-summary session-summary)))
+         (prompt (provider-request-prompt request))
+         (actions (mock-actions-for-prompt prompt)))
     (make-assistant-response
      :message (if actions
                   (format nil
@@ -40,7 +45,10 @@
      :actions actions
      :metadata (list :provider :mock
                      :prompt prompt
-                     :session session-summary))))
+                     :operator-mode (provider-request-operator-mode request)
+                     :thread (provider-request-thread-context request)
+                     :turn (provider-request-turn-context request)
+                     :session (provider-request-session-summary request)))))
 
 (defun split-stream-message (message)
   (let* ((length (length message))
@@ -50,13 +58,11 @@
 
 (defmethod send-request ((provider mock-provider) request)
   (declare (ignore provider))
-  (build-mock-response (provider-request-prompt request)
-                       (provider-request-session-summary request)))
+  (build-mock-response request))
 
 (defmethod stream-request ((provider mock-provider) request event-handler)
   (declare (ignore provider))
-  (let* ((response (build-mock-response (provider-request-prompt request)
-                                        (provider-request-session-summary request)))
+  (let* ((response (build-mock-response request))
          (actions (assistant-response-actions response)))
     (emit-provider-event event-handler :message-start nil)
     (dolist (chunk (split-stream-message (assistant-response-message response)))

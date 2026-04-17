@@ -153,6 +153,70 @@
       (t
        (error "journal-date-time-provider received unexpected prompt ~S" prompt)))))
 
+(defclass mutating-eval-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider mutating-eval-provider))
+  "mutating-eval-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider mutating-eval-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider mutating-eval-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a mutating eval that requires runtime approval."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :eval
+                   :payload '(:form "(progn (defparameter sbcl-agent-user::*governed-runtime-flag* nil) (setf sbcl-agent-user::*governed-runtime-flag* :mutated) sbcl-agent-user::*governed-runtime-flag*)"
+                             :mutating t)))
+   :metadata '(:provider :mutating-eval-test)))
+
+(defclass git-write-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider git-write-action-provider))
+  "git-write-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider git-write-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider git-write-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a git write action that requires approval."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :tool
+                   :payload '(:tool-id :git/add :arguments (:paths ("README.md")))))
+   :metadata '(:provider :git-write-action-test)))
+
+(defclass followup-patch-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider followup-patch-provider))
+  "followup-patch-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider followup-patch-provider))
+  '(:chat :structured-response :action-proposals :turn-followup))
+
+(defmethod sbcl-agent::send-request ((provider followup-patch-provider) request)
+  (declare (ignore provider))
+  (let* ((turn-context (sbcl-agent::provider-request-turn-context request))
+         (operations (getf turn-context :operations))
+         (completed-patch (find "assistant-patch"
+                                operations
+                                :key (lambda (entry) (getf entry :name))
+                                :test #'string=)))
+    (if (and completed-patch
+             (eq (getf completed-patch :status) :completed))
+        (sbcl-agent::make-assistant-response
+         :message "Patch applied successfully. Follow-up summary recorded."
+         :actions '()
+         :metadata '(:provider :followup-patch-test :phase :followup))
+        (sbcl-agent::make-assistant-response
+         :message "Prepared a patch that requires approval before follow-up."
+         :actions (list (sbcl-agent::make-assistant-action
+                         :type :patch
+                         :payload '((:write "tmp/followup-generated.txt" "hello from followup patch"))))
+         :metadata '(:provider :followup-patch-test :phase :initial)))))
+
 (defun make-test-git-repo ()
   (let* ((root (uiop:ensure-directory-pathname
                 (format nil "/tmp/sbcl-agent-git-~D-~D/" (get-universal-time) (random 1000000))))
@@ -1388,7 +1452,39 @@ fi
                   (let ((*standard-output* stream))
                     (sbcl-agent::print-shell-result nil :help)))))
     (assert-equal "" result
-                  "print-shell-result should print nothing for help")))
+                  "print-shell-result should print nothing for help"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:id "turn-1"
+                       :status :completed
+                       :messages ((:role :user :content "prompt")
+                                  (:role :assistant :content "first reply")
+                                  (:role :assistant :content "follow-up reply"))
+                       :operations ((:name "provider-1") (:name "provider-2"))
+                       :artifacts ((:title "artifact.txt"))
+                       :assistant-message (:role :assistant :content "follow-up reply")
+                       :awaiting-approval (:awaiting-approval-p nil :blocked-operation-count 0))
+                     :turn-status)))))
+    (assert-true (search "turn> turn-1 status=COMPLETED messages=3 operations=2 artifacts=1" result)
+                 "print-shell-result should render compact turn-status summaries")
+    (assert-true (search "assistant> follow-up reply" result)
+                 "print-shell-result should render the current assistant message for turn-status"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     `(:turn-id "turn-1"
+                       :resumed-operation-count 1
+                       :action-result-count 1
+                       :followup (:response ,(sbcl-agent::make-assistant-response
+                                              :message "Follow-up complete"
+                                              :actions '()
+                                              :metadata '())))
+                     :turn-resume)))))
+    (assert-true (search "turn-resume> turn=turn-1 resumed=1 results=1" result)
+                 "print-shell-result should render compact turn-resume summaries")
+    (assert-true (search "followup> Follow-up complete" result)
+                 "print-shell-result should render follow-up assistant text for resumed turns")))
 
 (defun shell-stream-rendering-coverage-test ()
   (multiple-value-bind (ignored stdout stderr)
@@ -1868,8 +1964,20 @@ fi
                       "ask without actions should stage zero actions")
         (assert-equal 0 (getf result :immediate-action-count)
                       "ask without eval actions should auto-execute nothing")
-        (assert-equal 5 (length (sbcl-agent::agent-session-events updated-session))
-                      "ask dispatch should record command, transcript, pending-action reset, and response events")))))
+        (assert-true (stringp (getf (getf result :thread) :id))
+                     "ask should now return the active thread summary through the shared turn runtime")
+        (assert-true (stringp (getf (getf result :turn) :id))
+                     "ask should now return a persisted turn summary")
+        (assert-equal :completed (getf (getf result :turn) :status)
+                      "ask should finalize the turn as completed")
+        (assert-equal 2 (length (sbcl-agent::agent-session-messages updated-session))
+                      "ask should persist user and assistant messages through the shared turn runtime")
+        (assert-equal 1 (length (sbcl-agent::agent-session-turns updated-session))
+                      "ask should persist one completed turn")
+        (assert-equal 1 (length (sbcl-agent::agent-session-operations updated-session))
+                      "ask should persist one provider operation when no assistant actions exist")
+        (assert-true (>= (length (sbcl-agent::agent-session-events updated-session)) 10)
+                     "ask should record turn and operation lifecycle events through the shared runtime")))))
 
 (defun say-dispatch-test ()
   (let ((provider (make-test-provider))
@@ -1954,6 +2062,15 @@ fi
                     "patch-action say should persist provider and patch action operations")
       (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "patch-action say should leave the patch action staged for later")
+      (assert-equal 1 (length (sbcl-agent::agent-session-work-items updated-session))
+                    "patch-action say should create a work-item for the mutating turn")
+      (let ((work-item (first (sbcl-agent::agent-session-work-items updated-session))))
+        (assert-equal 1 (length (sbcl-agent::work-item-checkpoints work-item))
+                      "patch-action say should checkpoint the bound work-item")
+        (assert-equal :approval
+                      (sbcl-agent::workflow-record-waiting-on
+                       (sbcl-agent::work-item-workflow-record updated-session work-item))
+                      "patch-action say should mark the bound workflow record as awaiting approval"))
       (let ((patch-op (find "assistant-patch"
                             (sbcl-agent::agent-session-operations updated-session)
                             :key #'sbcl-agent::operation-name
@@ -1961,12 +2078,93 @@ fi
         (assert-true patch-op "patch-action say should record a patch action operation")
         (assert-equal :awaiting-approval (sbcl-agent::operation-status patch-op)
                       "patch action operation should wait for approval")
+        (assert-true (stringp (getf (sbcl-agent::operation-metadata patch-op) :work-item-id))
+                     "patch action operation should retain its bound work-item id")
         (assert-equal :approval-required
                       (getf (sbcl-agent::operation-policy-decision patch-op) :decision)
                       "patch action should record approval-required policy decision")
         (assert-equal :workspace-write
                       (getf (sbcl-agent::operation-policy-decision patch-op) :policy-id)
                       "patch action should record workspace-write policy")))))
+
+(defun say-mutating-eval-approval-test ()
+  (let ((provider (make-instance 'mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (command (sbcl-agent::normalize-form-command '(say "mutate runtime state"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "mutating eval say should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf result :turn) :status)
+                    "mutating eval say should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-work-items updated-session))
+                    "mutating eval say should create a governed work-item")
+      (let ((eval-op (find "assistant-eval"
+                           (sbcl-agent::agent-session-operations updated-session)
+                           :key #'sbcl-agent::operation-name
+                           :test #'string=)))
+        (assert-true eval-op "mutating eval say should record an eval action operation")
+        (assert-equal :awaiting-approval (sbcl-agent::operation-status eval-op)
+                      "mutating eval should wait for approval")
+        (assert-equal :runtime-eval-mutate
+                      (getf (sbcl-agent::operation-policy-decision eval-op) :policy-id)
+                      "mutating eval should record runtime-eval-mutate policy")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (let ((work-item (first (sbcl-agent::agent-session-work-items session))))
+      (assert-equal :committed
+                    (sbcl-agent::work-item-status work-item)
+                    "mutating eval resume should commit the governed work-item")
+      (assert-equal :passed
+                    (sbcl-agent::validation-result-status
+                     (sbcl-agent::work-item-live-validation-result work-item))
+                    "mutating eval resume should record validation evidence"))))
+
+(defun say-git-write-tool-approval-test ()
+  (let* ((repo (make-test-git-repo))
+         (provider (make-instance 'git-write-action-provider))
+         (session (sbcl-agent::make-default-session :cwd (namestring repo)))
+         (command (sbcl-agent::normalize-form-command '(say "stage repository change"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "git-write tool say should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf result :turn) :status)
+                    "git-write tool say should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-work-items updated-session))
+                    "git-write tool say should create a governed work-item")
+      (let ((tool-op (find "assistant-tool"
+                           (sbcl-agent::agent-session-operations updated-session)
+                           :key #'sbcl-agent::operation-name
+                           :test #'string=)))
+        (assert-true tool-op "git-write tool say should record a tool action operation")
+        (assert-equal :awaiting-approval (sbcl-agent::operation-status tool-op)
+                      "git-write tool should wait for approval")
+        (assert-equal :git-write
+                      (getf (sbcl-agent::operation-policy-decision tool-op) :policy-id)
+                      "git-write tool should record git-write policy")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :git-write))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (let ((work-item (first (sbcl-agent::agent-session-work-items session))))
+      (assert-equal :committed
+                    (sbcl-agent::work-item-status work-item)
+                    "git-write tool resume should commit the governed work-item")
+      (assert-equal :committed
+                    (sbcl-agent::workflow-record-status
+                     (sbcl-agent::work-item-workflow-record session work-item))
+                    "git-write tool resume should close the governed workflow record"))))
 
 (defun streaming-provider-test ()
   (let* ((provider (make-test-provider))
@@ -3164,6 +3362,8 @@ fi
                     "immediate eval action should execute in the current image")
       (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "only non-eval actions should remain staged")
+      (assert-equal 3 (length (sbcl-agent::agent-session-operations updated-session))
+                    "ask should now persist provider, immediate, and staged action operations")
       (assert-equal :tool
                     (sbcl-agent::assistant-action-type (first (sbcl-agent::agent-session-pending-actions updated-session)))
                     "the staged remainder should be the tool action"))))
@@ -3287,6 +3487,71 @@ fi
       (assert-true (< (length (getf (first (getf summary :recent-transcript)) :content)) 260)
                    "provider session summary should truncate oversized transcript content"))))
 
+(defun provider-request-context-test ()
+  (let* ((session (sbcl-agent::make-default-session))
+         (thread (sbcl-agent::current-thread session))
+         (user-message (sbcl-agent::create-message session thread :user "inspect provider request"))
+         (turn (sbcl-agent::start-turn session thread user-message
+                                       :metadata '(:source :test)))
+         (assistant-message (sbcl-agent::create-message session thread :assistant "pending"))
+         (ignore (sbcl-agent::complete-turn session thread turn assistant-message
+                                            :status :completed))
+         (request (sbcl-agent::make-provider-request-from-session
+                   "inspect provider request"
+                   session
+                   :thread thread
+                   :turn turn
+                   :operator-mode :conversation
+                   :stream-p t)))
+    (declare (ignore ignore))
+    (assert-equal :conversation
+                  (sbcl-agent::provider-request-operator-mode request)
+                  "provider request should retain the operator mode")
+    (assert-true (sbcl-agent::provider-request-stream-p request)
+                 "provider request should retain stream intent")
+    (assert-equal (sbcl-agent::thread-id thread)
+                  (getf (sbcl-agent::provider-request-thread-context request) :id)
+                  "provider request should expose thread context separately from session summary")
+    (assert-equal (sbcl-agent::turn-id turn)
+                  (getf (sbcl-agent::provider-request-turn-context request) :id)
+                  "provider request should expose turn context separately from session summary")
+    (assert-equal (sbcl-agent::agent-session-cwd session)
+                  (getf (sbcl-agent::provider-request-runtime-summary request) :cwd)
+                  "provider request should expose runtime summary")
+    (assert-equal (sbcl-agent::agent-session-cwd session)
+                  (getf (sbcl-agent::provider-request-workspace-summary request) :cwd)
+                  "provider request should expose workspace summary")
+    (assert-true (listp (getf (sbcl-agent::provider-request-policy-summary request) :approved-policies))
+                 "provider request should expose policy summary")
+    (assert-true (listp (sbcl-agent::provider-request-session-summary request))
+                 "provider request should preserve the compact session summary")))
+
+(defun provider-rendering-context-test ()
+  (let* ((request (sbcl-agent::make-provider-request
+                   :prompt "describe the current state"
+                   :session-summary '(:recent-transcript ((:role :assistant :content "Earlier")))
+                   :thread-context '(:id "thread-1" :title "Default Thread")
+                   :turn-context '(:id "turn-1" :status :running)
+                   :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER")
+                   :workspace-summary '(:cwd "/tmp/project" :artifact-count 2)
+                   :policy-summary '(:approved-policies (:safe-read))
+                   :operator-mode :conversation
+                   :stream-p t))
+         (prompt (sbcl-agent::build-openai-user-prompt request))
+         (mock-response (sbcl-agent::build-mock-response request)))
+    (assert-true (search "Operator mode: :CONVERSATION" prompt)
+                 "build-openai-user-prompt should render operator mode")
+    (assert-true (search "Thread: (:ID \"thread-1\"" prompt)
+                 "build-openai-user-prompt should render thread context")
+    (assert-true (search "Runtime summary: (:CWD \"/tmp/project\"" prompt)
+                 "build-openai-user-prompt should render runtime summary")
+    (assert-equal :conversation
+                  (getf (sbcl-agent::assistant-response-metadata mock-response) :operator-mode)
+                  "mock provider responses should preserve operator mode metadata")
+    (assert-equal "thread-1"
+                  (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :thread) :id)
+                  "mock provider responses should preserve thread context metadata")))
+
 (defun session-plan-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
@@ -3360,6 +3625,38 @@ fi
       (assert-equal 1
                     (length (sbcl-agent::agent-session-transcript loaded))
                     "loaded session should preserve transcript entries"))))
+
+(defun session-tail-rebuild-after-load-test ()
+  (let* ((provider (make-test-provider))
+         (path (format nil "/tmp/sbcl-agent-tail-rebuild-~D-~D.sexp"
+                       (get-universal-time)
+                       (random 1000000)))
+         (session (sbcl-agent::make-default-session)))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "first tail rebuild prompt"))
+     provider
+     session)
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(say "second tail rebuild prompt"))
+       provider
+       loaded)
+      (let* ((thread (sbcl-agent::current-thread loaded))
+             (messages (sbcl-agent::list-thread-messages loaded (sbcl-agent::thread-id thread)))
+             (turns (sbcl-agent::list-thread-turns loaded (sbcl-agent::thread-id thread))))
+        (assert-equal 4
+                      (length messages)
+                      "loaded sessions should accept appended messages after tail rebuild")
+        (assert-equal 2
+                      (length turns)
+                      "loaded sessions should accept appended turns after tail rebuild")
+        (assert-equal "first tail rebuild prompt"
+                      (sbcl-agent::message-content (first messages))
+                      "message order should be preserved after load and append")
+        (assert-equal "second tail rebuild prompt"
+                      (sbcl-agent::message-content (third messages))
+                      "newly appended messages should stay at the end of the thread history")))))
 
 (defun thread-shell-commands-test ()
   (let* ((provider (make-test-provider))
@@ -3499,7 +3796,23 @@ fi
       (assert-equal 1 (getf resume-result :action-result-count)
                     "turn/resume should execute one pending action")
       (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions resumed-session))
-                    "turn/resume should clear pending actions after execution"))
+                    "turn/resume should clear pending actions after execution")
+      (let ((work-item (first (sbcl-agent::agent-session-work-items resumed-session))))
+        (assert-equal :committed
+                      (sbcl-agent::work-item-status work-item)
+                      "turn/resume should advance the bound work-item to committed")
+        (assert-equal :committed
+                      (sbcl-agent::workflow-record-status
+                       (sbcl-agent::work-item-workflow-record resumed-session work-item))
+                      "turn/resume should close the bound workflow record as committed")
+        (assert-equal :passed
+                      (sbcl-agent::validation-result-status
+                       (sbcl-agent::work-item-live-validation-result work-item))
+                      "turn/resume should attach live validation evidence to the work-item")
+        (assert-equal :passed
+                      (sbcl-agent::validation-result-status
+                       (sbcl-agent::work-item-cold-validation-result work-item))
+                      "turn/resume should attach cold validation evidence to the work-item")))
     (multiple-value-bind (turn-result turn-kind turn-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(turn/status))
@@ -3516,6 +3829,8 @@ fi
       (assert-equal "generated.txt"
                     (getf (first (getf turn-result :artifacts)) :title)
                     "turn/resume should expose the created file artifact")
+      (assert-true (stringp (getf (first (getf turn-result :artifacts)) :work-item-id))
+                   "turn/resume should attach the resumed artifact to the originating work-item")
       (let ((patch-op (find "assistant-patch"
                             (getf turn-result :operations)
                             :key (lambda (entry) (getf entry :name))
@@ -3532,6 +3847,118 @@ fi
       (assert-equal :thread-show thread-kind "thread/show should dispatch after turn resume")
       (assert-equal 1 (length (getf thread-result :artifacts))
                     "thread/show should expose persisted thread artifacts after resume"))))
+
+(defun turn-resume-isolates-pending-actions-by-turn-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare first patch"))
+     provider
+     session)
+    (let* ((thread (sbcl-agent::current-thread session))
+           (first-turn (first (sbcl-agent::list-thread-turns session (sbcl-agent::thread-id thread)))))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(say "prepare second patch"))
+       provider
+       session)
+      (let* ((turns (sbcl-agent::list-thread-turns session (sbcl-agent::thread-id thread)))
+             (second-turn (first (last turns))))
+        (assert-true (not (string= (sbcl-agent::turn-id first-turn)
+                                   (sbcl-agent::turn-id second-turn)))
+                     "test setup should create two distinct awaiting-approval turns")
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(approve :workspace-write))
+         provider
+         session)
+        (multiple-value-bind (resume-result resume-kind resumed-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(turn/resume ,(sbcl-agent::turn-id first-turn)))
+             provider
+             session)
+          (declare (ignore resumed-session))
+          (assert-equal :turn-resume resume-kind
+                        "turn/resume should dispatch correctly for an explicit turn id")
+          (assert-equal 1 (getf resume-result :resumed-operation-count)
+                        "turn/resume should complete only one blocked operation for the target turn")
+          (assert-equal 1 (getf resume-result :action-result-count)
+                        "turn/resume should execute only the target turn action"))
+        (let* ((updated-first-turn (sbcl-agent::find-turn session (sbcl-agent::turn-id first-turn)))
+               (updated-second-turn (sbcl-agent::find-turn session (sbcl-agent::turn-id second-turn)))
+               (first-ops (sbcl-agent::list-turn-operations session (sbcl-agent::turn-id updated-first-turn)))
+               (second-ops (sbcl-agent::list-turn-operations session (sbcl-agent::turn-id updated-second-turn)))
+               (first-patch-op (find "assistant-patch"
+                                     first-ops
+                                     :key #'sbcl-agent::operation-name
+                                     :test #'string=))
+               (second-patch-op (find "assistant-patch"
+                                      second-ops
+                                      :key #'sbcl-agent::operation-name
+                                      :test #'string=)))
+          (assert-equal :completed (sbcl-agent::turn-status updated-first-turn)
+                        "turn/resume should complete the selected turn")
+          (assert-equal :awaiting-approval (sbcl-agent::turn-status updated-second-turn)
+                        "turn/resume should leave the non-selected turn blocked")
+          (assert-true first-patch-op
+                       "selected turn should include the staged patch operation")
+          (assert-true second-patch-op
+                       "non-selected turn should include the staged patch operation")
+          (assert-equal :completed (sbcl-agent::operation-status first-patch-op)
+                        "turn/resume should complete the selected turn operation")
+          (assert-equal :awaiting-approval (sbcl-agent::operation-status second-patch-op)
+                        "turn/resume should not consume the other turn's operation")
+          (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions session))
+                        "turn/resume should leave unrelated staged actions pending"))))))
+
+(defun turn-resume-provider-followup-test ()
+  (let* ((provider (make-instance 'followup-patch-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :workspace-write))
+     provider
+     session)
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (declare (ignore resumed-session))
+      (assert-equal :turn-resume resume-kind
+                    "turn/resume should dispatch correctly for follow-up capable providers")
+      (assert-true (getf (getf resume-result :followup) :followup-p)
+                   "turn/resume should include structured follow-up results when the provider supports continuation")
+      (assert-true (search "Patch applied successfully"
+                           (sbcl-agent::assistant-response-message
+                            (getf (getf resume-result :followup) :response)))
+                   "turn/resume should resume the provider with completed operation context"))
+    (let* ((turn (sbcl-agent::most-recent-thread-turn session))
+           (detail (sbcl-agent::turn-detail session (sbcl-agent::turn-id turn))))
+      (assert-equal :completed (getf detail :status)
+                    "follow-up continuation should leave the turn completed")
+      (assert-equal 3 (length (getf detail :messages))
+                    "follow-up continuation should expose the full turn-local message history")
+      (assert-equal :assistant
+                    (getf (third (getf detail :messages)) :role)
+                    "follow-up continuation should include the final assistant follow-up message in turn-local history")
+      (assert-true (search "Patch applied successfully"
+                           (getf (getf detail :assistant-message) :content))
+                   "follow-up continuation should replace the turn's assistant message with the follow-up summary")
+      (assert-equal :completed
+                    (getf (getf detail :metadata) :followup-state)
+                    "follow-up continuation should leave explicit follow-up state metadata on the turn")
+      (assert-equal 3 (length (getf detail :operations))
+                    "follow-up continuation should add a second provider operation to the turn"))
+    (assert-true (find :turn-followup-started
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "follow-up continuation should emit an explicit follow-up started event")
+    (assert-true (find :turn-followup-completed
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "follow-up continuation should emit an explicit follow-up completed event")))
 
 (defun session-shell-commands-test ()
   (let* ((provider (make-test-provider))
@@ -3944,6 +4371,10 @@ fi
   (format t "PASS say-mixed-action-operations-test~%")
   (say-patch-action-approval-test)
   (format t "PASS say-patch-action-approval-test~%")
+  (say-mutating-eval-approval-test)
+  (format t "PASS say-mutating-eval-approval-test~%")
+  (say-git-write-tool-approval-test)
+  (format t "PASS say-git-write-tool-approval-test~%")
   (streaming-provider-test)
   (format t "PASS streaming-provider-test~%")
   (provider-event-normalization-test)
@@ -4074,6 +4505,10 @@ fi
   (format t "PASS session-summary-recent-transcript-test~%")
   (provider-session-summary-compact-test)
   (format t "PASS provider-session-summary-compact-test~%")
+  (provider-request-context-test)
+  (format t "PASS provider-request-context-test~%")
+  (provider-rendering-context-test)
+  (format t "PASS provider-rendering-context-test~%")
   (session-plan-test)
   (format t "PASS session-plan-test~%")
   (capability-policy-model-test)
@@ -4082,6 +4517,8 @@ fi
   (format t "PASS capability-grant-session-test~%")
   (session-save-load-test)
   (format t "PASS session-save-load-test~%")
+  (session-tail-rebuild-after-load-test)
+  (format t "PASS session-tail-rebuild-after-load-test~%")
   (thread-shell-commands-test)
   (format t "PASS thread-shell-commands-test~%")
   (thread-show-and-turn-status-test)
@@ -4090,6 +4527,10 @@ fi
   (format t "PASS turn-status-approval-summary-test~%")
   (turn-resume-approval-flow-test)
   (format t "PASS turn-resume-approval-flow-test~%")
+  (turn-resume-isolates-pending-actions-by-turn-test)
+  (format t "PASS turn-resume-isolates-pending-actions-by-turn-test~%")
+  (turn-resume-provider-followup-test)
+  (format t "PASS turn-resume-provider-followup-test~%")
   (session-shell-commands-test)
   (format t "PASS session-shell-commands-test~%")
   (list-tools-test)

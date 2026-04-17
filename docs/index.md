@@ -56,6 +56,10 @@ description: Documentation landing page for sbcl-agent.
     <div class="card-title">Common Lisp as a Runtime</div>
     <p>Why SBCL and Common Lisp are useful here, and what engineering discipline is required to use that power safely.</p>
   </a>
+  <a class="card" href="{{ '/common-lisp-guide.html' | relative_url }}">
+    <div class="card-title">Common Lisp Reference</div>
+    <p>A multi-page language-reference section covering syntax, bindings, control flow, collections, objects, packages, I/O, and runtime behavior.</p>
+  </a>
 </div>
 
 ## What The System Supports Now
@@ -107,4 +111,4 @@ Then read the conversation-runtime set:
 2. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
 3. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
 
-If you are new to Common Lisp, read [Common Lisp Language Guide]({{ '/common-lisp-guide.html' | relative_url }}) before diving into the runtime internals.
+If you are new to Common Lisp, read [Common Lisp Language Reference]({{ '/common-lisp-guide.html' | relative_url }}) before diving into the runtime internals.

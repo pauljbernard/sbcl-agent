@@ -3,6 +3,7 @@
 tmp-patch-shell.txt
 *.key
 .bundle/
+.gem/
 .asdf-cache/
 .vscode/
 Execution

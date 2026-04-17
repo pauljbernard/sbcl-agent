@@ -2,19 +2,20 @@
 layout: default
 title: User Guide
 hero_title: User Guide
-hero_text: "The operator surface stays direct: an SBCL-native CLI, a Common Lisp shell, explicit approvals, structured tools, and now a thread-and-turn conversation layer on top of the same runtime."
+hero_text: "The operator surface stays direct: an SBCL-native CLI, a Common Lisp shell, explicit approvals, structured tools, and a growing Environment model in which REPL, conversation, artifacts, and workflow coexist."
 eyebrow: Operators
 permalink: /user-guide.html
 description: Detailed user guide for sbcl-agent.
 ---
 ## What You Can Do Today
 
-`sbcl-agent` currently supports two styles of interaction on one runtime:
+`sbcl-agent` currently supports several styles of interaction inside one evolving environment:
 
 - REPL-style operation, where you type Lisp forms or shell commands and get results immediately
 - conversation-style operation, where you work in durable threads and turns using `(say ...)`
+- workflow-style operation, where governed work-items, validations, approvals, and reconciliations remain visible and inspectable
 
-Both styles share the same provider, tool, session, policy, task, and workflow layers.
+These styles share the same provider, tool, session, policy, task, and workflow layers. The newer roadmap reframes them as coexisting modes inside a larger Environment architecture rather than as separate products.
 
 ## Installation Expectations
 

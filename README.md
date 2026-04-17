@@ -1,12 +1,12 @@
 # sbcl-agent
 
-`sbcl-agent` is an SBCL-native agent runtime and CLI written in Common Lisp. It started as a Codex-style shell, but the codebase is now evolving into a conversation-native engineering environment with three explicit truth domains:
+`sbcl-agent` is an SBCL-native, image-native, agentic Common Lisp environment. It started as a Codex-style shell, but the project is now being reframed around a larger architectural idea: a persistent symbolic environment in which runtimes, conversations, agents, artifacts, work-items, policies, and histories coexist as first-class participants.
 
 - source truth: files, diffs, tests, and durable artifacts
 - image truth: the live SBCL image, loaded definitions, packages, objects, threads, and runtime resources
 - workflow truth: the governed record of plans, mutations, approvals, validations, checkpoints, and reconciliation
 
-The architectural goal is not to clone Codex literally. The goal is to provide Codex-class engineering usefulness on top of an SBCL-native substrate that can inspect and mutate the same running system it is reasoning about.
+The architectural goal is not to clone Codex literally or to reproduce a conventional IDE in Lisp. The goal is to provide Codex-class engineering usefulness on top of an SBCL-native substrate that can inspect and mutate the same running system it is reasoning about while remaining governed, inspectable, and programmable from within.
 
 ## Documentation
 
@@ -20,6 +20,8 @@ Start with:
 - [`docs/architecture.md`](/Volumes/data/development/sbcl-agent/docs/architecture.md)
 - [`docs/user-guide.md`](/Volumes/data/development/sbcl-agent/docs/user-guide.md)
 - [`docs/implementation-plan.md`](/Volumes/data/development/sbcl-agent/docs/implementation-plan.md)
+- [`docs/roadmap/vision.md`](/Volumes/data/development/sbcl-agent/docs/roadmap/vision.md)
+- [`docs/roadmap/visionp2.md`](/Volumes/data/development/sbcl-agent/docs/roadmap/visionp2.md)
 
 Conversation-runtime design and migration docs:
 
@@ -41,7 +43,7 @@ The current runtime already provides:
 - a provider boundary with mock and OpenAI-compatible backends
 - streamed responses through a canonical provider-event layer
 - conversation primitives: threads, messages, turns, operations, and artifacts
-- a shared turn runtime for both `ask` and `say`, with `say` as the conversation-first turn entrypoint
+- a shared turn runtime for both `ask` and `say`, with conversation treated as one native interaction medium rather than the whole system
 - persisted session state with thread-aware shell workflows
 - staged assistant actions, approval-gated turn resume, provider follow-up after resume, and explicit capability grants
 - structured tools for files, docs, session visibility, processes, git, and patches
@@ -51,13 +53,13 @@ The current runtime already provides:
 
 ## Design Rule
 
-The refactor direction is organized around one rule:
+The current architecture is still organized around one rule:
 
 - conversation owns interaction state
 - runtime owns execution state
 - workflow owns engineering governance
 
-That rule fits the codebase's existing strengths instead of replacing them. The shell stays Lisp-native, the runtime stays image-native, and workflow records remain authoritative for governed engineering work.
+That rule still matters, but it now sits inside a larger framing: the shell, REPL, threads, artifacts, work-items, and agents are all becoming inhabitants of a larger Environment object rather than independent top-level concepts.
 
 ## Requirements
 

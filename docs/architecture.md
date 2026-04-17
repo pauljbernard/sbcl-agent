@@ -2,7 +2,7 @@
 layout: default
 title: Architecture and Design
 hero_title: Architecture and Design
-hero_text: The goal is not a literal Codex clone. The goal is an SBCL-native engineering runtime where conversation, execution, and workflow governance are explicit, inspectable layers.
+hero_text: The goal is not a literal Codex clone or a conventional IDE. The goal is an SBCL-native symbolic environment where runtime, conversation, artifacts, agents, and workflow governance are explicit, inspectable layers.
 eyebrow: Architecture
 permalink: /architecture.html
 description: Detailed architecture for sbcl-agent.
@@ -15,6 +15,62 @@ The current codebase now sits between two phases:
 
 - the original shell-plus-streamed-ask runtime is still supported
 - the conversation-native runtime is partially implemented and now shapes the architecture
+- the next stage is shifting toward an Environment-first model in which runtime, conversation, artifacts, work-items, and agents live inside one larger persistent world
+
+## Environment Framing
+
+The new roadmap changes the right architectural center of gravity.
+
+The system should no longer be thought of primarily as:
+
+- a shell with agent features
+- a chat runtime with tooling attached
+- an IDE clone built around editor metaphors
+
+It should instead be thought of as a persistent symbolic environment. In that framing:
+
+- the REPL is one control surface
+- conversation is one control surface
+- workflows are one environment behavior
+- agents are inhabitants rather than features
+- artifacts are native objects rather than output formatting details
+
+The current implementation is still transitional, but future architecture should orient around an `Environment` object rather than around the shell session or thread alone.
+
+## Preserve Capabilities, Discard Metaphors
+
+One of the most important design constraints introduced by the new roadmap is that the project must not drift into legacy Common Lisp IDE parity as its architectural goal.
+
+The systems worth learning from include:
+
+- Portacle
+- SLIME
+- SLY
+- Lem
+- LispWorks
+- Allegro
+
+What matters is not reproducing their panes, menus, keybindings, or editor-centered workflow assumptions. What matters is preserving their enduring powers in a better agentic form.
+
+The enduring powers include:
+
+- live image intimacy
+- incremental development
+- symbolic introspection
+- runtime-level debugging
+- tight source-image navigation
+- programmable environment extensibility
+
+Those capabilities should be translated into environment-native services:
+
+- governed execution substrates
+- runtime incident workflows
+- semantic graphs spanning source, image, artifacts, and work-items
+- continuous validation streams
+- queryable runtime and object models
+- environment-native plugin and agent protocols
+
+This is the design filter that keeps the architecture from collapsing into “LispWorks with chat” or “agentic Emacs for Lisp.”
 
 ## The Three Truths
 
@@ -58,7 +114,7 @@ Every meaningful piece of work should answer:
 - what changed in image?
 - what evidence links the two?
 
-## Ownership Rule
+## Current Ownership Rule
 
 The current refactor is organized around one rule:
 
@@ -66,11 +122,11 @@ The current refactor is organized around one rule:
 - runtime owns execution state
 - workflow owns engineering governance
 
-This prevents conversation history from becoming a second runtime database, and it prevents runtime activity from bypassing workflow evidence.
+This prevents conversation history from becoming a second runtime database, and it prevents runtime activity from bypassing workflow evidence. In the newer vision, these domains should all become explicit subdomains of the Environment rather than peer concepts loosely held together by the shell.
 
 ## Current Runtime Shape
 
-The codebase still exposes one shell-facing session handle, but the internal architecture now spans several real layers.
+The codebase still exposes one shell-facing session handle, but the internal architecture now spans several real layers. That shell-facing handle is now best understood as a transitional composition root on the path toward a fuller Environment object.
 
 ### CLI and shell
 
@@ -106,7 +162,7 @@ Provider requests are also becoming more structured. The provider boundary now c
 - `operation`
 - `artifact`
 
-These records make interaction state explicit instead of treating transcript entries as the only durable truth.
+These records make interaction state explicit instead of treating transcript entries as the only durable truth. Under the new vision, they are not the architectural center by themselves; they are one subsystem within the Environment.
 
 ### Turn orchestration
 
@@ -124,7 +180,7 @@ This is the structural shift from "one streamed response" to "one interaction li
 
 That lifecycle now includes resumed-turn follow-up in the implemented path: after approval-gated actions execute, a provider can be called again to continue and complete the same turn.
 
-### Session runtime
+### Transitional session composition root
 
 [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp) still acts as the shell-facing composition root. It persists:
 
@@ -135,7 +191,7 @@ That lifecycle now includes resumed-turn follow-up in the implemented path: afte
 - work-items and workflow records
 - conversation state that is now threaded into the shell experience
 
-The long-term direction is a cleaner internal split between conversation, runtime, and engineering state while preserving one ergonomic session handle in the shell.
+The long-term direction is to replace this session-centered composition with a clearer Environment model that owns runtimes, threads, agents, artifacts, work-items, policies, and events more explicitly while preserving one ergonomic shell handle.
 
 ### Tool and policy layer
 
@@ -165,7 +221,7 @@ That layer currently supports:
 
 ## Interaction Modes
 
-The target end state has two operator styles on one runtime, and the current implementation already spans both partially.
+The target end state has multiple operator styles inside one environment, and the current implementation already spans some of them partially.
 
 ### REPL mode
 
@@ -176,6 +232,48 @@ The user types Lisp forms or shell commands and gets results immediately. This i
 The user works through persistent threads and turns. Assistant text can stream, operations can be represented explicitly, approvals can pause the turn, and artifacts can be attached to the result.
 
 `(say ...)` is the clearest expression of this direction today, while `(ask ...)` remains as a compatibility surface. Internally, both now share the same turn runner, so they persist the same core turn, operation, and assistant-message records.
+
+### Workflow mode
+
+The user or system works through governed work-items, validations, checkpoints, approvals, and reconciliations as environment-native engineering behaviors.
+
+### Agent mode
+
+The roadmap now explicitly anticipates governed agents as resident actors with identity, scope, capabilities, event participation, and policy boundaries.
+
+## Native Environment Entities
+
+The new roadmap identifies a better set of architectural primitives than shell commands or editor metaphors:
+
+- Environment
+- Runtime
+- Thread
+- Turn
+- Operation
+- Artifact
+- Work-Item
+- Agent
+- Policy
+- Reconciliation Record
+
+The current codebase implements several of these already. The main gap is that they do not yet live under one explicit Environment object in code.
+
+## Genera-Like Territory, Not Nostalgic Reproduction
+
+The roadmap is pointing toward conceptual territory closer to Genera than to a modern IDE, but that comparison needs to be used carefully.
+
+The point is not to recreate old Lisp machine UX. The point is to recover a deeper architectural lesson:
+
+- the environment itself can be the primary programmable artifact
+
+The modernized form differs in important ways:
+
+- it is inherently multi-actor because governed agents are part of the system
+- conversation is a native interaction substrate
+- governance, validation, checkpoints, approvals, and evidence matter far more explicitly
+- the broader environment may span filesystems, processes, services, and external models rather than one isolated image
+
+So the goal is not “build Genera again.” The goal is to build a modern agentic Lisp environment that occupies similar conceptual territory while responding to contemporary operational and governance needs.
 
 ## Transactional Engineering Model
 

@@ -2,10 +2,10 @@
 layout: default
 title: Thread Runtime Migration Plan
 hero_title: Thread Runtime Migration Plan
-hero_text: The migration path preserves the current shell and session model while progressively making thread-based conversation the top-level interaction contract.
+hero_text: The migration path preserves the current shell and session model while progressively adding thread-based conversation, now understood as one subsystem within a larger Environment architecture.
 eyebrow: Blueprint
 permalink: /migration-plan-thread-runtime.html
-description: Migration strategy for adding a thread-based conversation runtime to sbcl-agent.
+description: Migration strategy for adding a thread-based conversation subsystem to sbcl-agent.
 ---
 ## Migration Constraints
 
@@ -17,6 +17,8 @@ The migration must preserve the current strengths of the repo:
 - work-items and workflow records remain authoritative for governed engineering work
 
 The conversation runtime is an insertion, not a destructive rewrite.
+
+This document should now be read as a subsystem migration plan rather than as the whole architectural roadmap. The newer roadmap vision places conversation inside a larger Environment model that also includes runtimes, agents, artifacts, work-items, policies, and histories.
 
 ## Current Baseline
 

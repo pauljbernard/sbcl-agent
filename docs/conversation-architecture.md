@@ -2,16 +2,18 @@
 layout: default
 title: Conversation Runtime Blueprint
 hero_title: Conversation Runtime Blueprint
-hero_text: The conversation layer is no longer just a design idea. sbcl-agent now has real thread and turn primitives, and this blueprint explains both the implemented subset and the target end state.
+hero_text: The conversation layer is no longer just a design idea. sbcl-agent now has real thread and turn primitives, but the roadmap now treats conversation as one native subsystem within a larger Environment architecture.
 eyebrow: Blueprint
 permalink: /conversation-architecture.html
 description: Technical blueprint for threads, turns, operations, and artifacts in sbcl-agent.
 ---
 ## Intent
 
-This document defines the conversation-runtime architecture that evolves `sbcl-agent` from a shell with streamed ask into a persistent conversation runtime backed by the same SBCL image and workflow-governed engineering model.
+This document defines the conversation-runtime architecture that evolves `sbcl-agent` from a shell with streamed ask into a persistent conversation subsystem backed by the same SBCL image and workflow-governed engineering model.
 
 It is intentionally not a plan to replace the existing shell. The shell, direct Lisp evaluation, capability gates, work-items, and background execution model remain strengths that the conversation layer should preserve.
+
+The newer roadmap narrows the role of this document: conversation is now one native medium within the Environment rather than the singular destination of the architecture.
 
 ## Ownership Rule
 
@@ -44,6 +46,14 @@ Still transitional:
 - the top-level mutable state is still largely organized through `agent-session`
 - event flow is more structured than before but not yet fully separated from every legacy path
 - runtime and workflow operations are not yet uniformly exposed as first-class conversation operations
+
+## Place in the Larger Architecture
+
+Conversation is still important, but it is no longer the whole architectural frame. In the new vision:
+
+- Environment becomes the top-level object
+- Runtime, Thread, Artifact, Work-Item, Agent, and Policy become peer native entities
+- conversation remains the subsystem that gives threads, turns, and conversational coordination their structure
 
 ## Runtime Shape
 

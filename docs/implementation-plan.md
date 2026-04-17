@@ -2,7 +2,7 @@
 layout: default
 title: Implementation Plan
 hero_title: Implementation Plan
-hero_text: "The program now has two linked tracks: preserve the transactional, workflow-governed SBCL core and complete the move from streamed ask to a persistent conversation runtime."
+hero_text: "The program now has a broader target: preserve the transactional, workflow-governed SBCL core while re-centering the architecture around an Environment object that contains runtimes, threads, agents, artifacts, and work-items."
 eyebrow: Roadmap
 permalink: /implementation-plan.html
 description: Detailed implementation roadmap for sbcl-agent.
@@ -15,13 +15,13 @@ description: Detailed implementation roadmap for sbcl-agent.
 - an inspectable and mutable SBCL image
 - explicit source truth, image truth, and workflow truth
 - governed execution rather than hidden side effects
-- conversation-native interaction on top of the same runtime
+- conversation-native interaction as one subsystem inside a larger environment
 
 The target is not parity in implementation detail. The target is parity or advantage in operator outcomes.
 
 ## Program Structure
 
-The work is best understood as two coordinated programs.
+The work is now best understood as three coordinated programs.
 
 ### 1. Transactional live-image program
 
@@ -44,6 +44,16 @@ This is the newer interaction-layer program:
 
 The second program does not replace the first. It gives the first a better operator contract.
 
+### 3. Environment architecture program
+
+This is the new program established by the roadmap vision:
+
+- introduce a concrete Environment object
+- treat runtimes, threads, agents, artifacts, and work-items as native environment entities
+- move from session-centered composition to environment-centered composition
+- make conversation one native medium of control rather than the whole architectural story
+- translate the enduring powers of classic Lisp tooling into environment-native services instead of rebuilding legacy IDE surfaces
+
 ## Current Status Snapshot
 
 Implemented or substantially in place:
@@ -62,7 +72,10 @@ Implemented or substantially in place:
 
 Still incomplete or still planned:
 
+- a concrete Environment object that owns the major subsystems
 - a fully separated internal conversation/runtime/engineering state model
+- an explicit agent registry and environment-level resident actor model
+- a capability-translation layer that preserves legacy Lisp tool powers without reproducing their architectural metaphors
 - richer operation and artifact coverage across all mutating paths
 - runtime tool families for governed image inspection and mutation
 - stronger crash recovery and resumability
@@ -77,7 +90,9 @@ Status: largely complete
 Deliverables:
 
 - architecture and rationale docs aligned with the three-truth model
-- conversation-runtime blueprint
+- environment vision and model
+- capability translation matrix from legacy Lisp tool functions to environment primitives
+- conversation-runtime blueprint, now reframed as one subsystem
 - streaming event model
 - migration plan
 - implementation plan tied to real source modules
@@ -148,7 +163,38 @@ Exit condition:
 
 - one turn can stream, dispatch operations, pause, resume, and complete with durable evidence
 
-### Stage 4. Runtime tool family
+### Stage 3.5. Environment composition root
+
+Status: newly required by the roadmap pivot
+
+Goal:
+
+- introduce a concrete Environment object that becomes the primary architectural container
+
+Expected deliverables:
+
+- environment creation, load, save, and inspection APIs
+- references to runtime set, thread set, artifact graph, work-item graph, policy engine, event bus, and agent registry
+- a compatibility path where `agent-session` becomes a transitional component inside the Environment rather than the top-level concept
+
+### Stage 4. Capability translation from legacy Lisp tooling
+
+Status: now explicitly required
+
+Goal:
+
+- preserve the enduring powers of classic Common Lisp environments without rebuilding their legacy IDE metaphors
+
+Expected deliverables:
+
+- direct eval as a governed execution substrate rather than only a text listener
+- debugging reframed as runtime incident and recovery workflow
+- symbolic and source navigation reframed as environment graph traversal
+- inspection reframed as queryable runtime/object graph access
+- validation and compiler feedback reframed as continuous mutation feedback
+- optional compatibility affordances kept separate from the architectural center
+
+### Stage 5. Runtime tool family
 
 Status: planned
 
@@ -162,7 +208,7 @@ Expected deliverables:
 - runtime-specific capability classes
 - work-item-aware policies for mutating runtime operations
 
-### Stage 5. Artifact and workflow bridge
+### Stage 6. Artifact and workflow bridge
 
 Status: partially implemented conceptually, incomplete operationally
 
@@ -178,7 +224,7 @@ Remaining work:
 - make every governed mutating turn attach consistently to work-items and workflow records
 - improve operator rendering of evidence
 
-### Stage 6. Operator UX refinement
+### Stage 7. Operator UX refinement
 
 Status: in progress
 
@@ -193,8 +239,9 @@ Work includes:
 - clearer approval prompts
 - better artifact summaries
 - improved session and thread visibility
+- better environment-level visibility across runtimes, threads, agents, artifacts, and work-items
 
-### Stage 7. Hardening and recovery
+### Stage 8. Hardening and recovery
 
 Status: planned
 
@@ -214,10 +261,11 @@ Work includes:
 
 The sequencing matters.
 
-1. Stabilize event and turn semantics before adding more provider cleverness.
-2. Keep orchestration in Lisp rather than in prompt conventions.
-3. Preserve REPL compatibility while making conversation first-class.
-4. Route mutating behavior through workflow evidence rather than letting chat bypass governance.
+1. Introduce the Environment object before the architecture fragments further around legacy session boundaries.
+2. Stabilize event and turn semantics before adding more provider cleverness.
+3. Keep orchestration in Lisp rather than in prompt conventions.
+4. Preserve REPL compatibility while making conversation first-class without mistaking it for the whole system.
+5. Route mutating behavior through workflow evidence rather than letting chat or agents bypass governance.
 5. Improve rollback, replay, and reproducibility before chasing aggressive multi-agent parallelism.
 
 ## File-Level Map

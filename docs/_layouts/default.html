@@ -12,7 +12,7 @@
       <header class="site-header">
         <div>
           <a class="site-brand" href="{{ '/' | relative_url }}">sbcl-agent</a>
-          <p class="site-tagline">Transactional, image-native agent engineering on SBCL</p>
+          <p class="site-tagline">A persistent, image-native, agentic Common Lisp environment on SBCL</p>
         </div>
         <nav class="top-nav" aria-label="Top navigation">
           <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Home</a>
@@ -20,6 +20,8 @@
           <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture</a>
           <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' or page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Vision</a>
+          <a href="{{ '/capability-translation-matrix.html' | relative_url }}"{% if page.url == '/capability-translation-matrix.html' %} aria-current="page"{% endif %}>Matrix</a>
           <a href="{{ '/common-lisp-runtime.html' | relative_url }}"{% if page.url == '/common-lisp-runtime.html' %} aria-current="page"{% endif %}>CL Runtime</a>
           <a href="{{ '/implementation-plan.html' | relative_url }}"{% if page.url == '/implementation-plan.html' %} aria-current="page"{% endif %}>Plan</a>
         </nav>
@@ -33,6 +35,10 @@
           <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why sbcl-agent Exists</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
           <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <p class="sidebar-label">Vision</p>
+          <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' %} aria-current="page"{% endif %}>Positioning Statement</a>
+          <a href="{{ '/roadmap/environment-model.html' | relative_url }}"{% if page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Environment Model</a>
+          <a href="{{ '/capability-translation-matrix.html' | relative_url }}"{% if page.url == '/capability-translation-matrix.html' %} aria-current="page"{% endif %}>Capability Matrix</a>
           <p class="sidebar-label">Conversation Runtime</p>
           <a href="{{ '/conversation-architecture.html' | relative_url }}"{% if page.url == '/conversation-architecture.html' %} aria-current="page"{% endif %}>Conversation Runtime</a>
           <a href="{{ '/streaming-event-model.html' | relative_url }}"{% if page.url == '/streaming-event-model.html' %} aria-current="page"{% endif %}>Streaming Event Model</a>

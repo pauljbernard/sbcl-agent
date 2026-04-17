@@ -1,19 +1,20 @@
 ---
 layout: default
 title: Documentation
-hero_title: A Conversation-Native, SBCL-Backed Engineering Runtime
-hero_text: sbcl-agent is an image-native Common Lisp agent environment that now supports both direct REPL workflows and persistent conversation threads on top of one governed runtime.
+hero_title: A Persistent, Image-Native Lisp Environment
+hero_text: sbcl-agent is being reframed as a programmable symbolic environment in which runtimes, conversations, agents, artifacts, and workflow records coexist inside one governed SBCL-native world.
 eyebrow: Docs Home
 permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>North star:</strong> build a governed, transactional, image-native engineering environment where conversation owns interaction state, runtime owns execution state, and workflow owns engineering governance.</div>
+<div class="callout"><strong>North star:</strong> build a persistent, image-native, agentic Common Lisp environment in which humans and governed agents collaboratively inspect, execute, validate, and evolve software inside a living symbolic world.</div>
 
 <div class="quick-links">
   <a class="quick-link" href="{{ '/objectives.html' | relative_url }}"><strong>Objectives</strong>Read the product and architecture objectives first.</a>
   <a class="quick-link" href="{{ '/user-guide.html' | relative_url }}"><strong>Operator Guide</strong>Jump straight to the current CLI and shell workflow.</a>
-  <a class="quick-link" href="{{ '/conversation-architecture.html' | relative_url }}"><strong>Conversation Runtime</strong>See the thread and turn model behind the refactor.</a>
+  <a class="quick-link" href="{{ '/roadmap/vision.html' | relative_url }}"><strong>Vision</strong>Read the new positioning and environment-first direction.</a>
+  <a class="quick-link" href="{{ '/capability-translation-matrix.html' | relative_url }}"><strong>Capability Matrix</strong>See how legacy Lisp tool functions should be preserved, transformed, or discarded.</a>
   <a class="quick-link" href="{{ '/implementation-plan.html' | relative_url }}"><strong>Roadmap</strong>See what is implemented now and what remains.</a>
 </div>
 
@@ -30,7 +31,7 @@ description: Documentation landing page for sbcl-agent.
   </a>
   <a class="card" href="{{ '/architecture.html' | relative_url }}">
     <div class="card-title">Architecture and Design</div>
-    <p>The current runtime architecture, ownership boundaries, data model, workflow governance, and module map.</p>
+    <p>The current architecture, the new Environment-first framing, ownership boundaries, and how the implemented runtime maps into that direction.</p>
   </a>
   <a class="card" href="{{ '/user-guide.html' | relative_url }}">
     <div class="card-title">User Guide</div>
@@ -38,11 +39,23 @@ description: Documentation landing page for sbcl-agent.
   </a>
   <a class="card" href="{{ '/implementation-plan.html' | relative_url }}">
     <div class="card-title">Implementation Plan</div>
-    <p>The execution program, what is already implemented, and what remains to harden the conversation runtime and workflow bridge.</p>
+    <p>The execution program for moving from a shell-plus-session model toward an Environment-centered symbolic system.</p>
   </a>
   <a class="card" href="{{ '/conversation-architecture.html' | relative_url }}">
     <div class="card-title">Conversation Runtime</div>
-    <p>The thread, message, turn, operation, and artifact model that turns chat into a first-class runtime layer.</p>
+    <p>The thread, message, turn, operation, and artifact model, now treated as one subsystem within the larger Environment architecture.</p>
+  </a>
+  <a class="card" href="{{ '/roadmap/vision.html' | relative_url }}">
+    <div class="card-title">Vision</div>
+    <p>The positioning statement that explains why the project should no longer be framed as an IDE or an agent shell with more features.</p>
+  </a>
+  <a class="card" href="{{ '/roadmap/environment-model.html' | relative_url }}">
+    <div class="card-title">Environment Model</div>
+    <p>The Environment object, its laws, native entities, and the structural implications for the next stage of the architecture.</p>
+  </a>
+  <a class="card" href="{{ '/capability-translation-matrix.html' | relative_url }}">
+    <div class="card-title">Capability Translation Matrix</div>
+    <p>A design filter that maps legacy Lisp tool powers into agentic environment primitives so the project preserves capabilities without rebuilding a legacy IDE.</p>
   </a>
   <a class="card" href="{{ '/streaming-event-model.html' | relative_url }}">
     <div class="card-title">Streaming Event Model</div>
@@ -71,23 +84,23 @@ description: Documentation landing page for sbcl-agent.
 - mock and OpenAI-compatible providers
 - canonical provider event normalization for streaming
 - persistent threads, messages, turns, operations, and artifacts
-- `ask` compatibility plus `say` for conversation-first turns
+- direct Lisp control, conversation, and governed workflow as coexisting interaction modes
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
 
-## Core Rule
+## Current Rule
 
-The current refactor is organized around one ownership rule:
+The current implementation is still organized around one ownership rule:
 
 - conversation owns interaction state
 - runtime owns execution state
 - workflow owns engineering governance
 
-That rule keeps the system from collapsing chat history, live runtime state, and engineering evidence into one undifferentiated session blob.
+That rule keeps the system from collapsing chat history, live runtime state, and engineering evidence into one undifferentiated session blob. The new roadmap extends this by placing those domains inside a larger Environment object rather than treating thread or shell state as the architectural center.
 
 ## What Makes sbcl-agent Different
 
-Most agent CLIs treat the running process as disposable infrastructure. `sbcl-agent` treats the live SBCL image as part of the engineering substrate. The operator can reason in Lisp, the runtime can be inspected in Lisp, and the workflow layer records what changed in source, what changed in the image, and what evidence links the two.
+Most agent CLIs treat the running process as disposable infrastructure. `sbcl-agent` treats the live SBCL image as part of the engineering substrate, and the new vision goes further: the runtime, conversation threads, agents, artifacts, and work-items are all being treated as native entities of one living environment.
 
 That leads to a stricter success question:
 
@@ -105,10 +118,13 @@ If you are new to the project, read in this order:
 4. [User Guide]({{ '/user-guide.html' | relative_url }})
 5. [Implementation Plan]({{ '/implementation-plan.html' | relative_url }})
 
-Then read the conversation-runtime set:
+Then read the environment-and-runtime set:
 
-1. [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
-2. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
-3. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
+1. [Vision]({{ '/roadmap/vision.html' | relative_url }})
+2. [Environment Model]({{ '/roadmap/environment-model.html' | relative_url }})
+3. [Capability Translation Matrix]({{ '/capability-translation-matrix.html' | relative_url }})
+4. [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
+5. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
+6. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
 
 If you are new to Common Lisp, read [Common Lisp Language Reference]({{ '/common-lisp-guide.html' | relative_url }}) before diving into the runtime internals.

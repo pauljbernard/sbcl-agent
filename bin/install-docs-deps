@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_GEM_ROOT="$ROOT_DIR/vendor/gems"
+HOMEBREW_RUBY_BIN="/opt/homebrew/opt/ruby/bin"
+
+if [[ -d "$HOMEBREW_RUBY_BIN" ]]; then
+  export PATH="$HOMEBREW_RUBY_BIN:$PATH"
+fi
+
+export GEM_HOME="$LOCAL_GEM_ROOT"
+export GEM_PATH="$LOCAL_GEM_ROOT"
+export PATH="$LOCAL_GEM_ROOT/bin:$PATH"
+
+if ! command -v ruby >/dev/null 2>&1; then
+  echo "ruby is required to install docs dependencies" >&2
+  exit 1
+fi
+
+if ! command -v gem >/dev/null 2>&1; then
+  echo "gem is required to install docs dependencies" >&2
+  exit 1
+fi
+
+if ! command -v bundle >/dev/null 2>&1; then
+  echo "bundler is required to install docs dependencies" >&2
+  exit 1
+fi
+
+cd "$ROOT_DIR"
+
+if ! bundle _2.5.23_ -v >/dev/null 2>&1; then
+  gem install bundler:2.5.23
+fi
+
+bundle _2.5.23_ install

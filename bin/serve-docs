@@ -2,6 +2,18 @@
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+LOCAL_GEM_ROOT="$ROOT_DIR/vendor/gems"
+HOMEBREW_RUBY_BIN="/opt/homebrew/opt/ruby/bin"
+
+if [[ -d "$HOMEBREW_RUBY_BIN" ]]; then
+  export PATH="$HOMEBREW_RUBY_BIN:$PATH"
+fi
+
+if [[ -d "$LOCAL_GEM_ROOT" ]]; then
+  export GEM_HOME="$LOCAL_GEM_ROOT"
+  export GEM_PATH="$LOCAL_GEM_ROOT"
+  export PATH="$LOCAL_GEM_ROOT/bin:$PATH"
+fi
 
 if ! command -v bundle >/dev/null 2>&1; then
   echo "bundle is required to serve the docs site" >&2
@@ -10,7 +22,7 @@ fi
 
 cd "$ROOT_DIR"
 if ! bundle check >/dev/null 2>&1; then
-  echo "docs dependencies are not installed; run: bundle install" >&2
+  echo "docs dependencies are not installed; run: ./bin/install-docs-deps" >&2
   exit 1
 fi
 

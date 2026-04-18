@@ -7,6 +7,12 @@ eyebrow: Architecture
 permalink: /architecture.html
 description: Detailed architecture for sbcl-agent.
 ---
+## Reading Position
+
+Read [Foundation]({{ '/foundation.html' | relative_url }}) first if you have not already. This document maps the conceptual model onto the implementation that exists today.
+
+It is not the best entry point for understanding why the project exists.
+
 ## System Objective
 
 Build a governed, transactional, image-native engineering environment that can inspect and mutate the same running system it is reasoning about while preserving reproducibility, rollback intent, provenance, and operator trust.
@@ -16,6 +22,8 @@ The current codebase now sits between two phases:
 - the original shell-plus-streamed-ask runtime is still supported
 - the conversation-native runtime is partially implemented and now shapes the architecture
 - the next stage is shifting toward an Environment-first model in which runtime, conversation, artifacts, work-items, and agents live inside one larger persistent world
+
+That means the right description of the codebase is neither "prototype shell" nor "finished environment platform." It is an implemented transitional architecture with a clear direction of travel.
 
 ## Environment Framing
 
@@ -130,7 +138,7 @@ The codebase still exposes one shell-facing session handle, but the internal arc
 
 ### CLI and shell
 
-Top-level entrypoints in [`bin/`](/Volumes/data/development/sbcl-agent/bin) dispatch into the Common Lisp runtime. The interactive shell in [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp) accepts both:
+Top-level entrypoints in `bin/` dispatch into the Common Lisp runtime. The interactive shell in `src/shell.lisp` accepts both:
 
 - recognized shell commands such as `(ask ...)`, `(say ...)`, `(tool ...)`, `(thread/new ...)`, and `(turn/status ...)`
 - ordinary Lisp forms for direct evaluation in the `SBCL-AGENT-USER` package
@@ -139,14 +147,14 @@ Top-level entrypoints in [`bin/`](/Volumes/data/development/sbcl-agent/bin) disp
 
 ### Command normalization
 
-[`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp) maps recognized forms into structured command records and leaves everything else as ordinary Lisp evaluation. This compatibility rule is deliberate: the conversation runtime is an added layer, not a replacement for the REPL-backed operator model.
+`src/commands.lisp` maps recognized forms into structured command records and leaves everything else as ordinary Lisp evaluation. This compatibility rule is deliberate: the conversation runtime is an added layer, not a replacement for the REPL-backed operator model.
 
 ### Provider boundary and streaming
 
-[`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp) normalizes provider events into a canonical shape. The system currently supports:
+`src/provider-protocol.lisp` normalizes provider events into a canonical shape. The system currently supports:
 
-- a mock provider in [`src/provider-mock.lisp`](/Volumes/data/development/sbcl-agent/src/provider-mock.lisp)
-- an OpenAI-compatible provider in [`src/provider-openai.lisp`](/Volumes/data/development/sbcl-agent/src/provider-openai.lisp)
+- a mock provider in `src/provider-mock.lisp`
+- an OpenAI-compatible provider in `src/provider-openai.lisp`
 
 Streaming is now more event-aware than the original shell implementation, although the OpenAI path still carries some transitional behavior while the event model continues to harden.
 
@@ -172,7 +180,7 @@ Provider requests are also becoming more structured. The provider boundary now c
 
 ### Conversation layer
 
-[`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp) introduces durable interaction objects:
+`src/conversation.lisp` introduces durable interaction objects:
 
 - `thread`
 - `message`
@@ -182,11 +190,11 @@ Provider requests are also becoming more structured. The provider boundary now c
 
 These records make interaction state explicit instead of treating transcript entries as the only durable truth. Under the new vision, they are not the architectural center by themselves; they are one subsystem within the Environment.
 
-That subsystem now also has an explicit environment-domain module in [`src/conversation-state.lisp`](/Volumes/data/development/sbcl-agent/src/conversation-state.lisp). The environment uses that module for conversation-domain summaries and active thread/turn orientation instead of treating conversation state as ad hoc summary logic embedded only in the environment root.
+That subsystem now also has an explicit environment-domain module in `src/conversation-state.lisp`. The environment uses that module for conversation-domain summaries and active thread/turn orientation instead of treating conversation state as ad hoc summary logic embedded only in the environment root.
 
 ### Turn orchestration
 
-[`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp) is the new boundary between provider streaming and governed execution. It is responsible for:
+`src/turn-orchestrator.lisp` is the new boundary between provider streaming and governed execution. It is responsible for:
 
 - creating turn records
 - updating assistant messages during streaming
@@ -202,7 +210,7 @@ That lifecycle now includes resumed-turn follow-up in the implemented path: afte
 
 ### Transitional session composition root
 
-[`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp) still acts as the shell-facing composition root. It persists:
+`src/session.lisp` still acts as the shell-facing composition root. It persists:
 
 - events and transcript-like history
 - pending assistant actions
@@ -218,12 +226,12 @@ The current implementation now goes further than earlier transitional versions i
 - environment orientation paths such as `environment/status` derive active thread and turn context from Environment-owned conversation state instead of requiring a compatibility-session read
 - provider request summaries prefer one Environment snapshot per request and no longer silently fall back to session-derived plan or artifact summary values when the Environment snapshot is already authoritative
 
-The same tightening now applies at the module level for runtime state as well. [`src/runtime-state.lisp`](/Volumes/data/development/sbcl-agent/src/runtime-state.lisp) owns the primary runtime-domain builders and summaries used by the environment, which reduces how much runtime-domain logic is mixed directly into the older session/environment bridge.
+The same tightening now applies at the module level for runtime state as well. `src/runtime-state.lisp` owns the primary runtime-domain builders and summaries used by the environment, which reduces how much runtime-domain logic is mixed directly into the older session/environment bridge.
 
 The next level of that split is now in place too:
 
-- [`src/workflow-state.lisp`](/Volumes/data/development/sbcl-agent/src/workflow-state.lisp) owns workflow-domain construction, summaries, and environment write-through for work-items and workflow records
-- [`src/artifact-state.lisp`](/Volumes/data/development/sbcl-agent/src/artifact-state.lisp) owns environment-level artifact indexing and evidence summaries
+- `src/workflow-state.lisp` owns workflow-domain construction, summaries, and environment write-through for work-items and workflow records
+- `src/artifact-state.lisp` owns environment-level artifact indexing and evidence summaries
 
 That means runtime, conversation, workflow, and artifact state all now have concrete module boundaries in the codebase rather than existing only as conceptual categories inside `src/environment.lisp`.
 
@@ -245,11 +253,11 @@ Tools remain structured, explicit capabilities. Current tool families include:
 - git tools
 - patch application
 
-Policy and capability control live in [`src/policy.lisp`](/Volumes/data/development/sbcl-agent/src/policy.lisp) and [`src/sandbox.lisp`](/Volumes/data/development/sbcl-agent/src/sandbox.lisp). The system is designed so conversation mode does not bypass those gates.
+Policy and capability control live in `src/policy.lisp` and `src/sandbox.lisp`. The system is designed so conversation mode does not bypass those gates.
 
 ### Tasks, workers, and governed workflow
 
-[`src/tasks.lisp`](/Volumes/data/development/sbcl-agent/src/tasks.lisp), [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp), and [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp) hold the governed engineering layer.
+`src/tasks.lisp`, `src/work-items.lisp`, and `src/workflow.lisp` hold the governed engineering layer.
 
 That layer currently supports:
 
@@ -377,15 +385,15 @@ The work-item system already models checkpoint-like metadata, replayable validat
 
 The current source tree maps to the architecture like this:
 
-- [`src/main.lisp`](/Volumes/data/development/sbcl-agent/src/main.lisp): CLI dispatch and top-level commands
-- [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp): shell command normalization
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp), [`src/repl.lisp`](/Volumes/data/development/sbcl-agent/src/repl.lisp): operator interface and command execution
-- [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp), [`src/provider-mock.lisp`](/Volumes/data/development/sbcl-agent/src/provider-mock.lisp), [`src/provider-openai.lisp`](/Volumes/data/development/sbcl-agent/src/provider-openai.lisp): provider boundary
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp), [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp): conversation and turn lifecycle
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp), [`src/events.lisp`](/Volumes/data/development/sbcl-agent/src/events.lisp), [`src/tasks.lisp`](/Volumes/data/development/sbcl-agent/src/tasks.lisp): runtime state, event log, tasks, workers
-- [`src/tools-*.lisp`](/Volumes/data/development/sbcl-agent/src): structured capability surface
-- [`src/policy.lisp`](/Volumes/data/development/sbcl-agent/src/policy.lisp), [`src/sandbox.lisp`](/Volumes/data/development/sbcl-agent/src/sandbox.lisp), [`src/patch.lisp`](/Volumes/data/development/sbcl-agent/src/patch.lisp): execution governance and mutation controls
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp), [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp): governed engineering records
+- `src/main.lisp`: CLI dispatch and top-level commands
+- `src/commands.lisp`: shell command normalization
+- `src/shell.lisp`, `src/repl.lisp`: operator interface and command execution
+- `src/provider-protocol.lisp`, `src/provider-mock.lisp`, `src/provider-openai.lisp`: provider boundary
+- `src/conversation.lisp`, `src/turn-orchestrator.lisp`: conversation and turn lifecycle
+- `src/session.lisp`, `src/events.lisp`, `src/tasks.lisp`: runtime state, event log, tasks, workers
+- `src/tools-*.lisp`: structured capability surface
+- `src/policy.lisp`, `src/sandbox.lisp`, `src/patch.lisp`: execution governance and mutation controls
+- `src/work-items.lisp`, `src/workflow.lisp`: governed engineering records
 
 ## What Is Implemented Versus Planned
 

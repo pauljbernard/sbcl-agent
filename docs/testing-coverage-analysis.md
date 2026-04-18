@@ -39,7 +39,7 @@ Observed wall-clock baseline on this machine:
 
 The repository currently uses one primary test system:
 
-- [`tests/smoke.lisp`](/Volumes/data/development/sbcl-agent/tests/smoke.lisp)
+- `tests/smoke.lisp`
 
 That file contains a large mixed suite covering:
 
@@ -67,16 +67,16 @@ That is a strong overall result for a workflow-heavy Common Lisp codebase, but i
 
 The best-covered modules are the ones that now carry the main conversation, runtime, and workflow behavior:
 
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp): `99.7%` expression, `87.5%` branch
-- [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp): `96.8%` expression, `84.6%` branch
-- [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp): `96.2%` expression, `97.4%` branch
-- [`src/environment.lisp`](/Volumes/data/development/sbcl-agent/src/environment.lisp): `94.9%` expression, `62.5%` branch
-- [`src/provider-openai.lisp`](/Volumes/data/development/sbcl-agent/src/provider-openai.lisp): `95.1%` expression, `69.0%` branch
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp): `95.1%` expression, `68.0%` branch
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp): `94.2%` expression, `81.0%` branch
-- [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp): `94.0%` expression, `93.8%` branch
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp): `89.9%` expression, `82.9%` branch
-- [`src/tools-runtime.lisp`](/Volumes/data/development/sbcl-agent/src/tools-runtime.lisp): `91.4%` expression, `80.8%` branch
+- `src/workflow.lisp`: `99.7%` expression, `87.5%` branch
+- `src/provider-protocol.lisp`: `96.8%` expression, `84.6%` branch
+- `src/commands.lisp`: `96.2%` expression, `97.4%` branch
+- `src/environment.lisp`: `94.9%` expression, `62.5%` branch
+- `src/provider-openai.lisp`: `95.1%` expression, `69.0%` branch
+- `src/session.lisp`: `95.1%` expression, `68.0%` branch
+- `src/conversation.lisp`: `94.2%` expression, `81.0%` branch
+- `src/turn-orchestrator.lisp`: `94.0%` expression, `93.8%` branch
+- `src/work-items.lisp`: `89.9%` expression, `82.9%` branch
+- `src/tools-runtime.lisp`: `91.4%` expression, `80.8%` branch
 
 These are the right places to be strong. They represent the live architectural center of gravity.
 
@@ -86,18 +86,18 @@ The lower-coverage files fall into two different categories.
 
 Category one: thin wrappers or registration modules that are exercised mostly indirectly:
 
-- [`src/tools-process.lisp`](/Volumes/data/development/sbcl-agent/src/tools-process.lisp): `27.3%` expression
-- [`src/tools-git.lisp`](/Volumes/data/development/sbcl-agent/src/tools-git.lisp): `29.4%` expression
-- [`src/package.lisp`](/Volumes/data/development/sbcl-agent/src/package.lisp): `0.0%` expression
-- [`src/repl.lisp`](/Volumes/data/development/sbcl-agent/src/repl.lisp): `75.0%` expression
+- `src/tools-process.lisp`: `27.3%` expression
+- `src/tools-git.lisp`: `29.4%` expression
+- `src/package.lisp`: `0.0%` expression
+- `src/repl.lisp`: `75.0%` expression
 
 Category two: real behavior surfaces that still deserve more direct test attention:
 
-- [`src/policy.lisp`](/Volumes/data/development/sbcl-agent/src/policy.lisp): `45.0%` expression
-- [`src/tools-session.lisp`](/Volumes/data/development/sbcl-agent/src/tools-session.lisp): `72.9%` expression, `83.3%` branch
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp): `81.1%` expression, `65.8%` branch
-- [`src/tools-docs.lisp`](/Volumes/data/development/sbcl-agent/src/tools-docs.lisp): `84.8%` expression
-- [`src/json.lisp`](/Volumes/data/development/sbcl-agent/src/json.lisp): `87.4%` expression, `86.8%` branch
+- `src/policy.lisp`: `45.0%` expression
+- `src/tools-session.lisp`: `72.9%` expression, `83.3%` branch
+- `src/shell.lisp`: `81.1%` expression, `65.8%` branch
+- `src/tools-docs.lisp`: `84.8%` expression
+- `src/json.lisp`: `87.4%` expression, `86.8%` branch
 
 The key distinction is this: low coverage in `tools-git.lisp` is not as alarming as low coverage in `shell.lisp` or `policy.lisp`. The former is mostly a registration and isolation boundary; the latter two represent real decision-making and operator-facing behavior.
 
@@ -105,15 +105,15 @@ The key distinction is this: low coverage in `tools-git.lisp` is not as alarming
 
 The main branch-coverage gaps are:
 
-- [`src/environment-store.lisp`](/Volumes/data/development/sbcl-agent/src/environment-store.lisp): `50.0%`
-- [`src/patch.lisp`](/Volumes/data/development/sbcl-agent/src/patch.lisp): `50.0%`
-- [`src/tasks.lisp`](/Volumes/data/development/sbcl-agent/src/tasks.lisp): `50.0%`
-- [`src/config.lisp`](/Volumes/data/development/sbcl-agent/src/config.lisp): `60.0%`
-- [`src/incidents.lisp`](/Volumes/data/development/sbcl-agent/src/incidents.lisp): `61.1%`
-- [`src/environment.lisp`](/Volumes/data/development/sbcl-agent/src/environment.lisp): `62.5%`
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp): `65.8%`
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp): `68.0%`
-- [`src/provider-openai.lisp`](/Volumes/data/development/sbcl-agent/src/provider-openai.lisp): `69.0%`
+- `src/environment-store.lisp`: `50.0%`
+- `src/patch.lisp`: `50.0%`
+- `src/tasks.lisp`: `50.0%`
+- `src/config.lisp`: `60.0%`
+- `src/incidents.lisp`: `61.1%`
+- `src/environment.lisp`: `62.5%`
+- `src/shell.lisp`: `65.8%`
+- `src/session.lisp`: `68.0%`
+- `src/provider-openai.lisp`: `69.0%`
 
 Those numbers do not mean those modules are weak overall, but they do indicate that several alternate or failure paths are still exercised less thoroughly than the mainline logic.
 
@@ -172,7 +172,7 @@ Functional coverage of the implemented architecture is strong and is currently t
 
 ## User-Story Coverage Assessment
 
-The product objectives in [`docs/objectives.md`](/Volumes/data/development/sbcl-agent/docs/objectives.md) imply a set of operator stories. The table below maps those stories to current coverage.
+The product objectives in [Objectives]({{ '/objectives.html' | relative_url }}) imply a set of operator stories. The table below maps those stories to current coverage.
 
 | User story | Current coverage | Assessment |
 | --- | --- | --- |
@@ -205,7 +205,7 @@ This is the weakest part of the current quality posture.
   - `SBCL_AGENT_PERF_MAX_TURN_DETAIL_MS`
 - a persisted benchmark report at `tmp/performance/latest.sexp`
 - larger benchmark workloads for detail rendering and persistence scaling
-- CI enforcement via [`.github/workflows/ci.yml`](/Volumes/data/development/sbcl-agent/.github/workflows/ci.yml)
+- CI enforcement via `.github/workflows/ci.yml`
 - a smoke suite whose total runtime is currently acceptable on this machine
 
 ### What Does Not Exist Yet

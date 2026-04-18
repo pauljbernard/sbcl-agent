@@ -37,7 +37,7 @@ Example:
 (asdf:operate 'asdf:load-op :sbcl-agent)
 ```
 
-From [sbcl-agent.asd](/Volumes/data/development/sbcl-agent/sbcl-agent.asd), the system is assembled from serially loaded source files under `src/` and `tests/`.
+From `sbcl-agent.asd`, the system is assembled from serially loaded source files under `src/` and `tests/`.
 
 ## Optimization Declarations
 

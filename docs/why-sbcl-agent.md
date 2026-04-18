@@ -7,11 +7,19 @@ eyebrow: Rationale
 permalink: /why-sbcl-agent.html
 description: Project rationale, differentiation, value proposition, risks, and mitigations for sbcl-agent.
 ---
+## Reading Position
+
+If you are new to the project, start with [The Problem]({{ '/problem.html' | relative_url }}) and [Application Domains]({{ '/application-domains.html' | relative_url }}) first.
+
+This document is the broader positioning and differentiation layer. It assumes the reader already understands why a runtime-aware, governed model is being argued for.
+
 ## Origin
 
 `sbcl-agent` began with a practical question: can a Codex-style developer CLI be built natively in Common Lisp on SBCL without hiding the real implementation in another language?
 
 That baseline has now been proven. The shell, provider boundary, session model, tools, and workflow logic all live in Common Lisp.
+
+The more important question now is not whether the project can exist. It is what kind of system it is becoming, what stage of maturity it has reached, and why that direction is justified.
 
 ## The Real Objective
 
@@ -44,6 +52,12 @@ And it adds a new interaction rule:
 - workflow owns engineering governance
 
 That shift was an important step, but it is no longer the final framing. The newer vision is larger: a persistent symbolic environment in which runtimes, threads, agents, artifacts, work-items, and policies all become first-class inhabitants.
+
+The current codebase should therefore be described honestly as:
+
+- implemented enough to demonstrate the model in real operator workflows
+- not yet finished as a full environment-native platform
+- directionally clear about the move from session-centered composition toward environment-centered composition
 
 ## How It Differs From Most Agent Systems
 
@@ -148,6 +162,8 @@ The architecture therefore emphasizes:
 - replay and reconciliation
 - live versus colder validation distinctions
 - explicit conversation, runtime, and workflow boundaries
+
+For the fuller treatment of the risk model, read [Safety and Risk]({{ '/safety-and-risk.html' | relative_url }}).
 
 ## The Payoff
 

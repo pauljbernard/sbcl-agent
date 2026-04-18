@@ -7,6 +7,12 @@ eyebrow: Operators
 permalink: /user-guide.html
 description: Detailed user guide for sbcl-agent.
 ---
+## Reading Position
+
+If you are new to the project, read [Getting Started]({{ '/getting-started.html' | relative_url }}) first.
+
+This page is the detailed operator reference. It assumes you already understand why the system exists and how the basic thread-and-turn workflow starts.
+
 ## What You Can Do Today
 
 `sbcl-agent` currently supports several styles of interaction inside one evolving environment:
@@ -22,7 +28,7 @@ These styles share the same provider, tool, session, policy, task, and workflow 
 The current project assumes:
 
 - SBCL is installed
-- you can run the scripts in [`bin/`](/Volumes/data/development/sbcl-agent/bin) from a POSIX-like shell
+- you can run the scripts in `bin/` from a POSIX-like shell
 - git is installed if you want git-backed workflows
 
 Basic verification from the repository root:
@@ -57,6 +63,8 @@ Prints runtime diagnostics, including provider selection, working directory, she
 ### `./bin/sbcl-agent chat`
 
 Starts the interactive Common Lisp shell.
+
+This is also how you enter the conversational layer. There is no separate conversation daemon or separate conversation CLI entrypoint. You start `chat`, then use thread commands plus `(say ...)` inside that shell.
 
 ### `./bin/sbcl-agent chat -i`
 
@@ -110,6 +118,25 @@ That means the shell is both:
 ## Conversation Workflow
 
 The newer conversation model adds durable threads and turns on top of the shell.
+
+The startup sequence is:
+
+1. Run `./bin/sbcl-agent chat`.
+2. Create or select a thread.
+3. Use `(say ...)` in that thread.
+
+Minimal first-run example:
+
+```bash
+./bin/sbcl-agent chat
+```
+
+Then, inside the shell:
+
+```lisp
+(thread/new :title "first conversation")
+(say "Summarize the current architecture." :stream t)
+```
 
 ### Create or inspect threads
 

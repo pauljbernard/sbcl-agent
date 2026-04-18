@@ -16,8 +16,8 @@ It is not a feature list. It is a design filter.
 
 Each journey is evaluated against:
 
-- the stated objectives in [Objectives](/Volumes/data/development/sbcl-agent/docs/objectives.md)
-- the implemented operator surface in [User Guide](/Volumes/data/development/sbcl-agent/docs/user-guide.md)
+- the stated objectives in [Objectives]({{ '/objectives.html' | relative_url }})
+- the implemented operator surface in [User Guide]({{ '/user-guide.html' | relative_url }})
 - the current conversation and environment architecture
 
 The aim is to answer one question clearly:
@@ -238,7 +238,7 @@ The project already delivers a strong journey for direct Lisp work, governed con
 
 The next phase should not chase more feature breadth first. It should make the existing world more coherent from the user’s point of view.
 
-The concrete execution backlog derived from this matrix now lives in [User Journey Implementation Backlog](/Volumes/data/development/sbcl-agent/docs/user-journey-implementation-backlog.md).
+The concrete execution backlog derived from this matrix now lives in [User Journey Implementation Backlog]({{ '/user-journey-implementation-backlog.html' | relative_url }}).
 
 The central design problem now is not:
 

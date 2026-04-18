@@ -16,34 +16,41 @@
         </div>
         <nav class="top-nav" aria-label="Top navigation">
           <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Home</a>
-          <a href="{{ '/objectives.html' | relative_url }}"{% if page.url == '/objectives.html' %} aria-current="page"{% endif %}>Objectives</a>
-          <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why</a>
+          <a href="{{ '/problem.html' | relative_url }}"{% if page.url == '/problem.html' %} aria-current="page"{% endif %}>Problem</a>
+          <a href="{{ '/foundation.html' | relative_url }}"{% if page.url == '/foundation.html' %} aria-current="page"{% endif %}>Foundation</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture</a>
-          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <a href="{{ '/getting-started.html' | relative_url }}"{% if page.url == '/getting-started.html' %} aria-current="page"{% endif %}>Start</a>
+          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>Operator</a>
+          <a href="{{ '/safety-and-risk.html' | relative_url }}"{% if page.url == '/safety-and-risk.html' %} aria-current="page"{% endif %}>Safety</a>
           <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' or page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Vision</a>
-          <a href="{{ '/capability-translation-matrix.html' | relative_url }}"{% if page.url == '/capability-translation-matrix.html' %} aria-current="page"{% endif %}>Matrix</a>
-          <a href="{{ '/roadmap/codex-execution-plan.html' | relative_url }}"{% if page.url == '/roadmap/codex-execution-plan.html' %} aria-current="page"{% endif %}>Execution</a>
-          <a href="{{ '/common-lisp-runtime.html' | relative_url }}"{% if page.url == '/common-lisp-runtime.html' %} aria-current="page"{% endif %}>CL Runtime</a>
           <a href="{{ '/implementation-plan.html' | relative_url }}"{% if page.url == '/implementation-plan.html' %} aria-current="page"{% endif %}>Plan</a>
         </nav>
       </header>
 
       <div class="layout-grid">
         <aside class="sidebar" aria-label="Documentation navigation">
-          <p class="sidebar-label">Orientation</p>
+          <p class="sidebar-label">Start Here</p>
           <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Overview</a>
+          <a href="{{ '/problem.html' | relative_url }}"{% if page.url == '/problem.html' %} aria-current="page"{% endif %}>The Problem</a>
+          <a href="{{ '/application-domains.html' | relative_url }}"{% if page.url == '/application-domains.html' %} aria-current="page"{% endif %}>Application Domains</a>
+          <a href="{{ '/foundation.html' | relative_url }}"{% if page.url == '/foundation.html' %} aria-current="page"{% endif %}>Foundation</a>
+          <a href="{{ '/core-entities.html' | relative_url }}"{% if page.url == '/core-entities.html' %} aria-current="page"{% endif %}>Core Entities</a>
+          <a href="{{ '/mutation-model.html' | relative_url }}"{% if page.url == '/mutation-model.html' %} aria-current="page"{% endif %}>Mutation Model</a>
           <a href="{{ '/objectives.html' | relative_url }}"{% if page.url == '/objectives.html' %} aria-current="page"{% endif %}>Objectives</a>
           <a href="{{ '/why-sbcl-agent.html' | relative_url }}"{% if page.url == '/why-sbcl-agent.html' %} aria-current="page"{% endif %}>Why sbcl-agent Exists</a>
+          <a href="{{ '/safety-and-risk.html' | relative_url }}"{% if page.url == '/safety-and-risk.html' %} aria-current="page"{% endif %}>Safety and Risk</a>
+          <a href="{{ '/documentation-principles.html' | relative_url }}"{% if page.url == '/documentation-principles.html' %} aria-current="page"{% endif %}>Documentation Principles</a>
+          <p class="sidebar-label">Use It</p>
+          <a href="{{ '/getting-started.html' | relative_url }}"{% if page.url == '/getting-started.html' %} aria-current="page"{% endif %}>Getting Started</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
           <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
-          <p class="sidebar-label">Vision</p>
+          <a href="{{ '/conversation-architecture.html' | relative_url }}"{% if page.url == '/conversation-architecture.html' %} aria-current="page"{% endif %}>Conversation Runtime</a>
+          <a href="{{ '/streaming-event-model.html' | relative_url }}"{% if page.url == '/streaming-event-model.html' %} aria-current="page"{% endif %}>Streaming Event Model</a>
+          <p class="sidebar-label">Roadmap</p>
           <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' %} aria-current="page"{% endif %}>Positioning Statement</a>
           <a href="{{ '/roadmap/environment-model.html' | relative_url }}"{% if page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Environment Model</a>
           <a href="{{ '/capability-translation-matrix.html' | relative_url }}"{% if page.url == '/capability-translation-matrix.html' %} aria-current="page"{% endif %}>Capability Matrix</a>
           <a href="{{ '/roadmap/codex-execution-plan.html' | relative_url }}"{% if page.url == '/roadmap/codex-execution-plan.html' %} aria-current="page"{% endif %}>Codex Execution Plan</a>
-          <p class="sidebar-label">Conversation Runtime</p>
-          <a href="{{ '/conversation-architecture.html' | relative_url }}"{% if page.url == '/conversation-architecture.html' %} aria-current="page"{% endif %}>Conversation Runtime</a>
-          <a href="{{ '/streaming-event-model.html' | relative_url }}"{% if page.url == '/streaming-event-model.html' %} aria-current="page"{% endif %}>Streaming Event Model</a>
           <a href="{{ '/migration-plan-thread-runtime.html' | relative_url }}"{% if page.url == '/migration-plan-thread-runtime.html' %} aria-current="page"{% endif %}>Migration Plan</a>
           <p class="sidebar-label">Background</p>
           <a href="{{ '/common-lisp-runtime.html' | relative_url }}"{% if page.url == '/common-lisp-runtime.html' %} aria-current="page"{% endif %}>Common Lisp as a Runtime</a>

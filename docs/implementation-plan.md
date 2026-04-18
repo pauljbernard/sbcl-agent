@@ -7,6 +7,12 @@ eyebrow: Roadmap
 permalink: /implementation-plan.html
 description: Detailed implementation roadmap for sbcl-agent.
 ---
+## Reading Position
+
+This is a roadmap document, not an entry point.
+
+Read [The Problem]({{ '/problem.html' | relative_url }}), [Foundation]({{ '/foundation.html' | relative_url }}), and [Architecture]({{ '/architecture.html' | relative_url }}) first if you want to understand the system before reading planned work.
+
 ## North Star
 
 `sbcl-agent` should deliver Codex-class software engineering usefulness while using a different internal architecture:
@@ -23,7 +29,7 @@ The target is not parity in implementation detail. The target is parity or advan
 
 The work is now best understood as three coordinated programs.
 
-The user-facing prioritization filter for these programs is captured in [User Journey Gap Matrix](/Volumes/data/development/sbcl-agent/docs/user-journey-gap-matrix.md), which evaluates the implemented system against the operator journeys implied by the objectives and vision.
+The user-facing prioritization filter for these programs is captured in [User Journey Gap Matrix]({{ '/user-journey-gap-matrix.html' | relative_url }}), which evaluates the implemented system against the operator journeys implied by the objectives and vision.
 
 ### 1. Transactional live-image program
 
@@ -57,6 +63,8 @@ This is the new program established by the roadmap vision:
 - translate the enduring powers of classic Lisp tooling into environment-native services instead of rebuilding legacy IDE surfaces
 
 ## Current Status Snapshot
+
+This section should be read literally. It distinguishes implemented behavior from direction, because the project is now mature enough that overstating the roadmap would make the docs less trustworthy, not more.
 
 Implemented or substantially in place:
 
@@ -95,7 +103,7 @@ Still incomplete or still planned:
 
 ### Stage 0. Documentation and design lock
 
-Status: largely complete
+Status: largely complete, with continuing consistency cleanup
 
 Deliverables:
 
@@ -321,19 +329,19 @@ The sequencing matters.
 
 Current key implementation files:
 
-- [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
-- [`src/provider-openai.lisp`](/Volumes/data/development/sbcl-agent/src/provider-openai.lisp)
-- [`src/provider-mock.lisp`](/Volumes/data/development/sbcl-agent/src/provider-mock.lisp)
-- [`src/events.lisp`](/Volumes/data/development/sbcl-agent/src/events.lisp)
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-- [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp)
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
-- [`src/policy.lisp`](/Volumes/data/development/sbcl-agent/src/policy.lisp)
-- [`src/tasks.lisp`](/Volumes/data/development/sbcl-agent/src/tasks.lisp)
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp)
+- `src/provider-protocol.lisp`
+- `src/provider-openai.lisp`
+- `src/provider-mock.lisp`
+- `src/events.lisp`
+- `src/session.lisp`
+- `src/shell.lisp`
+- `src/commands.lisp`
+- `src/conversation.lisp`
+- `src/turn-orchestrator.lisp`
+- `src/policy.lisp`
+- `src/tasks.lisp`
+- `src/work-items.lisp`
+- `src/workflow.lisp`
 
 Likely future additions:
 

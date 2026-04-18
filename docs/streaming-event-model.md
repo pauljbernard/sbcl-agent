@@ -24,7 +24,7 @@ The codebase already has part of this model in place.
 
 Implemented now:
 
-- canonical provider-event normalization in [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
+- canonical provider-event normalization in `src/provider-protocol.lisp`
 - shell handling for event-driven streamed behavior
 - turn orchestration that can translate assistant activity into operation and artifact records
 

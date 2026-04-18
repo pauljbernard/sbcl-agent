@@ -7,6 +7,12 @@ eyebrow: Blueprint
 permalink: /conversation-architecture.html
 description: Technical blueprint for threads, turns, operations, and artifacts in sbcl-agent.
 ---
+## Reading Position
+
+This document should be read after [Foundation]({{ '/foundation.html' | relative_url }}) and [Architecture]({{ '/architecture.html' | relative_url }}).
+
+It explains one subsystem of the environment, not the whole project.
+
 ## Intent
 
 This document defines the conversation-runtime architecture that evolves `sbcl-agent` from a shell with streamed ask into a persistent conversation subsystem backed by the same SBCL image and workflow-governed engineering model.
@@ -31,15 +37,15 @@ The codebase already implements part of this blueprint.
 
 Present in code now:
 
-- durable `thread`, `message`, `turn`, `operation`, and `artifact` records in [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- thread-aware shell commands in [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp) and [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
+- durable `thread`, `message`, `turn`, `operation`, and `artifact` records in `src/conversation.lisp`
+- thread-aware shell commands in `src/commands.lisp` and `src/shell.lisp`
 - `say` as a conversation-first command
 - `ask` routed through the same turn runner with `:repl-bridge` operator semantics
 - `turn/status` and `turn/resume`
 - incident recording and inspection with `incident/list` and `incident/show`
 - `incident/show` expanded into a compact incident workspace view with linked thread, turn, operation, work-item, and workflow summaries when available, plus recovery and wait guidance for operator follow-through
-- turn orchestration in [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
-- canonical provider-event normalization in [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
+- turn orchestration in `src/turn-orchestrator.lisp`
+- canonical provider-event normalization in `src/provider-protocol.lisp`
 - governed mutation binding for patches, mutating eval, and write-class tool actions
 - provider follow-up after turn resume, with follow-up lifecycle metadata and events
 - incident-aware turn detail, recovery summaries, and workflow quarantine behavior for failed governed runtime actions
@@ -55,6 +61,8 @@ Still transitional:
 - the top-level mutable state is still partly organized through `agent-session`, but environment-owned summaries, events, artifacts, workflow state, agent state, and provider context now carry much more of the system’s operational truth than earlier transitional versions
 - event flow is more structured than before but not yet fully separated from every legacy path
 - runtime and workflow operations are not yet uniformly exposed as first-class conversation operations
+
+That maturity statement matters. The conversation subsystem is real and usable now, but it is still part of a broader architectural migration rather than a finished isolated product.
 
 ## Place in the Larger Architecture
 

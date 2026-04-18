@@ -24,6 +24,13 @@ The plan assumes the current codebase already provides:
 
 The plan began from a point where the Environment architecture did not yet exist in code. That is no longer true: the repository now has a concrete Environment object, save/load support, projected environment events, and environment-oriented shell commands. The remaining work is to deepen and normalize that architecture rather than introduce it from scratch.
 
+The execution framing has now been tightened further. The next stage should be read through two coordinated tracks:
+
+- kernel consolidation
+- public service interface extraction for future presentation-tier tooling
+
+The concrete iteration tracker for that two-track program now lives in [Kernel and Services Iteration Plan]({{ '/roadmap/kernel-and-services-iteration-plan.html' | relative_url }}).
+
 ## Execution Rules
 
 Every implementation iteration should follow these rules:
@@ -38,16 +45,16 @@ Every implementation iteration should follow these rules:
 
 ## Current Architectural Starting Point
 
-The current code is organized around a transitional composition root in [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp), plus conversation and workflow subsystems:
+The current code is organized around a transitional composition root in `src/session.lisp`, plus conversation and workflow subsystems:
 
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
-- [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp)
-- [`src/tasks.lisp`](/Volumes/data/development/sbcl-agent/src/tasks.lisp)
+- `src/session.lisp`
+- `src/conversation.lisp`
+- `src/turn-orchestrator.lisp`
+- `src/provider-protocol.lisp`
+- `src/shell.lisp`
+- `src/work-items.lisp`
+- `src/workflow.lisp`
+- `src/tasks.lisp`
 
 The Environment now exists in code. The biggest structural gap is that it is still partly a compatibility composition root rather than the unquestioned primary truth container for:
 
@@ -115,10 +122,10 @@ Create a concrete Environment object and make it the new composition root withou
 
 ### Files to Modify
 
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [`src/main.lisp`](/Volumes/data/development/sbcl-agent/src/main.lisp)
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-- [`sbcl-agent.asd`](/Volumes/data/development/sbcl-agent/sbcl-agent.asd)
+- `src/session.lisp`
+- `src/main.lisp`
+- `src/shell.lisp`
+- `sbcl-agent.asd`
 
 ### Environment Object Requirements
 
@@ -179,10 +186,10 @@ Break the current mixed session state into explicit domain groupings under the E
 
 ### Files to Modify
 
-- [`src/session.lisp`](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp)
+- `src/session.lisp`
+- `src/conversation.lisp`
+- `src/work-items.lisp`
+- `src/workflow.lisp`
 
 ### Domain Split
 
@@ -323,9 +330,9 @@ Move from a flat artifact list toward an artifact graph with explicit relationsh
 
 ### Files to Modify
 
-- [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp)
+- `src/conversation.lisp`
+- `src/work-items.lisp`
+- `src/workflow.lisp`
 
 ### Relationship Types
 
@@ -464,9 +471,9 @@ Make validation and evidence generation more automatic so warm-image success doe
 
 ### Files to Modify
 
-- [`src/work-items.lisp`](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [`src/workflow.lisp`](/Volumes/data/development/sbcl-agent/src/workflow.lisp)
-- [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
+- `src/work-items.lisp`
+- `src/workflow.lisp`
+- `src/turn-orchestrator.lisp`
 
 ### Requirements
 
@@ -539,8 +546,8 @@ Expose the Environment model coherently through the shell without sacrificing di
 
 ### Files to Modify
 
-- [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-- [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp)
+- `src/shell.lisp`
+- `src/commands.lisp`
 
 ### Commands to Add
 

@@ -2,7 +2,7 @@
 layout: default
 title: Environment Model
 hero_title: Environment Model
-hero_text: The next architectural center of gravity is the Environment object: the top-level world that contains runtimes, threads, agents, artifacts, policies, and histories.
+hero_text: "The next architectural center of gravity is the Environment object: the top-level world that contains runtimes, threads, agents, artifacts, policies, and histories."
 eyebrow: Roadmap
 permalink: /roadmap/environment-model.html
 description: Environment-first architectural model for sbcl-agent.

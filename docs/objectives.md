@@ -7,6 +7,12 @@ eyebrow: Objectives
 permalink: /objectives.html
 description: Product objectives and success criteria for sbcl-agent.
 ---
+## Reading Position
+
+This document is best read after [The Problem]({{ '/problem.html' | relative_url }}) and [Foundation]({{ '/foundation.html' | relative_url }}).
+
+Those documents explain why the project exists and what conceptual model it is using. This document defines what success should look like given that model.
+
 ## Primary Objective
 
 Build a persistent, image-native, agentic Common Lisp environment that can inspect and mutate the same live system it is reasoning about while preserving operator trust through explicit approvals, durable evidence, and reproducible source-backed outcomes.
@@ -131,8 +137,10 @@ Work-items, validations, checkpoints, approvals, and reconciliations operate as 
 Near-term success means:
 
 - the docs describe the current runtime honestly
+- the docs explain the problem before the architecture
 - the shell and docs use one consistent vocabulary
 - conversation primitives are documented as implemented, not just planned
+- strengths and weaknesses are stated explicitly
 - the roadmap clearly distinguishes what is live from what is still forthcoming
 
 Longer-term success means:
@@ -161,3 +169,4 @@ The project is on track when:
 - approvals and workflow evidence remain visible under mutating workloads
 - threads, artifacts, and governed work survive normal interruptions
 - the docs, shell, and code all describe the same architecture
+- a new reader can understand why the system exists before reading roadmap material

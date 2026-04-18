@@ -1,38 +1,78 @@
 # sbcl-agent
 
-`sbcl-agent` is an SBCL-native, image-native, agentic Common Lisp environment. It started as a Codex-style shell, but the project is now being reframed around a larger architectural idea: a persistent symbolic environment in which runtimes, conversations, agents, artifacts, work-items, policies, and histories coexist as first-class participants.
+`sbcl-agent` is an SBCL-native, image-native, agentic Common Lisp environment.
+
+It began as a Codex-style shell, but the project has matured into something more specific: a governed environment in which source truth, live runtime truth, and workflow truth are all first-class and explicitly related.
+
+The point of the project is not to recreate a conventional IDE in Lisp or to wrap an LLM with shell tools. The point is to let humans and agents inspect and mutate the same running system they are reasoning about while preserving approvals, evidence, incidents, reconciliation, and operator trust.
+
+## Why It Exists
+
+The dominant SDLC model was correct for the constraints it was built under:
+
+- runtime state was hard to inspect directly
+- live mutation was risky
+- feedback loops were delayed
+
+Those constraints produced a source-first engineering model that emphasized isolation, stability, and reproducibility.
+
+That model still matters, but it increasingly limits direct understanding of stateful systems. Most toolchains and agent systems still operate on files, logs, and tool outputs as proxies for the system rather than on the runtime itself.
+
+`sbcl-agent` explores a different model:
 
 - source truth: files, diffs, tests, and durable artifacts
 - image truth: the live SBCL image, loaded definitions, packages, objects, threads, and runtime resources
 - workflow truth: the governed record of plans, mutations, approvals, validations, checkpoints, and reconciliation
 
-The architectural goal is not to clone Codex literally or to reproduce a conventional IDE in Lisp. The goal is to provide Codex-class engineering usefulness on top of an SBCL-native substrate that can inspect and mutate the same running system it is reasoning about while remaining governed, inspectable, and programmable from within.
+## What Makes It Different
+
+- The shell is actually Common Lisp. Unrecognized forms are evaluated directly in the host runtime.
+- The live SBCL image is part of the engineering substrate, not disposable infrastructure.
+- Conversation is durable through threads, turns, operations, and artifacts, but conversation does not replace the runtime or workflow model.
+- Governance is intrinsic. Policy, approvals, incidents, work-items, workflow records, validation, and reconciliation are part of the architecture.
+
+## Current State
+
+The codebase is real and usable today. It currently provides:
+
+- an SBCL-native CLI and interactive Common Lisp shell
+- direct Lisp evaluation in the same runtime that hosts the agent
+- mock and OpenAI-compatible providers
+- canonical provider-event normalization and streaming
+- a concrete `Environment` object with save/load, summaries, and projected environment events
+- durable `thread`, `message`, `turn`, `operation`, and `artifact` records
+- a shared turn runner for both `ask` and `say`
+- approval-aware turn orchestration and resumed-turn follow-up
+- structured tools for files, docs, runtime, processes, git, and patches
+- persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
+
+The project is also intentionally transitional. It is moving from a session-centered composition model toward an environment-centered one, so some compatibility structure still exists in the implementation.
 
 ## Documentation
 
-The primary docs live in [`docs/`](/Volumes/data/development/sbcl-agent/docs).
+Start here:
 
-Start with:
+1. [Documentation Home](docs/index.md)
+2. [The Problem](docs/problem.md)
+3. [Application Domains](docs/application-domains.md)
+4. [Foundation](docs/foundation.md)
+5. [Architecture](docs/architecture.md)
+6. [Getting Started](docs/getting-started.md)
+7. [User Guide](docs/user-guide.md)
+8. [Safety and Risk](docs/safety-and-risk.md)
 
-- [`docs/index.md`](/Volumes/data/development/sbcl-agent/docs/index.md)
-- [`docs/objectives.md`](/Volumes/data/development/sbcl-agent/docs/objectives.md)
-- [`docs/why-sbcl-agent.md`](/Volumes/data/development/sbcl-agent/docs/why-sbcl-agent.md)
-- [`docs/architecture.md`](/Volumes/data/development/sbcl-agent/docs/architecture.md)
-- [`docs/user-guide.md`](/Volumes/data/development/sbcl-agent/docs/user-guide.md)
-- [`docs/implementation-plan.md`](/Volumes/data/development/sbcl-agent/docs/implementation-plan.md)
-- [`docs/roadmap/vision.md`](/Volumes/data/development/sbcl-agent/docs/roadmap/vision.md)
-- [`docs/roadmap/visionp2.md`](/Volumes/data/development/sbcl-agent/docs/roadmap/visionp2.md)
+Then use these as secondary or forward-looking material:
 
-Conversation-runtime design and migration docs:
+- [Why sbcl-agent Exists](docs/why-sbcl-agent.md)
+- [Objectives](docs/objectives.md)
+- [Implementation Plan](docs/implementation-plan.md)
+- [Vision](docs/roadmap/vision.md)
+- [Environment Model](docs/roadmap/visionp2.md)
+- [Conversation Runtime](docs/conversation-architecture.md)
+- [Streaming Event Model](docs/streaming-event-model.md)
+- [Thread Runtime Migration Plan](docs/migration-plan-thread-runtime.md)
 
-- [`docs/conversation-architecture.md`](/Volumes/data/development/sbcl-agent/docs/conversation-architecture.md)
-- [`docs/streaming-event-model.md`](/Volumes/data/development/sbcl-agent/docs/streaming-event-model.md)
-- [`docs/migration-plan-thread-runtime.md`](/Volumes/data/development/sbcl-agent/docs/migration-plan-thread-runtime.md)
-
-Background docs:
-
-- [`docs/common-lisp-runtime.md`](/Volumes/data/development/sbcl-agent/docs/common-lisp-runtime.md)
-- [`docs/common-lisp-guide.md`](/Volumes/data/development/sbcl-agent/docs/common-lisp-guide.md)
+If you are new to Common Lisp, start with [Common Lisp as a Runtime](docs/common-lisp-runtime.md) and then [Common Lisp Reference](docs/common-lisp-guide.md).
 
 ## What It Does Today
 
@@ -59,12 +99,12 @@ The current architecture is still organized around one rule:
 - runtime owns execution state
 - workflow owns engineering governance
 
-That rule still matters, but it now sits inside a larger framing: the shell, REPL, threads, artifacts, work-items, and agents are all becoming inhabitants of a larger Environment object rather than independent top-level concepts.
+That rule still matters, but it now sits inside a larger framing: the shell, REPL, threads, artifacts, work-items, and agents are all becoming inhabitants of a larger `Environment` object rather than independent top-level concepts.
 
 ## Requirements
 
 - SBCL
-- a POSIX-like shell environment for the helper scripts in [`bin/`](/Volumes/data/development/sbcl-agent/bin)
+- a POSIX-like shell environment for the helper scripts in `bin/`
 - git if you want git-backed tooling and workflows
 
 The project is developed and tested against SBCL. Other Common Lisp implementations are not current targets.
@@ -122,6 +162,14 @@ From the repository root:
 ./bin/run-tests
 ```
 
+To start the conversational layer that sits on top of the REPL layer:
+
+1. Start the Lisp shell with `./bin/sbcl-agent chat`.
+2. Inside that shell, create or select a thread with `(thread/new :title "my thread")` or `(thread/use "thread-id")`.
+3. Start a conversational turn with `(say "your prompt here")`.
+
+There is no separate conversation-only process. The conversation layer runs inside the same `chat` shell.
+
 Top-level CLI commands:
 
 - `./bin/sbcl-agent help`
@@ -132,6 +180,7 @@ Top-level CLI commands:
 - `./bin/sbcl-agent rgp <subcommand> ...`
 - `./bin/run-tests`
 - `./bin/run-coverage`
+- `./bin/install-docs-deps`
 - `./bin/build-docs`
 - `./bin/serve-docs`
 
@@ -225,15 +274,14 @@ The mock provider is the fastest way to validate shell, event, and orchestration
 
 ## Docs Publishing
 
-The docs site is now meant to be generated from the Markdown sources in [`docs/`](/Volumes/data/development/sbcl-agent/docs) through Jekyll rather than maintained as checked-in rendered HTML.
+The docs site is generated from the Markdown sources in `docs/` through Jekyll rather than maintained as checked-in rendered HTML.
 
 Local workflows:
 
 ```bash
-gem install bundler:2.5.23
-bundle install
+./bin/install-docs-deps
 ./bin/build-docs
 ./bin/serve-docs
 ```
 
-If your local Ruby setup does not already provide the locked Bundler version, install it first. The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in [docs.yml](/Volumes/data/development/sbcl-agent/.github/workflows/docs.yml) and republishes automatically when docs-related changes land on `main`.
+`./bin/install-docs-deps` installs the pinned Bundler and Jekyll gems into the repository-local `vendor/gems` path and prefers Homebrew Ruby when available, which avoids the usual macOS system-Ruby permission and version mismatch problems. The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in `.github/workflows/docs.yml` and republishes automatically when docs-related changes land on `main`.

@@ -1,46 +1,90 @@
 ---
 layout: default
 title: Documentation
-hero_title: A Persistent, Image-Native Lisp Environment
-hero_text: sbcl-agent is being reframed as a programmable symbolic environment in which runtimes, conversations, agents, artifacts, and workflow records coexist inside one governed SBCL-native world.
+hero_title: Documentation Front Door
+hero_text: Start with the problem, then the capability shift, then the model, then the implementation. sbcl-agent is easiest to understand in that order.
 eyebrow: Docs Home
 permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>North star:</strong> build a persistent, image-native, agentic Common Lisp environment in which humans and governed agents collaboratively inspect, execute, validate, and evolve software inside a living symbolic world.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent is a real SBCL-native shell, conversation runtime, and governed workflow substrate today. It is also in the middle of a deliberate architectural shift from session-centered composition toward an environment-centered model.</div>
 
 <div class="quick-links">
-  <a class="quick-link" href="{{ '/objectives.html' | relative_url }}"><strong>Objectives</strong>Read the product and architecture objectives first.</a>
-  <a class="quick-link" href="{{ '/user-guide.html' | relative_url }}"><strong>Operator Guide</strong>Jump straight to the current CLI and shell workflow.</a>
-  <a class="quick-link" href="{{ '/roadmap/vision.html' | relative_url }}"><strong>Vision</strong>Read the new positioning and environment-first direction.</a>
-  <a class="quick-link" href="{{ '/capability-translation-matrix.html' | relative_url }}"><strong>Capability Matrix</strong>See how legacy Lisp tool functions should be preserved, transformed, or discarded.</a>
-  <a class="quick-link" href="{{ '/roadmap/codex-execution-plan.html' | relative_url }}"><strong>Execution Plan</strong>Read the concrete phased plan for implementing the vision in this repository.</a>
-  <a class="quick-link" href="{{ '/implementation-plan.html' | relative_url }}"><strong>Roadmap</strong>See what is implemented now and what remains.</a>
+  <a class="quick-link" href="{{ '/problem.html' | relative_url }}"><strong>The Problem</strong>Understand why the old model worked, why it now constrains understanding, and why this project exists.</a>
+  <a class="quick-link" href="{{ '/application-domains.html' | relative_url }}"><strong>Application Domains</strong>See where governed, runtime-aware causality becomes necessary rather than optional.</a>
+  <a class="quick-link" href="{{ '/foundation.html' | relative_url }}"><strong>Foundation</strong>Learn the three-truth model and the environment-first framing.</a>
+  <a class="quick-link" href="{{ '/getting-started.html' | relative_url }}"><strong>Getting Started</strong>Run the shell, create a thread, and execute a first turn.</a>
+  <a class="quick-link" href="{{ '/architecture.html' | relative_url }}"><strong>Architecture</strong>Map the conceptual model onto the code that exists today.</a>
+  <a class="quick-link" href="{{ '/safety-and-risk.html' | relative_url }}"><strong>Safety and Risk</strong>Read the system's strengths, weaknesses, and governance model directly.</a>
 </div>
 
-## Documentation Paths
+## Recommended Reading Order
+
+If you are new to the project, read in this order:
+
+1. [The Problem]({{ '/problem.html' | relative_url }})
+2. [Application Domains]({{ '/application-domains.html' | relative_url }})
+3. [Foundation]({{ '/foundation.html' | relative_url }})
+4. [Core Entities]({{ '/core-entities.html' | relative_url }})
+5. [Mutation Model]({{ '/mutation-model.html' | relative_url }})
+6. [Architecture and Design]({{ '/architecture.html' | relative_url }})
+7. [Getting Started]({{ '/getting-started.html' | relative_url }})
+8. [User Guide]({{ '/user-guide.html' | relative_url }})
+9. [Safety and Risk]({{ '/safety-and-risk.html' | relative_url }})
+
+Then use the roadmap and transition documents as forward-looking context rather than entry points.
+
+## Documentation Layers
 
 <div class="card-grid">
+  <a class="card" href="{{ '/problem.html' | relative_url }}">
+    <div class="card-title">The Problem</div>
+    <p>The rationale for the project in terms of changing constraints, runtime understanding, and the limits of current SDLC and agent models.</p>
+  </a>
+  <a class="card" href="{{ '/application-domains.html' | relative_url }}">
+    <div class="card-title">Application Domains</div>
+    <p>Why governed environments such as finance, intelligence, and regulated enterprise work expose the need for intrinsic causality and evidence.</p>
+  </a>
+  <a class="card" href="{{ '/foundation.html' | relative_url }}">
+    <div class="card-title">Foundation</div>
+    <p>What sbcl-agent is, what it is not, and how source truth, image truth, and workflow truth fit together.</p>
+  </a>
+  <a class="card" href="{{ '/core-entities.html' | relative_url }}">
+    <div class="card-title">Core Entities</div>
+    <p>The environment, runtime, thread, turn, operation, artifact, work-item, workflow record, agent, policy, and incident model.</p>
+  </a>
+  <a class="card" href="{{ '/mutation-model.html' | relative_url }}">
+    <div class="card-title">Mutation Model</div>
+    <p>The lifecycle for governed change: inspect, plan, checkpoint, mutate, observe, validate, reconcile, and close or quarantine.</p>
+  </a>
   <a class="card" href="{{ '/why-sbcl-agent.html' | relative_url }}">
     <div class="card-title">Why sbcl-agent Exists</div>
-    <p>Project rationale, the three-truth model, and why a live SBCL image changes the design space for agent systems.</p>
+    <p>An additional positioning and differentiation document that captures the project's broader thesis and the legacy-tooling trap it is avoiding.</p>
   </a>
   <a class="card" href="{{ '/objectives.html' | relative_url }}">
     <div class="card-title">Objectives</div>
-    <p>The concrete product, architecture, and operational goals that define success for the project.</p>
+    <p>The product, architecture, and operational goals that define success for the current implementation and the next stage.</p>
   </a>
   <a class="card" href="{{ '/architecture.html' | relative_url }}">
     <div class="card-title">Architecture and Design</div>
-    <p>The current architecture, the new Environment-first framing, ownership boundaries, and how the implemented runtime maps into that direction.</p>
+    <p>The current code structure, ownership boundaries, environment transition, and how the implemented runtime maps onto the conceptual model.</p>
+  </a>
+  <a class="card" href="{{ '/getting-started.html' | relative_url }}">
+    <div class="card-title">Getting Started</div>
+    <p>The shortest path to running the system and completing a first thread-based interaction.</p>
   </a>
   <a class="card" href="{{ '/user-guide.html' | relative_url }}">
     <div class="card-title">User Guide</div>
-    <p>How to run the CLI, use the Lisp shell, work with threads and turns, approve operations, and inspect governed state.</p>
+    <p>The detailed operator reference for the CLI, Lisp shell, conversation flow, approvals, incidents, and environment inspection.</p>
+  </a>
+  <a class="card" href="{{ '/safety-and-risk.html' | relative_url }}">
+    <div class="card-title">Safety and Risk</div>
+    <p>The system's explicit risk categories, safety principles, governance model, and honest current limitations.</p>
   </a>
   <a class="card" href="{{ '/implementation-plan.html' | relative_url }}">
     <div class="card-title">Implementation Plan</div>
-    <p>The execution program for moving from a shell-plus-session model toward an Environment-centered symbolic system.</p>
+    <p>The delivery roadmap for moving from the current implementation toward the fuller environment-centered architecture.</p>
   </a>
   <a class="card" href="{{ '/user-journey-gap-matrix.html' | relative_url }}">
     <div class="card-title">User Journey Gap Matrix</div>
@@ -60,11 +104,11 @@ description: Documentation landing page for sbcl-agent.
   </a>
   <a class="card" href="{{ '/roadmap/vision.html' | relative_url }}">
     <div class="card-title">Vision</div>
-    <p>The positioning statement that explains why the project should no longer be framed as an IDE or an agent shell with more features.</p>
+    <p>The forward-looking positioning statement for the environment-first direction. Useful after the problem and foundation docs.</p>
   </a>
   <a class="card" href="{{ '/roadmap/environment-model.html' | relative_url }}">
     <div class="card-title">Environment Model</div>
-    <p>The Environment object, its laws, native entities, and the structural implications for the next stage of the architecture.</p>
+    <p>The deeper roadmap document for the environment model and its long-term structural implications.</p>
   </a>
   <a class="card" href="{{ '/capability-translation-matrix.html' | relative_url }}">
     <div class="card-title">Capability Translation Matrix</div>
@@ -92,7 +136,7 @@ description: Documentation landing page for sbcl-agent.
   </a>
 </div>
 
-## What The System Supports Now
+## What the System Supports Now
 
 `sbcl-agent` currently combines:
 
@@ -108,9 +152,27 @@ description: Documentation landing page for sbcl-agent.
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
 
-## Current Rule
+## Strengths
 
-The current implementation is still organized around one ownership rule:
+The current implementation is strongest where the code and the documentation now agree:
+
+- it is genuinely SBCL-native rather than a wrapper hiding critical logic elsewhere
+- it gives operators direct access to the runtime they are reasoning about
+- it preserves explicit governance concepts such as approvals, incidents, work-items, and workflow records
+- it already supports durable conversational turns instead of one-shot prompt/response behavior
+
+## Weaknesses
+
+The current implementation is also honestly transitional:
+
+- some compatibility-session structure still exists alongside the stronger environment model
+- the environment-native agent model is not yet fully realized
+- cold validation, rollback, and artifact coverage are real but not yet complete across every path
+- some older documents remain deeper and more roadmap-heavy than a new reader should start with
+
+## Current Architectural Rule
+
+The codebase is still organized around one ownership rule:
 
 - conversation owns interaction state
 - runtime owns execution state
@@ -118,34 +180,15 @@ The current implementation is still organized around one ownership rule:
 
 That rule keeps the system from collapsing chat history, live runtime state, and engineering evidence into one undifferentiated session blob. The new roadmap extends this by placing those domains inside a larger Environment object rather than treating thread or shell state as the architectural center.
 
-## What Makes sbcl-agent Different
+## Why the Reading Order Matters
 
-Most agent CLIs treat the running process as disposable infrastructure. `sbcl-agent` treats the live SBCL image as part of the engineering substrate, and the new vision goes further: the runtime, conversation threads, agents, artifacts, and work-items are all being treated as native entities of one living environment.
+Readers should not have to infer the story from roadmap material.
 
-That leads to a stricter success question:
+The intended journey is:
 
-1. What changed in source?
-2. What changed in the running image?
-3. What evidence links the two?
-
-## Recommended Reading Order
-
-If you are new to the project, read in this order:
-
-1. [Why sbcl-agent Exists]({{ '/why-sbcl-agent.html' | relative_url }})
-2. [Objectives]({{ '/objectives.html' | relative_url }})
-3. [Architecture and Design]({{ '/architecture.html' | relative_url }})
-4. [User Guide]({{ '/user-guide.html' | relative_url }})
-5. [Implementation Plan]({{ '/implementation-plan.html' | relative_url }})
-
-Then read the environment-and-runtime set:
-
-1. [Vision]({{ '/roadmap/vision.html' | relative_url }})
-2. [Environment Model]({{ '/roadmap/environment-model.html' | relative_url }})
-3. [Capability Translation Matrix]({{ '/capability-translation-matrix.html' | relative_url }})
-4. [Codex Execution Plan]({{ '/roadmap/codex-execution-plan.html' | relative_url }})
-5. [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
-6. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
-7. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
-
-If you are new to Common Lisp, read [Common Lisp Language Reference]({{ '/common-lisp-guide.html' | relative_url }}) before diving into the runtime internals.
+1. understand the problem
+2. understand where the problem matters most
+3. understand the model
+4. understand the implemented architecture
+5. learn how to operate the system
+6. understand the risks and the forward plan

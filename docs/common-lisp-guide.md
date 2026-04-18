@@ -103,8 +103,8 @@ The most relevant companion docs are:
 
 For direct code reading, start with:
 
-1. [`src/package.lisp`](/Volumes/data/development/sbcl-agent/src/package.lisp)
-2. [`src/commands.lisp`](/Volumes/data/development/sbcl-agent/src/commands.lisp)
-3. [`src/shell.lisp`](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-4. [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
-5. [`src/conversation.lisp`](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
+1. `src/package.lisp`
+2. `src/commands.lisp`
+3. `src/shell.lisp`
+4. `src/provider-protocol.lisp`
+5. `src/conversation.lisp`

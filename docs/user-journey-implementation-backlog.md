@@ -10,9 +10,9 @@ description: Prioritized epics, file targets, acceptance criteria, and iteration
 
 ## Purpose
 
-This document converts the [User Journey Gap Matrix](/Volumes/data/development/sbcl-agent/docs/user-journey-gap-matrix.md) into an implementation backlog that can be executed incrementally.
+This document converts the [User Journey Gap Matrix]({{ '/user-journey-gap-matrix.html' | relative_url }}) into an implementation backlog that can be executed incrementally.
 
-It is intentionally narrower than the full [Implementation Plan](/Volumes/data/development/sbcl-agent/docs/implementation-plan.md). The implementation plan describes the whole program. This backlog describes the next user-journey-driven slice of work.
+It is intentionally narrower than the full [Implementation Plan]({{ '/implementation-plan.html' | relative_url }}). The implementation plan describes the whole program. This backlog describes the next user-journey-driven slice of work.
 
 ## Backlog Principles
 
@@ -56,11 +56,11 @@ Deliver one default orientation surface that answers:
 
 ### Likely Files
 
-- [src/environment.lisp](/Volumes/data/development/sbcl-agent/src/environment.lisp)
-- [src/session.lisp](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [src/shell.lisp](/Volumes/data/development/sbcl-agent/src/shell.lisp)
-- [src/commands.lisp](/Volumes/data/development/sbcl-agent/src/commands.lisp)
-- [docs/user-guide.md](/Volumes/data/development/sbcl-agent/docs/user-guide.md)
+- `src/environment.lisp`
+- `src/session.lisp`
+- `src/shell.lisp`
+- `src/commands.lisp`
+- `docs/user-guide.md`
 
 ### Likely Commands / Surfaces
 
@@ -98,11 +98,11 @@ Provide one mutation-review surface that explains:
 
 ### Likely Files
 
-- [src/work-items.lisp](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [src/turn-orchestrator.lisp](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
-- [src/incidents.lisp](/Volumes/data/development/sbcl-agent/src/incidents.lisp)
-- [src/conversation.lisp](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [src/shell.lisp](/Volumes/data/development/sbcl-agent/src/shell.lisp)
+- `src/work-items.lisp`
+- `src/turn-orchestrator.lisp`
+- `src/incidents.lisp`
+- `src/conversation.lisp`
+- `src/shell.lisp`
 
 ### Likely Commands / Surfaces
 
@@ -142,8 +142,8 @@ Expose richer environment-native symbolic services without drifting into IDE met
 
 ### Likely Files
 
-- [src/tools-runtime.lisp](/Volumes/data/development/sbcl-agent/src/tools-runtime.lisp)
-- [src/environment.lisp](/Volumes/data/development/sbcl-agent/src/environment.lisp)
+- `src/tools-runtime.lisp`
+- `src/environment.lisp`
 - optional new modules:
   - `src/runtime-services.lisp`
   - `src/symbol-graph.lisp`
@@ -187,10 +187,10 @@ Expand incidents into richer runtime recovery workspaces that support understand
 
 ### Likely Files
 
-- [src/incidents.lisp](/Volumes/data/development/sbcl-agent/src/incidents.lisp)
-- [src/tools-runtime.lisp](/Volumes/data/development/sbcl-agent/src/tools-runtime.lisp)
-- [src/work-items.lisp](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [src/shell.lisp](/Volumes/data/development/sbcl-agent/src/shell.lisp)
+- `src/incidents.lisp`
+- `src/tools-runtime.lisp`
+- `src/work-items.lisp`
+- `src/shell.lisp`
 
 ### Acceptance Criteria
 
@@ -223,10 +223,10 @@ Broaden artifact surfacing so important evidence is visible regardless of how th
 
 ### Likely Files
 
-- [src/conversation.lisp](/Volumes/data/development/sbcl-agent/src/conversation.lisp)
-- [src/work-items.lisp](/Volumes/data/development/sbcl-agent/src/work-items.lisp)
-- [src/environment.lisp](/Volumes/data/development/sbcl-agent/src/environment.lisp)
-- [src/session.lisp](/Volumes/data/development/sbcl-agent/src/session.lisp)
+- `src/conversation.lisp`
+- `src/work-items.lisp`
+- `src/environment.lisp`
+- `src/session.lisp`
 
 ### Acceptance Criteria
 
@@ -252,11 +252,11 @@ Keep compatibility, but continue reducing the gap between the documented center 
 
 ### Likely Files
 
-- [src/environment.lisp](/Volumes/data/development/sbcl-agent/src/environment.lisp)
-- [src/environment-store.lisp](/Volumes/data/development/sbcl-agent/src/environment-store.lisp)
-- [src/session.lisp](/Volumes/data/development/sbcl-agent/src/session.lisp)
-- [src/provider-protocol.lisp](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
-- [src/shell.lisp](/Volumes/data/development/sbcl-agent/src/shell.lisp)
+- `src/environment.lisp`
+- `src/environment-store.lisp`
+- `src/session.lisp`
+- `src/provider-protocol.lisp`
+- `src/shell.lisp`
 
 ### Acceptance Criteria
 

@@ -129,6 +129,7 @@ Top-level CLI commands:
 - `./bin/sbcl-agent chat`
 - `./bin/sbcl-agent chat -i`
 - `./bin/sbcl-agent exec <cmd...>`
+- `./bin/sbcl-agent rgp <subcommand> ...`
 - `./bin/run-tests`
 - `./bin/run-coverage`
 - `./bin/build-docs`
@@ -158,6 +159,29 @@ Example session:
 (turn/status)
 (describe-session)
 ```
+
+## RGP Integration
+
+`sbcl-agent` now includes a governed runtime bridge for RGP. The bridge binds an Environment to an external governance session without collapsing `sbcl-agent` into a plain prompt/response provider.
+
+The CLI surface is:
+
+- `./bin/sbcl-agent rgp bind`
+- `./bin/sbcl-agent rgp show`
+- `./bin/sbcl-agent rgp export`
+- `./bin/sbcl-agent rgp artifacts`
+- `./bin/sbcl-agent rgp approvals`
+- `./bin/sbcl-agent rgp approve`
+- `./bin/sbcl-agent rgp resume`
+
+Those commands let RGP:
+
+- bind a governed request and agent-session to a durable `sbcl-agent` environment
+- inspect environment, thread, turn, operation, and artifact summaries
+- list governed approval checkpoints and importable artifacts
+- approve or resume pending governed work-items in the external runtime
+
+The shell exposes the same bridge through `integration/rgp-*` commands, so local operators and external governance systems can inspect the same governed runtime state.
 
 ## Runtime Configuration
 

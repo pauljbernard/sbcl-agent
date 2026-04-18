@@ -48,6 +48,7 @@
                      :operator-mode (provider-request-operator-mode request)
                      :thread (provider-request-thread-context request)
                      :turn (provider-request-turn-context request)
+                     :environment (provider-request-environment-context request)
                      :session (provider-request-session-summary request)))))
 
 (defun split-stream-message (message)

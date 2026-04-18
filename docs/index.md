@@ -15,6 +15,7 @@ description: Documentation landing page for sbcl-agent.
   <a class="quick-link" href="{{ '/user-guide.html' | relative_url }}"><strong>Operator Guide</strong>Jump straight to the current CLI and shell workflow.</a>
   <a class="quick-link" href="{{ '/roadmap/vision.html' | relative_url }}"><strong>Vision</strong>Read the new positioning and environment-first direction.</a>
   <a class="quick-link" href="{{ '/capability-translation-matrix.html' | relative_url }}"><strong>Capability Matrix</strong>See how legacy Lisp tool functions should be preserved, transformed, or discarded.</a>
+  <a class="quick-link" href="{{ '/roadmap/codex-execution-plan.html' | relative_url }}"><strong>Execution Plan</strong>Read the concrete phased plan for implementing the vision in this repository.</a>
   <a class="quick-link" href="{{ '/implementation-plan.html' | relative_url }}"><strong>Roadmap</strong>See what is implemented now and what remains.</a>
 </div>
 
@@ -41,6 +42,18 @@ description: Documentation landing page for sbcl-agent.
     <div class="card-title">Implementation Plan</div>
     <p>The execution program for moving from a shell-plus-session model toward an Environment-centered symbolic system.</p>
   </a>
+  <a class="card" href="{{ '/user-journey-gap-matrix.html' | relative_url }}">
+    <div class="card-title">User Journey Gap Matrix</div>
+    <p>A formal analysis of operator journeys against the project’s stated objectives, current implementation, and architectural gaps.</p>
+  </a>
+  <a class="card" href="{{ '/user-journey-implementation-backlog.html' | relative_url }}">
+    <div class="card-title">User Journey Backlog</div>
+    <p>A prioritized backlog of epics, file targets, acceptance criteria, and iteration order derived from the journey analysis.</p>
+  </a>
+  <a class="card" href="{{ '/testing-coverage-analysis.html' | relative_url }}">
+    <div class="card-title">Testing Coverage Analysis</div>
+    <p>A measured assessment of unit coverage, functional coverage, user-story coverage, and current performance-testing gaps.</p>
+  </a>
   <a class="card" href="{{ '/conversation-architecture.html' | relative_url }}">
     <div class="card-title">Conversation Runtime</div>
     <p>The thread, message, turn, operation, and artifact model, now treated as one subsystem within the larger Environment architecture.</p>
@@ -56,6 +69,10 @@ description: Documentation landing page for sbcl-agent.
   <a class="card" href="{{ '/capability-translation-matrix.html' | relative_url }}">
     <div class="card-title">Capability Translation Matrix</div>
     <p>A design filter that maps legacy Lisp tool powers into agentic environment primitives so the project preserves capabilities without rebuilding a legacy IDE.</p>
+  </a>
+  <a class="card" href="{{ '/roadmap/codex-execution-plan.html' | relative_url }}">
+    <div class="card-title">Codex Execution Plan</div>
+    <p>A detailed, repository-specific implementation plan with phases, files, tests, and acceptance criteria for building the vision on top of the current codebase.</p>
   </a>
   <a class="card" href="{{ '/streaming-event-model.html' | relative_url }}">
     <div class="card-title">Streaming Event Model</div>
@@ -83,7 +100,10 @@ description: Documentation landing page for sbcl-agent.
 - direct Lisp evaluation in the live runtime
 - mock and OpenAI-compatible providers
 - canonical provider event normalization for streaming
+- a concrete Environment object with save/load and projected environment events
 - persistent threads, messages, turns, operations, and artifacts
+- runtime inspection, eval, reload, and history commands with policy gates
+- first-class incident recording, operator summaries, and environment event inspection
 - direct Lisp control, conversation, and governed workflow as coexisting interaction modes
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
@@ -123,8 +143,9 @@ Then read the environment-and-runtime set:
 1. [Vision]({{ '/roadmap/vision.html' | relative_url }})
 2. [Environment Model]({{ '/roadmap/environment-model.html' | relative_url }})
 3. [Capability Translation Matrix]({{ '/capability-translation-matrix.html' | relative_url }})
-4. [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
-5. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
-6. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
+4. [Codex Execution Plan]({{ '/roadmap/codex-execution-plan.html' | relative_url }})
+5. [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
+6. [Streaming Event Model]({{ '/streaming-event-model.html' | relative_url }})
+7. [Thread Runtime Migration Plan]({{ '/migration-plan-thread-runtime.html' | relative_url }})
 
 If you are new to Common Lisp, read [Common Lisp Language Reference]({{ '/common-lisp-guide.html' | relative_url }}) before diving into the runtime internals.

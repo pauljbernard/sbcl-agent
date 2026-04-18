@@ -38,6 +38,34 @@
 (defun session-workers (session)
   (agent-session-workers session))
 
+(defun environment-task-records (environment &optional session)
+  (let* ((agent-state (and environment
+                           (environment-agent-state environment)))
+         (existing (and agent-state
+                        (environment-agent-state-tasks agent-state))))
+    (or existing
+        (and environment
+             session
+             (agent-session-tasks session)
+             (refresh-environment-agent-domain environment session)
+             (let ((refreshed-state (environment-agent-state environment)))
+               (and refreshed-state
+                    (environment-agent-state-tasks refreshed-state)))))))
+
+(defun environment-worker-records (environment &optional session)
+  (let* ((agent-state (and environment
+                           (environment-agent-state environment)))
+         (existing (and agent-state
+                        (environment-agent-state-workers agent-state))))
+    (or existing
+        (and environment
+             session
+             (agent-session-workers session)
+             (refresh-environment-agent-domain environment session)
+             (let ((refreshed-state (environment-agent-state environment)))
+               (and refreshed-state
+                    (environment-agent-state-workers refreshed-state)))))))
+
 (defun active-worker-count (session)
   (count-if #'worker-state-running-p (agent-session-workers session)))
 
@@ -47,10 +75,23 @@
         :session-id (worker-state-session-id worker)))
 
 (defun list-worker-summaries (session)
-  (mapcar #'worker-summary (agent-session-workers session)))
+  (let ((environment (session-bound-environment session)))
+    (mapcar #'worker-summary
+            (or (and environment
+                     (environment-worker-records environment session))
+                (agent-session-workers session)))))
 
 (defun find-worker (session worker-id)
-  (find worker-id (agent-session-workers session)
+  (let ((environment (session-bound-environment session)))
+    (find worker-id
+          (or (and environment
+                   (environment-worker-records environment session))
+              (agent-session-workers session))
+          :key #'worker-state-id :test #'string=)))
+
+(defun session-owned-worker (session worker-id)
+  (find worker-id
+        (agent-session-workers session)
         :key #'worker-state-id :test #'string=))
 
 (defun make-queued-task (session command &key (priority 0) payload)
@@ -142,16 +183,31 @@
             (agent-session-tasks-tail session) tail))
     (update-session-task-list session (sort-tasks (agent-session-tasks session)))
     (append-session-event session :task-enqueued (task-summary task))
+    (refresh-bound-environment-agent-state session)
     task))
 
 (defun find-task (session task-id)
-  (find task-id (agent-session-tasks session) :key #'task-id :test #'string=))
+  (let ((environment (session-bound-environment session)))
+    (find task-id
+          (or (and environment
+                   (environment-task-records environment session))
+              (agent-session-tasks session))
+          :key #'task-id :test #'string=)))
+
+(defun session-owned-task (session task-id)
+  (find task-id
+        (agent-session-tasks session)
+        :key #'task-id :test #'string=))
 
 (defun list-task-summaries (session)
-  (mapcar #'task-summary (agent-session-tasks session)))
+  (let ((environment (session-bound-environment session)))
+    (mapcar #'task-summary
+            (or (and environment
+                     (environment-task-records environment session))
+                (agent-session-tasks session)))))
 
 (defun cancel-task (session task-id)
-  (let ((task (find-task session task-id)))
+  (let ((task (session-owned-task session task-id)))
     (unless task
       (error "Unknown task ~A" task-id))
     (when (member (task-status task) '(:completed :failed :cancelled))
@@ -162,6 +218,7 @@
     (append-session-event session :task-cancelled (task-summary task))
     (update-work-item-status-from-task session task :rolled-back
                                        :closure-decision :cancelled)
+    (refresh-bound-environment-agent-state session)
     task))
 
 (defun next-queued-task (session)
@@ -203,6 +260,7 @@
                                                 session)))
           (update-work-item-status-from-task session task :committed
                                              :closure-decision :committed-to-source-and-image)
+          (refresh-bound-environment-agent-state session)
           task)
       (error (condition)
         (setf (task-status task) :failed
@@ -220,6 +278,7 @@
         (update-work-item-status-from-task session task :failed
                                            :closure-decision :rejected-and-rolled-back
                                            :error (princ-to-string condition))
+        (refresh-bound-environment-agent-state session)
         task))))
 
 (defun run-next-task
@@ -257,20 +316,24 @@
       (setf (agent-session-workers session) workers
             (agent-session-workers-tail session) tail))
     (append-session-event session :worker-started (worker-summary worker))
+    (refresh-bound-environment-agent-state session)
     worker))
 
 (defun stop-worker (session worker-id)
-  (let ((worker (find-worker session worker-id)))
+  (let ((worker (session-owned-worker session worker-id)))
     (unless worker
       (error "Unknown worker ~A" worker-id))
     (setf (worker-state-running-p worker) nil)
+    (refresh-bound-environment-agent-state session)
     worker))
 
 (defun stop-all-workers (session)
-  (mapcar (lambda (worker)
-            (setf (worker-state-running-p worker) nil)
-            (worker-summary worker))
-          (agent-session-workers session)))
+  (prog1
+      (mapcar (lambda (worker)
+                (setf (worker-state-running-p worker) nil)
+                (worker-summary worker))
+              (agent-session-workers session))
+    (refresh-bound-environment-agent-state session)))
 
 (defun serializable-worker-state (worker)
   (make-worker-state :id (worker-state-id worker)

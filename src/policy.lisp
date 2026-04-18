@@ -51,6 +51,16 @@
                             "Read-only operations that stay within the current session workspace."
                             :risk-level :low
                             :default-grant-mode :implicit)
+(register-capability-policy :runtime-read
+                            "Inspect read-only runtime state in the current image."
+                            :risk-level :low
+                            :default-grant-mode :implicit)
+(register-capability-policy :runtime-package-switch
+                            "Change the active Common Lisp package for the current runtime session."
+                            :risk-level :medium)
+(register-capability-policy :runtime-reload
+                            "Load source files from the workspace into the current live image."
+                            :risk-level :high)
 (register-capability-policy :runtime-eval-safe
                             "Evaluate read-only or low-risk runtime expressions in the current image."
                             :risk-level :medium

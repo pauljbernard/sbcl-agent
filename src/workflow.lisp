@@ -74,6 +74,18 @@
 (defun list-workflow-record-summaries (session)
   (mapcar #'workflow-record-summary (agent-session-workflow-records session)))
 
+(defun append-workflow-record-event (session kind record payload &key metadata)
+  (append-session-event session
+                        kind
+                        payload
+                        :family :workflow
+                        :entity-id (workflow-record-id record)
+                        :metadata (merge-event-metadata
+                                   (list :workflow-record-id (workflow-record-id record)
+                                         :work-item-id (workflow-record-work-item-id record))
+                                   metadata)
+                        :work-item-id (workflow-record-work-item-id record)))
+
 (defun create-workflow-record (session goal &key work-item-id initial-phase initial-kind initial-payload)
   (let* ((record (make-workflow-record
                   :id (make-workflow-record-id)
@@ -101,6 +113,13 @@
                             record)
       (setf (agent-session-workflow-records session) records
             (agent-session-workflow-records-tail session) tail))
+    (let ((environment (session-bound-environment session)))
+      (when environment
+        (environment-append-workflow-record environment session record)))
+    (append-workflow-record-event session
+                                  :workflow-record-created
+                                  record
+                                  (workflow-record-summary record))
     (when (or initial-phase initial-kind initial-payload)
       (append-workflow-record-entry session record
                                     (or initial-phase :inspect)
@@ -227,6 +246,13 @@
         (workflow-record-quarantine-reason record) reason
         (workflow-record-updated-at record) (get-universal-time))
   (record-operator-intervention session record :quarantined reason :status :quarantined)
+  (append-workflow-record-event session
+                                :workflow-record-quarantined
+                                record
+                                (list :reason reason
+                                      :status (workflow-record-status record)
+                                      :waiting-on (workflow-record-waiting-on record)
+                                      :next-action (workflow-record-next-action record)))
   record)
 
 (defun resume-workflow-record (session record &key note)
@@ -243,10 +269,15 @@
         (workflow-record-updated-at record) (get-universal-time)
         (workflow-record-resume-count record) (1+ (workflow-record-resume-count record)))
   (record-operator-intervention session record :resumed (or note :resume-requested) :status :resumed)
+  (append-workflow-record-event session
+                                :workflow-record-resumed
+                                record
+                                (list :note note
+                                      :status (workflow-record-status record)
+                                      :resume-count (workflow-record-resume-count record)))
   record)
 
 (defun close-workflow-record (session record conclusion &key status evidence)
-  (declare (ignore session))
   (when evidence
     (append-workflow-record-evidence record evidence))
   (setf (workflow-record-conclusion record) conclusion
@@ -256,4 +287,9 @@
         (workflow-record-resume-payload record) nil
         (workflow-record-pending-validations record) '()
         (workflow-record-updated-at record) (get-universal-time))
+  (append-workflow-record-event session
+                                :workflow-record-closed
+                                record
+                                (list :status (workflow-record-status record)
+                                      :conclusion conclusion))
   record)

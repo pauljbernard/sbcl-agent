@@ -150,6 +150,24 @@ Top-level entrypoints in [`bin/`](/Volumes/data/development/sbcl-agent/bin) disp
 
 Streaming is now more event-aware than the original shell implementation, although the OpenAI path still carries some transitional behavior while the event model continues to harden.
 
+The canonical event envelope is also tightening across conversation, runtime, workflow, and incident paths. Session-originated events now stamp stable correlation metadata such as `environment-id`, `session-id`, `run-id`, `operation-id`, `work-item-id`, `artifact-id`, and `incident-id` when that context is available. Streamed provider events now inherit the active provider-run operation, thread, and turn identity before they are logged as session or environment events. Workflow milestones such as validation completion, reconciliation creation, workflow quarantine, workflow resume, workflow closure, and incident creation now also emit canonical correlated events instead of living only inside record payloads. That gives provider runs, environment logs, workflow evidence, and operator renderers one shared correlation spine instead of relying on ad hoc payload conventions.
+
+The summary path is also getting more environment-native. Environment summaries now expose an event-backed evidence block derived from the projected environment event log, and session-facing summary/tools can prefer that view when a session is bound to an Environment. That reduces the amount of duplicate status assembly that used to rebuild equivalent evidence from the session event list separately.
+
+The same tightening now applies to operator-facing posture. Environment-backed status views can expose one consolidated operator evidence bundle that contains posture counts, blocked-work summaries, incident summaries, and event-backed evidence together. Shell rendering can then prefer that bundle instead of reassembling posture from separate summary fragments.
+
+Workflow monitoring is moving in the same direction. Replay-group summaries, reconciliation summaries, and wait-state summaries can now prefer environment workflow state when it is already authoritative, while preserving compatibility fallbacks when an environment view has not been materialized yet. That keeps monitoring reads environment-first without making them brittle during transitional compatibility paths.
+
+Task and worker monitoring now follows the same rule. Task lookup, task progress monitoring, worker listing, and worker lookup can prefer the environment agent view when that view already holds the authoritative monitoring state, instead of assuming the session-owned task and worker lists are the only monitoring source. Task enqueue, task cancellation, task execution, worker start, worker stop, and stop-all-workers now also refresh the bound environment agent domain immediately after mutation so monitoring surfaces do not depend on later read-time repair to become accurate.
+
+Artifact handling is tightening in the same way. Artifact creation already writes through into Environment conversation/artifact state, and artifact summaries already prefer environment-owned aggregates. Artifact lookup and thread/turn artifact listing now also prefer Environment-owned artifact state when a session is bound, so operator inspection does not fall back to stale compatibility-session artifact lists.
+
+The persistence boundary is also tighter now. Serializable environments preserve a minimal compatibility payload even when no materialized compatibility session is attached, and legacy environment files that still embed a full `agent-session` are normalized down to a compatibility payload on load before normal operation continues. That keeps compatibility state explicitly adapter-shaped at the persistence layer instead of letting full duplicated session objects remain the durable norm.
+
+Provider request assembly is tighter as well. When a bound Environment exists, provider session/runtime/workspace/policy summaries now resolve from one environment snapshot per request instead of mixing snapshot reads with field-by-field session fallbacks. Direct session-derived fallback now remains only for the no-environment case and for request-local transcript material that is not yet part of the environment snapshot itself.
+
+That same rule now applies to default thread and turn selection for provider requests. When the caller does not explicitly pin a thread or turn, provider context resolution now prefers the Environment conversation snapshot rather than the mutable compatibility-session defaults. The conversation-domain refresh path also now updates the underlying thread/message/turn/operation/artifact records, not only aggregate counters, so environment-owned conversational context remains usable for later request assembly and operator orientation.
+
 Provider requests are also becoming more structured. The provider boundary now carries thread, turn, runtime, workspace, and policy context instead of relying only on a flat prompt string.
 
 ### Conversation layer
@@ -163,6 +181,8 @@ Provider requests are also becoming more structured. The provider boundary now c
 - `artifact`
 
 These records make interaction state explicit instead of treating transcript entries as the only durable truth. Under the new vision, they are not the architectural center by themselves; they are one subsystem within the Environment.
+
+That subsystem now also has an explicit environment-domain module in [`src/conversation-state.lisp`](/Volumes/data/development/sbcl-agent/src/conversation-state.lisp). The environment uses that module for conversation-domain summaries and active thread/turn orientation instead of treating conversation state as ad hoc summary logic embedded only in the environment root.
 
 ### Turn orchestration
 
@@ -192,6 +212,27 @@ That lifecycle now includes resumed-turn follow-up in the implemented path: afte
 - conversation state that is now threaded into the shell experience
 
 The long-term direction is to replace this session-centered composition with a clearer Environment model that owns runtimes, threads, agents, artifacts, work-items, policies, and events more explicitly while preserving one ergonomic shell handle.
+
+The current implementation now goes further than earlier transitional versions in two specific ways:
+
+- environment orientation paths such as `environment/status` derive active thread and turn context from Environment-owned conversation state instead of requiring a compatibility-session read
+- provider request summaries prefer one Environment snapshot per request and no longer silently fall back to session-derived plan or artifact summary values when the Environment snapshot is already authoritative
+
+The same tightening now applies at the module level for runtime state as well. [`src/runtime-state.lisp`](/Volumes/data/development/sbcl-agent/src/runtime-state.lisp) owns the primary runtime-domain builders and summaries used by the environment, which reduces how much runtime-domain logic is mixed directly into the older session/environment bridge.
+
+The next level of that split is now in place too:
+
+- [`src/workflow-state.lisp`](/Volumes/data/development/sbcl-agent/src/workflow-state.lisp) owns workflow-domain construction, summaries, and environment write-through for work-items and workflow records
+- [`src/artifact-state.lisp`](/Volumes/data/development/sbcl-agent/src/artifact-state.lisp) owns environment-level artifact indexing and evidence summaries
+
+That means runtime, conversation, workflow, and artifact state all now have concrete module boundaries in the codebase rather than existing only as conceptual categories inside `src/environment.lisp`.
+
+The session-facing inspection surface has also tightened. Session summaries and session-event inspection are now more explicitly compatibility views over the bound environment:
+
+- session thread-state reporting prefers environment-owned conversation summaries and active thread identity
+- session-event inspection can serve the projected environment event log when a bound session’s local event list has drifted
+
+That does not remove `agent-session`, but it does reduce how much the inspection surface treats it as the primary owner of truth.
 
 ### Tool and policy layer
 

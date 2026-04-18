@@ -36,14 +36,23 @@ Present in code now:
 - `say` as a conversation-first command
 - `ask` routed through the same turn runner with `:repl-bridge` operator semantics
 - `turn/status` and `turn/resume`
+- incident recording and inspection with `incident/list` and `incident/show`
+- `incident/show` expanded into a compact incident workspace view with linked thread, turn, operation, work-item, and workflow summaries when available, plus recovery and wait guidance for operator follow-through
 - turn orchestration in [`src/turn-orchestrator.lisp`](/Volumes/data/development/sbcl-agent/src/turn-orchestrator.lisp)
 - canonical provider-event normalization in [`src/provider-protocol.lisp`](/Volumes/data/development/sbcl-agent/src/provider-protocol.lisp)
 - governed mutation binding for patches, mutating eval, and write-class tool actions
 - provider follow-up after turn resume, with follow-up lifecycle metadata and events
+- incident-aware turn detail, recovery summaries, and workflow quarantine behavior for failed governed runtime actions
+- load-time interruption recovery that marks persisted in-flight turns and operations as `:interrupted` instead of pretending they are still active
+- explicit `:awaiting-cold-validation` runtime/workflow state for governed runtime mutations that succeed in the warm image but still require colder evidence before durable closure
+- compact environment-backed provider context, so provider requests now carry environment refs instead of only flat session summaries
+- validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence appears in the conversational artifact stream instead of only inside workflow records
+- environment-first persistence where conversation records, workflow records, incident state, task/worker state, staged actions, operator plan, and policy grants are rehydrated from environment-owned domains instead of a duplicated serialized session blob
+- a minimal compatibility-session payload that now acts primarily as a session identity shim rather than as the primary durable source of runtime truth
 
 Still transitional:
 
-- the top-level mutable state is still largely organized through `agent-session`
+- the top-level mutable state is still partly organized through `agent-session`, but environment-owned summaries, events, artifacts, workflow state, agent state, and provider context now carry much more of the system’s operational truth than earlier transitional versions
 - event flow is more structured than before but not yet fully separated from every legacy path
 - runtime and workflow operations are not yet uniformly exposed as first-class conversation operations
 
@@ -194,6 +203,8 @@ This is partly implemented now through provider-event normalization and shell ha
 
 The event model now also includes explicit follow-up lifecycle signals for resumed turns, which keeps provider continuation visible without collapsing it into assistant text.
 
+The current implementation also distinguishes interrupted recovery from approval-gated recovery in turn status rendering. A recovered turn can therefore show both resumable approval work and interrupted in-flight work explicitly instead of collapsing everything into one generic recovery bucket.
+
 ## Relationship To Workflow Governance
 
 Conversation does not replace work-items. It feeds them.
@@ -205,7 +216,40 @@ Rules of thumb:
 - approval-gated mutation turns should record checkpoint and approval evidence before execution continues
 - validation, reconciliation, quarantine, and replay remain workflow-owned concerns
 
+Governed runtime mutations now follow a stricter sequence than the earlier blueprint implied:
+
+- warm-image execution can record successful live validation
+- the resulting work-item may still remain in `:awaiting-cold-validation`
+- operator-facing waiting summaries call this out as cold-validation-required work
+- durable closure only happens after colder validation succeeds
+
 This matters because the value of the system is not just that it can chat about changes. The value is that it can preserve evidence about what it changed and why the result should be trusted.
+
+## Environment-First Persistence
+
+The current implementation now leans much harder toward Environment as the durable root object.
+
+Environment-owned state now includes:
+
+- runtime summaries and runtime history
+- threads, messages, turns, operations, and artifact records
+- work-items and workflow records
+- incident state
+- staged actions
+- task and worker snapshots
+- capability-grant summaries
+- operator plan state
+
+The compatibility session still exists, but its persistence role has been reduced substantially.
+
+Today the compatibility payload is intentionally thin:
+
+- it preserves session identity
+- it allows a session-shaped API surface to be reconstructed on load
+- it no longer stores duplicate copies of transcript, events, threads, messages, turns, operations, artifacts, work-items, workflow records, pending actions, incidents, tasks, workers, grants, or plan state
+- it no longer stores duplicate header values either; `cwd`, `package`, and `current-thread-id` are now reconstructed directly from Environment state during load
+
+This is an important conceptual shift. The environment is no longer merely a projected view of the session. The session is increasingly a compatibility view derived from the environment.
 
 ## Current Gaps
 
@@ -213,9 +257,10 @@ The biggest remaining gaps in the conversation architecture are:
 
 - cleaner internal separation of conversation, runtime, and engineering state
 - richer operation coverage beyond the current assistant-action and tool-oriented paths
-- fuller artifact surfacing for every validation and reconciliation path
-- stronger interrupted-turn recovery and resumability
+- fuller artifact surfacing for every validation and reconciliation path, especially outside thread-bound work-items
 - governed runtime tooling for image-native inspection and mutation
+- deeper incident-workspace capabilities beyond compact linked summaries and next-action guidance, such as richer object/state capture and restart-oriented recovery flows
+- eventual removal or further contraction of the compatibility-session layer once external command and shell surfaces can rely more directly on Environment-native APIs
 
 ## End State
 

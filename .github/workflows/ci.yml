@@ -1,0 +1,49 @@
+name: CI
+
+on:
+  push:
+    branches: ["main"]
+    paths-ignore:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  pull_request:
+    paths-ignore:
+      - "docs/**"
+      - ".github/workflows/docs.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-performance:
+    runs-on: ubuntu-latest
+    env:
+      SBCL_AGENT_PERF_MAX_SAY_MS: "50"
+      SBCL_AGENT_PERF_MAX_THREAD_DETAIL_MS: "10"
+      SBCL_AGENT_PERF_MAX_TURN_DETAIL_MS: "10"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install SBCL
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y sbcl
+
+      - name: Run test suite
+        run: ./bin/run-tests
+
+      - name: Run coverage
+        run: ./bin/run-coverage
+
+      - name: Run performance benchmarks
+        run: ./bin/run-performance
+
+      - name: Upload coverage and performance artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbcl-agent-quality-artifacts
+          path: |
+            tmp/coverage
+            tmp/performance/latest.sexp

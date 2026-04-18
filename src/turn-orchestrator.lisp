@@ -222,11 +222,29 @@
                                      (list :prompt prompt :streamed-p t)
                                      :policy-decision (say-provider-operation-policy-decision)
                                      :metadata (list :source source)))
+         (run-id (format nil "provider-run-~A" (operation-id operation)))
          (events '()))
     (let* ((response (stream-prompt provider
                                     prompt
                                     (lambda (event)
-                                      (setf events (handle-provider-stream-event session event events)))
+                                      (setf (provider-event-run-id event) run-id
+                                            (provider-event-operation-id event) (operation-id operation)
+                                            (provider-event-thread-id event) (thread-id thread)
+                                            (provider-event-turn-id event) (turn-id turn)
+                                            (provider-event-metadata event)
+                                            (merge-event-metadata
+                                             (provider-event-metadata event)
+                                             (list :run-id run-id
+                                                   :operation-id (operation-id operation)
+                                                   :thread-id (thread-id thread)
+                                                   :turn-id (turn-id turn))))
+                                      (setf events (handle-provider-stream-event session
+                                                                                event
+                                                                                events
+                                                                                :thread-id (thread-id thread)
+                                                                                :turn-id (turn-id turn)
+                                                                                :run-id run-id
+                                                                                :operation-id (operation-id operation))))
                                     session
                                     :thread thread
                                     :turn turn
@@ -461,3 +479,147 @@
             :thread (thread-record-summary thread)
             :turn (turn-record-summary completed-turn)
             :assistant-message (message-record-summary assistant-message)))))
+
+(defun operation-assistant-action (operation)
+  (getf (operation-metadata operation) :assistant-action))
+
+(defun turn-pending-action-operations (session turn)
+  (remove-if-not (lambda (operation)
+                   (or (eq (operation-status operation) :awaiting-approval)
+                       (eq (operation-status operation) :staged)))
+                 (list-turn-operations session (turn-id turn))))
+
+(defun execute-turn-pending-actions (session operations &key thread turn)
+  (let ((actions (remove nil (mapcar #'operation-assistant-action operations))))
+    (unless actions
+      (error "No assistant actions are attached to the selected turn"))
+    (let ((results
+            (mapcar
+             (lambda (operation)
+               (let ((action (operation-assistant-action operation)))
+                 (handler-case
+                     (list :action action
+                           :status :completed
+                           :result (execute-assistant-action action
+                                                            session
+                                                            :thread thread
+                                                            :turn turn
+                                                            :operation operation))
+                   (error (condition)
+                     (let ((incident
+                             (or (latest-operation-incident session operation)
+                                 (record-runtime-incident session
+                                                          condition
+                                                          :thread thread
+                                                          :turn turn
+                                                          :operation operation
+                                                          :kind :assistant-action-failure
+                                                          :title "Assistant action failed"
+                                                          :summary (princ-to-string condition)
+                                                          :metadata (list :source :turn-resume
+                                                                          :action-type (assistant-action-type action))))))
+                       (list :action action
+                             :status :failed
+                             :error (princ-to-string condition)
+                             :incident (incident-record-summary incident)))))))
+             operations)))
+      (append-session-event session :assistant-actions-executed results)
+      (remove-pending-actions session actions)
+      results)))
+
+(defun resume-turn-operation-results (turn operations results &key followup)
+  (list :turn-id (turn-id turn)
+        :resumed-operation-count (length operations)
+        :action-result-count (length results)
+        :action-results results
+        :followup followup))
+
+(defun apply-resumed-operation-result (session thread turn operation result)
+  (let ((policy-id (getf (operation-policy-decision operation) :policy-id)))
+  (update-work-item-status-from-operation session
+                                          operation
+                                          :mutating
+                                          :closure-decision :conversation-mutation-in-progress)
+  (if (eq (getf result :status) :failed)
+      (progn
+        (complete-operation session
+                            thread
+                            turn
+                            operation
+                            result
+                            :status :failed
+                            :metadata (append '(:execution :resumed)
+                                              (let ((incident (getf result :incident)))
+                                                (when incident
+                                                  (list :incident-id (getf incident :id))))))
+        (let ((work-item (operation-bound-work-item session operation)))
+          (cond
+            ((and work-item
+                  (eq (work-item-status work-item) :quarantined))
+             nil)
+            (work-item
+             (quarantine-work-item session
+                                   work-item
+                                   (or (getf result :error)
+                                       "Resumed assistant action failed during governed execution.")
+                                   :evidence (list :source :turn-resume
+                                                   :turn-id (turn-id turn)
+                                                   :operation-id (operation-id operation)
+                                                   :incident (getf result :incident))))
+            (t
+             (update-work-item-status-from-operation session
+                                                     operation
+                                                     :failed
+                                                     :closure-decision :runtime-incident
+                                                     :error (getf result :error)
+                                                     :result result)))))
+      (progn
+        (complete-operation session
+                            thread
+                            turn
+                            operation
+                            (or result (list :resumed-p t))
+                            :status :completed
+                            :metadata '(:execution :resumed))
+        (update-work-item-status-from-operation session
+                                                operation
+                                                (if (member policy-id '(:runtime-eval-mutate :runtime-reload) :test #'eq)
+                                                    :awaiting-cold-validation
+                                                    :committed)
+                                                :closure-decision (if (eq policy-id :runtime-eval-mutate)
+                                                                      :committed-to-image
+                                                                      :committed-to-source-and-image)
+                                                :result result)))))
+
+(defun resume-conversation-turn (provider session turn
+                                  &key (source (or (getf (turn-metadata turn) :source) :say))
+                                    (operator-mode :conversation))
+  (let ((operations (turn-pending-action-operations session turn)))
+    (unless (eq (turn-status turn) :awaiting-approval)
+      (error "TURN/RESUME requires a turn in :awaiting-approval state"))
+    (dolist (operation operations)
+      (let* ((decision (operation-policy-decision operation))
+             (policy-id (getf decision :policy-id)))
+        (when policy-id
+          (ensure-policy-approved session policy-id))))
+    (let* ((thread (or (find-thread session (turn-thread-id turn))
+                       (current-thread session)))
+           (results (execute-turn-pending-actions session
+                                                  operations
+                                                  :thread thread
+                                                  :turn turn))
+           (followup nil))
+      (loop for operation in operations
+            for result in results
+            do (apply-resumed-operation-result session thread turn operation result))
+      (refresh-turn-status session turn :metadata '(:resumed-p t))
+      (when (and provider
+                 (provider-turn-followup-p provider)
+                 (eq (turn-status turn) :completed))
+        (setf followup (continue-conversation-turn provider
+                                                   session
+                                                   thread
+                                                   turn
+                                                   :source source
+                                                   :operator-mode operator-mode)))
+      (resume-turn-operation-results turn operations results :followup followup))))

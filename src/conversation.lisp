@@ -235,6 +235,7 @@
   (cond
     (current-error-state :failed)
     ((find :awaiting-approval operations :key #'operation-status) :awaiting-approval)
+    ((find :interrupted operations :key #'operation-status) :interrupted)
     ((find :failed operations :key #'operation-status) :failed)
     (t :completed)))
 
@@ -267,6 +268,58 @@
         :created-at (artifact-created-at artifact)
         :metadata (artifact-metadata artifact)))
 
+(defun artifact-kind-summary (artifacts)
+  (let ((table (make-hash-table :test #'eq)))
+    (dolist (artifact artifacts)
+      (incf (gethash (artifact-kind artifact) table 0)))
+    (let (summary)
+      (maphash (lambda (kind count)
+                 (push (list :kind kind :count count) summary))
+               table)
+      (sort summary #'string<
+            :key (lambda (entry) (symbol-name (getf entry :kind)))))))
+
+(defun artifact-kind-summary-from-records (artifact-records)
+  (let ((table (make-hash-table :test #'eq)))
+    (dolist (artifact-record artifact-records)
+      (incf (gethash (getf artifact-record :kind) table 0)))
+    (let (summary)
+      (maphash (lambda (kind count)
+                 (push (list :kind kind :count count) summary))
+               table)
+      (sort summary #'string<
+            :key (lambda (entry) (symbol-name (getf entry :kind)))))))
+
+(defun artifact-summary-from-records (artifact-records)
+  (let* ((kind-summary (artifact-kind-summary-from-records artifact-records)))
+    (list :artifact-count (length artifact-records)
+          :kind-counts kind-summary
+          :validation-count (or (getf (find :validation kind-summary
+                                            :key (lambda (entry) (getf entry :kind))
+                                            :test #'eq)
+                                       :count)
+                                0)
+          :reconciliation-count (or (getf (find :reconciliation kind-summary
+                                                :key (lambda (entry) (getf entry :kind))
+                                                :test #'eq)
+                                           :count)
+                                    0)
+          :incident-count (or (getf (find :incident kind-summary
+                                          :key (lambda (entry) (getf entry :kind))
+                                          :test #'eq)
+                                     :count)
+                              0)
+          :plan-count (or (getf (find :plan kind-summary
+                                      :key (lambda (entry) (getf entry :kind))
+                                      :test #'eq)
+                                 :count)
+                          0)
+          :runtime-artifact-count (count-if (lambda (artifact-record)
+                                              (member (getf artifact-record :kind)
+                                                      '(:runtime-state :runtime-eval :runtime-reload)
+                                                      :test #'eq))
+                                            artifact-records))))
+
 (defun find-message (session message-id)
   (find message-id (agent-session-messages session)
         :key #'message-id :test #'string=))
@@ -280,8 +333,11 @@
         :key #'operation-id :test #'string=))
 
 (defun find-artifact (session artifact-id)
-  (find artifact-id (agent-session-artifacts session)
-        :key #'artifact-id :test #'string=))
+  (let ((environment (session-bound-environment session)))
+    (or (and environment
+             (environment-artifact environment artifact-id))
+        (find artifact-id (agent-session-artifacts session)
+              :key #'artifact-id :test #'string=))))
 
 (defun list-thread-messages (session thread-id)
   (remove-if-not (lambda (message)
@@ -304,14 +360,20 @@
                  (agent-session-operations session)))
 
 (defun list-thread-artifacts (session thread-id)
-  (remove-if-not (lambda (artifact)
-                   (string= thread-id (artifact-thread-id artifact)))
-                 (agent-session-artifacts session)))
+  (let ((environment (session-bound-environment session)))
+    (or (and environment
+             (environment-thread-artifacts environment thread-id))
+        (remove-if-not (lambda (artifact)
+                         (string= thread-id (artifact-thread-id artifact)))
+                       (agent-session-artifacts session)))))
 
 (defun list-turn-artifacts (session turn-id)
-  (remove-if-not (lambda (artifact)
-                   (string= turn-id (artifact-turn-id artifact)))
-                 (agent-session-artifacts session)))
+  (let ((environment (session-bound-environment session)))
+    (or (and environment
+             (environment-turn-artifacts environment turn-id))
+        (remove-if-not (lambda (artifact)
+                         (string= turn-id (artifact-turn-id artifact)))
+                       (agent-session-artifacts session)))))
 
 (defun create-message (session thread role content &key turn-id (content-type :text) stream-fragments (finalized-p t) metadata)
   (let ((message (make-message :id (make-message-id)
@@ -528,7 +590,7 @@
                                  :path path
                                  :title title
                                  :summary summary
-                                 :thread-id (thread-id thread)
+                                 :thread-id (and thread (thread-id thread))
                                  :turn-id (and turn (turn-id turn))
                                  :operation-id (and operation (operation-id operation))
                                  :work-item-id work-item-id
@@ -542,13 +604,14 @@
                             artifact)
       (setf (agent-session-artifacts session) artifacts
             (agent-session-artifacts-tail session) tail))
-    (multiple-value-bind (artifact-ids tail)
-        (append-linked-item (thread-artifact-ids thread)
-                            (thread-artifact-ids-tail thread)
-                            (artifact-id artifact))
-      (setf (thread-artifact-ids thread) artifact-ids
-            (thread-artifact-ids-tail thread) tail))
-    (setf (thread-updated-at thread) (get-universal-time))
+    (when thread
+      (multiple-value-bind (artifact-ids tail)
+          (append-linked-item (thread-artifact-ids thread)
+                              (thread-artifact-ids-tail thread)
+                              (artifact-id artifact))
+        (setf (thread-artifact-ids thread) artifact-ids
+              (thread-artifact-ids-tail thread) tail))
+      (setf (thread-updated-at thread) (get-universal-time)))
     (when turn
       (multiple-value-bind (artifact-ids tail)
           (append-linked-item (turn-artifact-ids turn)
@@ -556,15 +619,33 @@
                               (artifact-id artifact))
         (setf (turn-artifact-ids turn) artifact-ids
               (turn-artifact-ids-tail turn) tail)))
+    (let ((environment (session-bound-environment session)))
+      (when environment
+        (environment-append-artifact environment session artifact)))
     (append-session-event session
                           :artifact-created
                           (artifact-record-summary artifact)
                           :family :artifact
                           :entity-id (artifact-id artifact)
-                          :thread-id (thread-id thread)
+                          :thread-id (and thread (thread-id thread))
                           :turn-id (and turn (turn-id turn))
                           :visibility :operator)
     artifact))
+
+(defun create-environment-artifact (session kind path
+                                    &key title summary metadata source-ref image-ref work-item-id)
+  (create-artifact session
+                   nil
+                   nil
+                   nil
+                   kind
+                   path
+                   :title title
+                   :summary summary
+                   :metadata (append metadata '(:ownership :environment))
+                   :source-ref source-ref
+                   :image-ref image-ref
+                   :work-item-id work-item-id))
 
 (defun maybe-create-patch-artifacts (session thread turn operation output)
   (let ((patch-results (getf (getf output :result) :patch)))
@@ -610,6 +691,46 @@
           :blocked-operation-count (length blocked)
           :blocked-operations blocked)))
 
+(defun turn-recovery-summary (session turn operation-records)
+  (let* ((work-item-id (getf (turn-metadata turn) :work-item-id))
+         (work-item (and work-item-id
+                         (find-work-item session work-item-id)))
+         (interrupted-operations
+           (remove nil
+                   (mapcar (lambda (operation)
+                             (when (eq (operation-status operation) :interrupted)
+                               (list :operation-id (operation-id operation)
+                                     :name (operation-name operation)
+                                     :status (operation-status operation)
+                                     :recovery-state (getf (operation-metadata operation) :recovery-state)
+                                     :interrupted-during-load-p (getf (operation-metadata operation)
+                                                                      :interrupted-during-load-p))))
+                           operation-records)))
+         (resumable-operations
+           (remove nil
+                   (mapcar (lambda (operation)
+                             (when (member (operation-status operation) '(:awaiting-approval :staged))
+                               (list :operation-id (operation-id operation)
+                                     :name (operation-name operation)
+                                     :status (operation-status operation)
+                                     :policy-id (getf (operation-policy-decision operation) :policy-id)
+                                     :work-item-id (getf (operation-metadata operation) :work-item-id))))
+                           operation-records))))
+    (list :resumable-p (or (not (null resumable-operations))
+                           (and work-item (not (null (work-item-resume-payload work-item)))))
+          :interrupted-p (not (null interrupted-operations))
+          :interrupted-operation-count (length interrupted-operations)
+          :interrupted-operations interrupted-operations
+          :resumable-operation-count (length resumable-operations)
+          :resumable-operations resumable-operations
+          :work-item-id work-item-id
+          :work-item-resume-payload (and work-item
+                                         (work-item-resume-payload work-item))
+          :workflow-record-resume-payload (and work-item
+                                               (let ((record (work-item-workflow-record session work-item)))
+                                                 (and record
+                                                      (workflow-record-resume-payload record)))))))
+
 (defun thread-detail (session &optional thread-id)
   (let* ((thread (if thread-id
                      (or (find-thread session thread-id)
@@ -619,10 +740,24 @@
                            (list-thread-messages session (thread-id thread))))
          (turns (mapcar #'turn-record-summary
                         (list-thread-turns session (thread-id thread))))
+         (incidents (list-incident-summaries session :thread-id (thread-id thread)))
          (artifacts (mapcar #'artifact-record-summary
                             (list-thread-artifacts session (thread-id thread)))))
     (append (thread-record-summary thread)
             (list :messages messages
+                  :detail-summary (list :message-count (length messages)
+                                        :turn-count (length turns)
+                                        :incident-count (length incidents)
+                                        :artifact-count (length artifacts)
+                                        :runtime-artifact-count (count-if (lambda (artifact)
+                                                                            (member (getf artifact :kind)
+                                                                                    '(:runtime-state :runtime-eval :runtime-reload)
+                                                                                    :test #'eq))
+                                                                          artifacts)
+                                        :work-item-artifact-count (count-if (lambda (artifact)
+                                                                              (getf artifact :work-item-id))
+                                                                            artifacts))
+                  :incidents incidents
                   :artifacts artifacts
                   :turns turns))))
 
@@ -648,13 +783,122 @@
          (operation-records (list-turn-operations session (turn-id turn)))
          (operations (mapcar #'operation-record-summary operation-records))
          (approval-summary (turn-awaiting-approval-summary operation-records))
+         (incidents (list-incident-summaries session :turn-id (turn-id turn)))
          (artifacts (mapcar #'artifact-record-summary
-                            (list-turn-artifacts session (turn-id turn)))))
+                            (list-turn-artifacts session (turn-id turn))))
+         (work-item-id (getf (turn-metadata turn) :work-item-id))
+         (work-item (and work-item-id
+                         (find-work-item session work-item-id)))
+         (workflow-record (and work-item
+                               (work-item-workflow-record session work-item)))
+         (recovery-summary (turn-recovery-summary session turn operation-records)))
     (append (turn-record-summary turn)
             (list :thread (and thread (thread-record-summary thread))
                   :user-message (and user-message (message-record-summary user-message))
                   :assistant-message (and assistant-message (message-record-summary assistant-message))
                   :messages messages
+                  :detail-summary (list :message-count (length messages)
+                                        :operation-count (length operations)
+                                        :incident-count (length incidents)
+                                        :artifact-count (length artifacts)
+                                        :runtime-operation-count (count-if (lambda (operation)
+                                                                            (let* ((output (getf operation :output))
+                                                                                   (tool-result (if (and (listp output) (getf output :tool))
+                                                                                                    output
+                                                                                                    (and (listp output)
+                                                                                                         (getf output :result)))))
+                                                                              (member (and (listp tool-result)
+                                                                                           (getf tool-result :tool))
+                                                                                    '(:runtime/eval :runtime/reload-file :runtime/set-package)
+                                                                                    :test #'eq)))
+                                                                          operations)
+                                        :runtime-artifact-count (count-if (lambda (artifact)
+                                                                            (member (getf artifact :kind)
+                                                                                    '(:runtime-state :runtime-eval :runtime-reload)
+                                                                                    :test #'eq))
+                                                                          artifacts)
+                                        :work-item-id work-item-id
+                                        :work-item-status (and work-item (work-item-status work-item))
+                                        :workflow-record-status (and workflow-record
+                                                                     (workflow-record-status workflow-record)))
                   :operations operations
+                  :incidents incidents
                   :artifacts artifacts
+                  :recovery recovery-summary
                   :awaiting-approval approval-summary))))
+
+(defun mutation-review (session &optional turn-id)
+  (let* ((detail (turn-detail session turn-id))
+         (resolved-turn-id (getf detail :id))
+         (operations (getf detail :operations))
+         (artifacts (getf detail :artifacts))
+         (incidents (getf detail :incidents))
+         (detail-summary (getf detail :detail-summary))
+         (work-item-id (or (getf detail-summary :work-item-id)
+                           (getf (first artifacts) :work-item-id)
+                           (getf (first incidents) :work-item-id)
+                           (getf (getf detail :recovery) :work-item-id)
+                           (loop for operation in operations
+                                 for output = (getf operation :output)
+                                 for result = (cond
+                                                ((and (listp output) (getf output :result))
+                                                 (getf output :result))
+                                                ((listp output) output)
+                                                (t nil))
+                                 for candidate = (and (listp result)
+                                                      (getf result :work-item-id))
+                                 when candidate
+                                   return candidate)))
+         (work-item (and work-item-id
+                         (find-work-item session work-item-id)))
+         (workflow-record (and work-item
+                               (work-item-workflow-record session work-item)))
+         (wait-report (and work-item
+                           (work-item-wait-report session work-item)))
+         (runtime-artifacts (remove-if-not (lambda (artifact)
+                                             (member (getf artifact :kind)
+                                                     '(:runtime-state :runtime-eval :runtime-reload)
+                                                     :test #'eq))
+                                           artifacts))
+         (validation-artifacts (remove-if-not (lambda (artifact)
+                                                (eq (getf artifact :kind) :validation))
+                                              artifacts)))
+    (list :turn (list :id resolved-turn-id
+                      :status (getf detail :status)
+                      :thread-id (getf (getf detail :thread) :id)
+                      :user-message (getf (getf detail :user-message) :content)
+                      :assistant-message (getf (getf detail :assistant-message) :content)
+                      :recovery (getf detail :recovery)
+                      :awaiting-approval (getf detail :awaiting-approval))
+          :mutation (list :operation-count (length operations)
+                          :artifact-count (length artifacts)
+                          :runtime-operation-count (getf detail-summary :runtime-operation-count)
+                          :runtime-artifact-count (getf detail-summary :runtime-artifact-count)
+                          :operations operations
+                          :artifacts artifacts)
+          :governance (list :work-item (and work-item
+                                           (work-item-summary work-item))
+                            :workflow-record (and workflow-record
+                                                  (workflow-record-summary workflow-record))
+                            :wait wait-report
+                            :next-action (and wait-report (getf wait-report :next-action))
+                            :resume-payload (and wait-report (getf wait-report :resume-payload)))
+          :evidence (list :checkpoint-count (if work-item
+                                                (length (work-item-checkpoints work-item))
+                                                0)
+                          :latest-checkpoint-id (and work-item
+                                                     (latest-work-item-checkpoint-id work-item))
+                          :runtime-observation-count (if work-item
+                                                         (length (work-item-runtime-observations work-item))
+                                                         0)
+                          :validator-task-count (if work-item
+                                                    (length (work-item-validator-tasks work-item))
+                                                    0)
+                          :validation-artifacts validation-artifacts
+                          :runtime-artifacts runtime-artifacts
+                          :latest-runtime-observation (and work-item
+                                                          (car (last (work-item-runtime-observations work-item))))
+                          :latest-runtime-evidence (or (and work-item
+                                                            (car (last (work-item-runtime-observations work-item))))
+                                                       (first incidents)))
+          :incidents incidents)))

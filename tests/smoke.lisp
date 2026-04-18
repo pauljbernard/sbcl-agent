@@ -65,6 +65,16 @@
               (get-output-stream-string stdout)
               (get-output-stream-string stderr)))))
 
+(defun make-temporary-directory (template)
+  (multiple-value-bind (exit-code stdout stderr)
+      (run-command "mktemp" (list "-d" template))
+    (assert-equal 0 exit-code
+                  (format nil "mktemp should succeed for template ~A~@[ (~A)~]" template stderr))
+    (let ((path (string-right-trim '(#\Newline #\Return #\Space #\Tab) stdout)))
+      (assert-true (> (length path) 0)
+                   (format nil "mktemp should return a path for template ~A" template))
+      (uiop:ensure-directory-pathname path))))
+
 (defun with-fake-command-line-arguments (arguments thunk)
   (let ((original (symbol-function 'uiop:command-line-arguments)))
     (unwind-protect
@@ -188,6 +198,42 @@
                    :payload '(:tool-id :git/add :arguments (:paths ("README.md")))))
    :metadata '(:provider :git-write-action-test)))
 
+(defclass runtime-reload-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider runtime-reload-action-provider))
+  "runtime-reload-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider runtime-reload-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider runtime-reload-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a runtime reload action that requires approval."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :tool
+                   :payload '(:tool-id :runtime/reload-file
+                             :arguments (:path "tmp/conversation-reload-target.lisp"))))
+   :metadata '(:provider :runtime-reload-action-test)))
+
+(defclass failing-mutating-eval-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider failing-mutating-eval-provider))
+  "failing-mutating-eval-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider failing-mutating-eval-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider failing-mutating-eval-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a mutating eval that will fail at runtime."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :eval
+                   :payload '(:form "(error \"runtime incident boom\")"
+                             :mutating t)))
+   :metadata '(:provider :failing-mutating-eval-test)))
+
 (defclass followup-patch-provider (sbcl-agent::provider) ())
 
 (defmethod sbcl-agent::provider-name ((provider followup-patch-provider))
@@ -218,8 +264,7 @@
          :metadata '(:provider :followup-patch-test :phase :initial)))))
 
 (defun make-test-git-repo ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-git-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-git-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (readme (merge-pathnames #P"README.md" root)))
     (declare (ignore ignore))
@@ -253,8 +298,7 @@
     root))
 
 (defun runtime-smoke-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-runtime-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-runtime-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (config (sbcl-agent::load-config :working-directory (namestring root)))
          (provider (sbcl-agent::make-provider config)))
@@ -358,15 +402,19 @@
                                           :model "gpt-5"
                                           :working-directory "/tmp/"))
          (created-session nil))
-    (let ((sbcl-agent::*current-session* nil))
+    (let ((sbcl-agent::*current-session* nil)
+          (sbcl-agent::*current-environment* nil))
       (setf created-session (sbcl-agent::session-for-chat-config config))
       (assert-equal "/tmp/" (sbcl-agent::agent-session-cwd created-session)
-                    "session-for-chat-config should create a session rooted at the config working directory")))
+                    "session-for-chat-config should create a session rooted at the config working directory")
+      (assert-true (typep sbcl-agent::*current-environment* 'sbcl-agent::environment)
+                   "session-for-chat-config should also establish a current environment")))
   (let* ((config (sbcl-agent::make-config :provider "mock"
                                           :model "gpt-5"
                                           :working-directory "/tmp/"))
          (existing (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
-    (let ((sbcl-agent::*current-session* existing))
+    (let ((sbcl-agent::*current-session* existing)
+          (sbcl-agent::*current-environment* (sbcl-agent::make-default-environment :session existing)))
       (assert-true (eq existing (sbcl-agent::session-for-chat-config config))
                    "session-for-chat-config should reuse the current session")))
   (multiple-value-bind (status stdout stderr)
@@ -411,7 +459,9 @@
     (declare (ignore stderr))
     (assert-equal 0 status "doctor-command should return success")
     (assert-true (search "Runtime: SBCL" stdout)
-                 "doctor-command should print runtime information"))
+                 "doctor-command should print runtime information")
+    (assert-true (search "Environment id:" stdout)
+                 "doctor-command should print environment information"))
   (let ((config (sbcl-agent::make-config :provider "mock"
                                          :model "gpt-5"
                                          :working-directory "/tmp/"))
@@ -669,8 +719,7 @@ text" value
                 "json-object-value should return nil for missing keys"))
 
 (defun sandbox-helper-coverage-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-sandbox-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-sandbox-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (child (merge-pathnames #P"child/" root))
          (file (merge-pathnames #P"child/test.txt" root))
@@ -808,8 +857,7 @@ text" value
                "reloading policy.lisp should keep policies registered"))
 
 (defun tool-helper-coverage-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-tools-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-tools-XXXXXX"))
          (docs-dir (merge-pathnames #P"docs/" root))
          (nested-dir (merge-pathnames #P"nested/" root))
          (readme (merge-pathnames #P"README.txt" root))
@@ -910,8 +958,7 @@ text" value
                    "list-capability-policies should include custom policies"))))
 
 (defun with-fake-curl (thunk)
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-fake-curl-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-fake-curl-XXXXXX"))
          (script (merge-pathnames #P"curl" root))
          (old-path (uiop:getenv "PATH"))
          (script-body
@@ -1166,7 +1213,7 @@ fi
                     (length results)
                     "execute-assistant-actions should execute response actions")
       (assert-equal 3
-                    (getf (first results) :result)
+                    (getf (getf (first results) :result) :result)
                     "execute-assistant-actions should return evaluation results")))
   (let* ((request (sbcl-agent::make-provider-request :prompt "stream me" :session-summary '()))
          (events '())
@@ -1283,7 +1330,9 @@ fi
                      (let ((*standard-output* stream))
                        (sbcl-agent::print-shell-help)))))
     (assert-true (search "(say \"prompt\")" help-text)
-                 "print-shell-help should mention SAY"))
+                 "print-shell-help should mention SAY")
+    (assert-true (search "(integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\")" help-text)
+                 "print-shell-help should mention the RGP binding command"))
   (let* ((session (sbcl-agent::make-default-session))
          (prompt-text (with-output-to-string (stream)
                         (let ((*query-io* stream))
@@ -1462,14 +1511,121 @@ fi
                                   (:role :assistant :content "first reply")
                                   (:role :assistant :content "follow-up reply"))
                        :operations ((:name "provider-1") (:name "provider-2"))
+                       :incidents ((:id "incident-1"))
                        :artifacts ((:title "artifact.txt"))
+                       :detail-summary (:runtime-operation-count 1
+                                        :runtime-artifact-count 1
+                                        :incident-count 1
+                                        :work-item-id "work-1"
+                                        :work-item-status :committed
+                                        :workflow-record-status :committed)
                        :assistant-message (:role :assistant :content "follow-up reply")
+                       :recovery (:resumable-p t
+                                  :resumable-operation-count 1
+                                  :work-item-id "work-1"
+                                  :work-item-resume-payload (:resume-command :turn/resume))
                        :awaiting-approval (:awaiting-approval-p nil :blocked-operation-count 0))
                      :turn-status)))))
-    (assert-true (search "turn> turn-1 status=COMPLETED messages=3 operations=2 artifacts=1" result)
+    (assert-true (search "turn> turn-1 status=COMPLETED messages=3 operations=2 artifacts=1 incidents=1" result)
                  "print-shell-result should render compact turn-status summaries")
+    (assert-true (search "turn-summary> runtime-ops=1 runtime-artifacts=1 incidents=1 work-item=work-1 work-status=COMMITTED workflow=COMMITTED" result)
+                 "print-shell-result should render turn runtime/workflow summaries")
+    (assert-true (search "recovery> resumable=1 interrupted=0 work-item=work-1" result)
+                 "print-shell-result should render turn recovery summaries")
     (assert-true (search "assistant> follow-up reply" result)
                  "print-shell-result should render the current assistant message for turn-status"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:id "thread-1"
+                       :title "Feature work"
+                       :messages ((:role :user :content "prompt"))
+                       :turns ((:id "turn-1"))
+                       :incidents ((:id "incident-1"))
+                       :artifacts ((:title "runtime-eval"))
+                       :detail-summary (:runtime-artifact-count 1
+                                        :incident-count 1
+                                        :work-item-artifact-count 1))
+                     :thread-show)))))
+    (assert-true (search "thread> thread-1 title=Feature work messages=1 turns=1 artifacts=1 incidents=1" result)
+                 "print-shell-result should render compact thread-show summaries")
+    (assert-true (search "thread-summary> runtime-artifacts=1 work-item-artifacts=1 incidents=1" result)
+                 "print-shell-result should render thread runtime/work-item summaries"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '((:id "incident-1"
+                        :kind :runtime-eval-failure
+                        :status :open
+                        :turn-id "turn-1"
+                        :operation-id "op-1"))
+                     :incident-list)))))
+    (assert-true (search "incidents> count=1" result)
+                 "print-shell-result should render incident list summaries")
+    (assert-true (search "incident> incident-1 kind=RUNTIME-EVAL-FAILURE status=OPEN turn=turn-1 operation=op-1" result)
+                 "print-shell-result should render compact incident rows"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:id "env-1"
+                       :active-runtime-id "runtime-1"
+                       :thread-count 2
+                       :artifact-count 3
+                       :incident-count 1
+                       :event-count 9
+                       :operator-status (:blocked-count 1
+                                         :quarantined-count 1
+                                         :incident-count 1
+                                         :open-incident-count 1))
+                     :environment-show)))))
+    (assert-true (search "environment> env-1 runtime=runtime-1 threads=2 artifacts=3 incidents=1 events=9" result)
+                 "print-shell-result should render environment summaries")
+    (assert-true (search "environment-operator> blocked=1 quarantined=1 incidents=1 open=1" result)
+                 "print-shell-result should render environment operator summaries"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     (list :environment-id "env-1"
+                           :event-count 2
+                           :events (list (sbcl-agent::make-event :id "event-1"
+                                                                 :timestamp 1
+                                                                 :kind :incident-created
+                                                                 :family :incident
+                                                                 :entity-id "incident-1"
+                                                                 :thread-id "thread-1"
+                                                                 :turn-id "turn-1"
+                                                                 :visibility :operator
+                                                                 :metadata '(:environment-id "env-1")
+                                                                 :payload '(:environment-id "env-1"))))
+                     :environment-events)))))
+    (assert-true (search "environment-events> env=env-1 count=2 shown=1" result)
+                 "print-shell-result should render environment event summaries")
+    (assert-true (search "environment-event> INCIDENT-CREATED family=INCIDENT entity=incident-1 env=env-1" result)
+                 "print-shell-result should render compact environment event rows"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:id "session-1"
+                       :package "SBCL-AGENT-USER"
+                       :thread-state (:thread-count 2)
+                       :turn-count 3
+                       :work-item-count 2
+                       :incident-count 1
+                       :operator-status (:blocked-count 1
+                                         :quarantined-count 1
+                                         :incident-count 1
+                                         :open-incident-count 1
+                                         :durable-count 0)
+                       :incident-summary (:count 1
+                                          :open-count 1
+                                          :recent ((:id "incident-1"))))
+                     :describe-session)))))
+    (assert-true (search "session> session-1 package=SBCL-AGENT-USER threads=2 turns=3 work-items=2 incidents=1" result)
+                 "print-shell-result should render session summaries")
+    (assert-true (search "session-operator> blocked=1 quarantined=1 incidents=1 open=1 durable=0" result)
+                 "print-shell-result should render session operator summaries")
+    (assert-true (search "session-incidents> total=1 open=1 recent=1" result)
+                 "print-shell-result should render compact session incident summaries"))
   (let ((result (with-output-to-string (stream)
                   (let ((*standard-output* stream))
                     (sbcl-agent::print-shell-result
@@ -1513,7 +1669,12 @@ fi
                                                  :type :message-delta
                                                  :canonical-type :text-delta
                                                  :legacy-type :message-delta
+                                                 :run-id "run-1"
+                                                 :operation-id "op-1"
+                                                 :thread-id "thread-1"
+                                                 :turn-id "turn-1"
                                                  :visibility :user
+                                                 :metadata '(:provider-source :mock)
                                                  :payload "delta"))
          (progress '())
          (stream-events '())
@@ -1528,6 +1689,19 @@ fi
     (assert-equal 1
                   (length events)
                   "handle-provider-stream-event should append the new event")
+    (let ((recorded (first (sbcl-agent::agent-session-events session))))
+      (assert-equal "run-1"
+                    (getf (sbcl-agent::event-metadata recorded) :run-id)
+                    "handle-provider-stream-event should preserve provider run correlation metadata")
+      (assert-equal "op-1"
+                    (getf (sbcl-agent::event-metadata recorded) :operation-id)
+                    "handle-provider-stream-event should preserve provider operation correlation metadata")
+      (assert-equal "thread-1"
+                    (sbcl-agent::event-thread-id recorded)
+                    "handle-provider-stream-event should project provider thread identity onto session events")
+      (assert-equal "turn-1"
+                    (sbcl-agent::event-turn-id recorded)
+                    "handle-provider-stream-event should project provider turn identity onto session events"))
     (assert-equal 1
                   (length stream-events)
                   "handle-provider-stream-event should notify the stream listener")
@@ -1734,8 +1908,7 @@ fi
                   "make-provider should construct the openai-compatible provider")))
 
 (defun config-key-file-fallback-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-config-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-config-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (key-path (merge-pathnames #P"openai-api-key.key" root)))
     (declare (ignore ignore))
@@ -1749,8 +1922,7 @@ fi
                    "load-config should mark the API key as present when read from key file"))))
 
 (defun config-auto-provider-selection-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-provider-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-provider-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (key-path (merge-pathnames #P"openai-api-key.key" root)))
     (declare (ignore ignore))
@@ -1764,8 +1936,7 @@ fi
                    "make-provider should construct the OpenAI-compatible provider after auto-selection"))))
 
 (defun config-legacy-key-filename-test ()
-  (let* ((root (uiop:ensure-directory-pathname
-                (format nil "/tmp/sbcl-agent-legacy-provider-~D-~D/" (get-universal-time) (random 1000000))))
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-legacy-provider-XXXXXX"))
          (ignore (ensure-directories-exist root))
          (key-path (merge-pathnames #P"openai-api-kay.key" root)))
     (declare (ignore ignore))
@@ -1890,6 +2061,25 @@ fi
         (thread-show-command (sbcl-agent::normalize-form-command '(thread/show "thread-1")))
         (turn-status-command (sbcl-agent::normalize-form-command '(turn/status "turn-1")))
         (turn-resume-command (sbcl-agent::normalize-form-command '(turn/resume "turn-1")))
+        (incident-list-command (sbcl-agent::normalize-form-command '(incident/list)))
+        (incident-show-command (sbcl-agent::normalize-form-command '(incident/show "incident-1")))
+        (environment-status-command (sbcl-agent::normalize-form-command '(environment/status)))
+        (review-mutation-command (sbcl-agent::normalize-form-command '(review/mutation "turn-1")))
+        (runtime-current-package-command (sbcl-agent::normalize-form-command '(runtime/current-package)))
+        (runtime-list-loaded-systems-command (sbcl-agent::normalize-form-command '(runtime/list-loaded-systems)))
+        (runtime-describe-symbol-command (sbcl-agent::normalize-form-command '(runtime/describe-symbol "CAR" :package "COMMON-LISP")))
+        (runtime-find-definition-command (sbcl-agent::normalize-form-command '(runtime/find-definition "CAR" :package "COMMON-LISP")))
+        (runtime-callers-command (sbcl-agent::normalize-form-command '(runtime/callers "CAR" :package "COMMON-LISP")))
+        (runtime-methods-command (sbcl-agent::normalize-form-command '(runtime/methods "PRINT-OBJECT")))
+        (runtime-source-image-divergence-command (sbcl-agent::normalize-form-command '(runtime/source-image-divergence "CAR" :package "COMMON-LISP")))
+        (runtime-set-package-command (sbcl-agent::normalize-form-command '(runtime/set-package "COMMON-LISP")))
+        (runtime-eval-command (sbcl-agent::normalize-form-command '(runtime/eval "(+ 1 2)")))
+        (runtime-history-command (sbcl-agent::normalize-form-command '(runtime/history :tail 5)))
+        (runtime-reload-file-command (sbcl-agent::normalize-form-command '(runtime/reload-file "src/main.lisp")))
+        (environment-show-command (sbcl-agent::normalize-form-command '(environment/show)))
+        (environment-events-command (sbcl-agent::normalize-form-command '(environment/events :tail 5)))
+        (environment-save-command (sbcl-agent::normalize-form-command '(environment/save "/tmp/environment.sexp")))
+        (environment-load-command (sbcl-agent::normalize-form-command '(environment/load "/tmp/environment.sexp")))
         (execute-actions-command (sbcl-agent::normalize-form-command '(execute-actions)))
         (describe-session-command (sbcl-agent::normalize-form-command '(describe-session)))
         (enqueue-task-command (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp"))))
@@ -1899,6 +2089,13 @@ fi
         (replay-validator-command (sbcl-agent::normalize-form-command '(replay-validator-task "work" "validator" :status :passed)))
         (replay-validator-set-command (sbcl-agent::normalize-form-command '(replay-validator-set "work" "replay" :status :partial :statuses '(:live :partial :cold :passed))))
         (reconcile-image-only-command (sbcl-agent::normalize-form-command '(reconcile-image-only-source "work" "summary")))
+        (integration-rgp-bind-command (sbcl-agent::normalize-form-command '(integration/rgp-bind :request-id "req" :agent-session-id "agent-session")))
+        (integration-rgp-show-command (sbcl-agent::normalize-form-command '(integration/rgp-show)))
+        (integration-rgp-export-command (sbcl-agent::normalize-form-command '(integration/rgp-export "/tmp/rgp-snapshot.json")))
+        (integration-rgp-artifacts-command (sbcl-agent::normalize-form-command '(integration/rgp-artifacts)))
+        (integration-rgp-approvals-command (sbcl-agent::normalize-form-command '(integration/rgp-approvals)))
+        (integration-rgp-approve-command (sbcl-agent::normalize-form-command '(integration/rgp-approve "work" :process-run :reason "Need approval")))
+        (integration-rgp-resume-command (sbcl-agent::normalize-form-command '(integration/rgp-resume "work" :note "Continue")))
         (eval-command (sbcl-agent::normalize-form-command '(+ 100 203)))
         (approve-command (sbcl-agent::normalize-form-command '(approve :process-run)))
         (patch-command (sbcl-agent::normalize-form-command '(patch '((:write "x" "y"))))))
@@ -1918,6 +2115,44 @@ fi
                   "turn/status form should normalize to :turn-status")
     (assert-equal :turn-resume (sbcl-agent::command-kind turn-resume-command)
                   "turn/resume form should normalize to :turn-resume")
+    (assert-equal :incident-list (sbcl-agent::command-kind incident-list-command)
+                  "incident/list form should normalize to :incident-list")
+    (assert-equal :incident-show (sbcl-agent::command-kind incident-show-command)
+                  "incident/show form should normalize to :incident-show")
+    (assert-equal :environment-status (sbcl-agent::command-kind environment-status-command)
+                  "environment/status form should normalize to :environment-status")
+    (assert-equal :review-mutation (sbcl-agent::command-kind review-mutation-command)
+                  "review/mutation form should normalize to :review-mutation")
+    (assert-equal :runtime-current-package (sbcl-agent::command-kind runtime-current-package-command)
+                  "runtime/current-package form should normalize to :runtime-current-package")
+    (assert-equal :runtime-list-loaded-systems (sbcl-agent::command-kind runtime-list-loaded-systems-command)
+                  "runtime/list-loaded-systems form should normalize to :runtime-list-loaded-systems")
+    (assert-equal :runtime-describe-symbol (sbcl-agent::command-kind runtime-describe-symbol-command)
+                  "runtime/describe-symbol form should normalize to :runtime-describe-symbol")
+    (assert-equal :runtime-find-definition (sbcl-agent::command-kind runtime-find-definition-command)
+                  "runtime/find-definition form should normalize to :runtime-find-definition")
+    (assert-equal :runtime-callers (sbcl-agent::command-kind runtime-callers-command)
+                  "runtime/callers form should normalize to :runtime-callers")
+    (assert-equal :runtime-methods (sbcl-agent::command-kind runtime-methods-command)
+                  "runtime/methods form should normalize to :runtime-methods")
+    (assert-equal :runtime-source-image-divergence (sbcl-agent::command-kind runtime-source-image-divergence-command)
+                  "runtime/source-image-divergence form should normalize to :runtime-source-image-divergence")
+    (assert-equal :runtime-set-package (sbcl-agent::command-kind runtime-set-package-command)
+                  "runtime/set-package form should normalize to :runtime-set-package")
+    (assert-equal :runtime-eval (sbcl-agent::command-kind runtime-eval-command)
+                  "runtime/eval form should normalize to :runtime-eval")
+    (assert-equal :runtime-history (sbcl-agent::command-kind runtime-history-command)
+                  "runtime/history form should normalize to :runtime-history")
+    (assert-equal :runtime-reload-file (sbcl-agent::command-kind runtime-reload-file-command)
+                  "runtime/reload-file form should normalize to :runtime-reload-file")
+    (assert-equal :environment-show (sbcl-agent::command-kind environment-show-command)
+                  "environment/show form should normalize to :environment-show")
+    (assert-equal :environment-events (sbcl-agent::command-kind environment-events-command)
+                  "environment/events form should normalize to :environment-events")
+    (assert-equal :environment-save (sbcl-agent::command-kind environment-save-command)
+                  "environment/save form should normalize to :environment-save")
+    (assert-equal :environment-load (sbcl-agent::command-kind environment-load-command)
+                  "environment/load form should normalize to :environment-load")
     (assert-equal :execute-actions (sbcl-agent::command-kind execute-actions-command)
                   "execute-actions form should normalize to :execute-actions")
     (assert-equal :describe-session (sbcl-agent::command-kind describe-session-command)
@@ -1936,12 +2171,132 @@ fi
                   "replay-validator-set form should normalize to :replay-validator-set")
     (assert-equal :reconcile-image-only-source (sbcl-agent::command-kind reconcile-image-only-command)
                   "reconcile-image-only-source form should normalize to :reconcile-image-only-source")
+    (assert-equal :integration-rgp-bind (sbcl-agent::command-kind integration-rgp-bind-command)
+                  "integration/rgp-bind form should normalize to :integration-rgp-bind")
+    (assert-equal :integration-rgp-show (sbcl-agent::command-kind integration-rgp-show-command)
+                  "integration/rgp-show form should normalize to :integration-rgp-show")
+    (assert-equal :integration-rgp-export (sbcl-agent::command-kind integration-rgp-export-command)
+                  "integration/rgp-export form should normalize to :integration-rgp-export")
+    (assert-equal :integration-rgp-artifacts (sbcl-agent::command-kind integration-rgp-artifacts-command)
+                  "integration/rgp-artifacts form should normalize to :integration-rgp-artifacts")
+    (assert-equal :integration-rgp-approvals (sbcl-agent::command-kind integration-rgp-approvals-command)
+                  "integration/rgp-approvals form should normalize to :integration-rgp-approvals")
+    (assert-equal :integration-rgp-approve (sbcl-agent::command-kind integration-rgp-approve-command)
+                  "integration/rgp-approve form should normalize to :integration-rgp-approve")
+    (assert-equal :integration-rgp-resume (sbcl-agent::command-kind integration-rgp-resume-command)
+                  "integration/rgp-resume form should normalize to :integration-rgp-resume")
     (assert-equal :eval (sbcl-agent::command-kind eval-command)
                   "plain Lisp forms should normalize to :eval")
     (assert-equal :approve (sbcl-agent::command-kind approve-command)
                   "approve form should normalize to :approve")
     (assert-equal :patch (sbcl-agent::command-kind patch-command)
                   "patch form should normalize to :patch")))
+
+(defun rgp-integration-snapshot-test ()
+  (let* ((provider (make-test-provider))
+         (snapshot-path "/tmp/sbcl-agent-rgp-snapshot.json")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/sbcl-agent-rgp/"))
+         (thread (sbcl-agent::current-thread session))
+         (turn (let ((user-message (sbcl-agent::create-message session thread :user "Summarize the integration"))
+                     (assistant-message nil)
+                     (turn nil))
+                 (setf turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :test)))
+                 (setf assistant-message (sbcl-agent::create-message session thread :assistant "Integration state captured."
+                                                                    :turn-id (sbcl-agent::turn-id turn)))
+                 (sbcl-agent::complete-turn session thread turn assistant-message)
+                 turn))
+         (work-item (sbcl-agent::create-work-item session "Governed runtime checkpoint" :transaction-scope :test)))
+    (declare (ignore turn))
+    (sbcl-agent::bind-session-to-environment session)
+    (sbcl-agent::create-environment-artifact session
+                                             :report
+                                             "/tmp/sbcl-agent-rgp/report.json"
+                                             :title "Runtime report"
+                                             :summary "Projected runtime state"
+                                             :metadata '(:lineage-source :rgp-test))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need external approval")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command
+      '(integration/rgp-bind :tenant-id "tenant-1"
+                             :request-id "req-1"
+                             :agent-session-id "agent-session-1"
+                             :integration-id "integration-1"
+                             :projection-id "projection-1"))
+     provider
+     session)
+    (let* ((binding (sbcl-agent::rgp-binding-summary))
+           (snapshot (sbcl-agent::environment-rgp-snapshot))
+           (approvals (sbcl-agent::environment-rgp-approval-summaries))
+           (artifacts (sbcl-agent::environment-rgp-artifact-summaries))
+           (export-result (sbcl-agent::export-environment-rgp-snapshot snapshot-path))
+           (json (uiop:read-file-string snapshot-path)))
+      (assert-equal "req-1" (getf binding :request-id)
+                    "rgp binding should persist the request id on the environment")
+      (assert-equal "agent-session-1" (getf binding :agent-session-id)
+                    "rgp binding should persist the governed agent-session id")
+      (assert-equal "sbcl_agent" (getf (getf snapshot :governed-runtime) :runtime-subtype)
+                    "governed runtime snapshot should identify the sbcl-agent runtime subtype")
+      (assert-equal 1 (length approvals)
+                    "approval summaries should include the blocked governed runtime work-item")
+      (assert-true (getf (first artifacts) :lineage)
+                   "artifact summaries should expose lineage fields")
+      (assert-equal snapshot-path (getf export-result :path)
+                    "RGP export should report the JSON snapshot path")
+      (assert-true (search "\"request_id\":\"req-1\"" json)
+                   "RGP export should serialize binding identifiers to JSON")
+      (assert-true (search "\"runtime_subtype\":\"sbcl_agent\"" json)
+                   "RGP export should serialize the governed runtime subtype"))))
+
+(defun rgp-integration-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/sbcl-agent-rgp-shell/"))
+         (work-item (sbcl-agent::create-work-item session "Governed shell approval" :transaction-scope :test)))
+    (sbcl-agent::bind-session-to-environment session)
+    (multiple-value-bind (bind-result bind-kind bound-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          '(integration/rgp-bind :request-id "req-shell" :agent-session-id "agent-shell"))
+         provider
+         session)
+      (declare (ignore bound-session))
+      (assert-equal :integration-rgp-bind bind-kind
+                    "integration/rgp-bind should dispatch correctly")
+      (assert-equal "req-shell" (getf (getf bind-result :binding) :request-id)
+                    "integration/rgp-bind should return the binding summary"))
+    (multiple-value-bind (approval-result approval-kind approval-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          `(integration/rgp-approve ,(sbcl-agent::work-item-id work-item) :process-run :reason "Approve runtime checkpoint"))
+         provider
+         session)
+      (declare (ignore approval-session))
+      (assert-equal :integration-rgp-approve approval-kind
+                    "integration/rgp-approve should dispatch correctly")
+      (assert-equal :approval-required
+                    (getf (getf approval-result :approval) :why)
+                    "integration/rgp-approve should expose approval wait state"))
+    (multiple-value-bind (approval-list approval-list-kind approval-list-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(integration/rgp-approvals))
+         provider
+         session)
+      (declare (ignore approval-list-session))
+      (assert-equal :integration-rgp-approvals approval-list-kind
+                    "integration/rgp-approvals should dispatch correctly")
+      (assert-equal 1 (length approval-list)
+                    "integration/rgp-approvals should list blocked governed runtime work-items"))
+    (multiple-value-bind (resume-result resume-kind resume-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          `(integration/rgp-resume ,(sbcl-agent::work-item-id work-item) :note "Resume runtime"))
+         provider
+         session)
+      (declare (ignore resume-session))
+      (assert-equal :integration-rgp-resume resume-kind
+                    "integration/rgp-resume should dispatch correctly")
+      (assert-equal :pending-validation
+                    (getf (getf resume-result :approval) :why)
+                    "integration/rgp-resume should move the work-item past approval into validation"))))
 
 (defun shell-eval-test ()
   (assert-equal 303
@@ -2118,13 +2473,15 @@ fi
      provider
      session)
     (let ((work-item (first (sbcl-agent::agent-session-work-items session))))
-      (assert-equal :committed
+      (assert-equal :awaiting-cold-validation
                     (sbcl-agent::work-item-status work-item)
-                    "mutating eval resume should commit the governed work-item")
+                    "mutating eval resume should stop at awaiting cold validation")
       (assert-equal :passed
                     (sbcl-agent::validation-result-status
                      (sbcl-agent::work-item-live-validation-result work-item))
-                    "mutating eval resume should record validation evidence"))))
+                    "mutating eval resume should record live validation evidence")
+      (assert-true (member :cold (sbcl-agent::work-item-pending-validations work-item))
+                   "mutating eval resume should leave cold validation pending"))))
 
 (defun say-git-write-tool-approval-test ()
   (let* ((repo (make-test-git-repo))
@@ -2205,6 +2562,48 @@ fi
     (assert-true (sbcl-agent::provider-action-intent-event-p event)
                  "provider action intent predicate should recognize canonical tool-intent events")))
 
+(defun event-envelope-correlation-fields-test ()
+  (let* ((event (sbcl-agent::make-event-now
+                 :workflow-record-created
+                 '(:ok t)
+                 :entity-id "wf-1"
+                 :thread-id "thread-1"
+                 :turn-id "turn-1"
+                 :environment-id "env-1"
+                 :session-id "session-1"
+                 :work-item-id "work-1"
+                 :artifact-id "artifact-1"
+                 :incident-id "incident-1"))
+         (summary (sbcl-agent::event-envelope-summary event)))
+    (assert-equal :workflow
+                  (sbcl-agent::event-family event)
+                  "event family normalization should classify workflow-record-created as workflow")
+    (assert-equal "env-1"
+                  (getf (sbcl-agent::event-metadata event) :environment-id)
+                  "event envelope should preserve environment-id correlation metadata")
+    (assert-equal "session-1"
+                  (getf (sbcl-agent::event-metadata event) :session-id)
+                  "event envelope should preserve session-id correlation metadata")
+    (assert-equal "work-1"
+                  (getf (sbcl-agent::event-metadata event) :work-item-id)
+                  "event envelope should preserve work-item correlation metadata")
+    (assert-true (find :environment-id (getf summary :metadata-keys) :test #'eq)
+                 "event envelope summary should expose metadata keys for correlation fields")))
+
+(defun event-family-normalization-coverage-test ()
+  (let ((incident-event (sbcl-agent::make-event-now :incident-created '(:ok t)))
+        (artifact-event (sbcl-agent::make-event-now :artifact-created '(:ok t)))
+        (followup-event (sbcl-agent::make-event-now :turn-followup-started '(:ok t))))
+    (assert-equal :incident
+                  (sbcl-agent::event-family incident-event)
+                  "incident-created should normalize to incident family")
+    (assert-equal :conversation
+                  (sbcl-agent::event-family artifact-event)
+                  "artifact-created should normalize to conversation family")
+    (assert-equal :conversation
+                  (sbcl-agent::event-family followup-event)
+                  "turn follow-up events should normalize to conversation family")))
+
 (defun openai-stream-line-parser-test ()
   (let* ((line (concatenate 'string "data: " "{\"choices\":[{\"delta\":{\"content\":\"Hello\"}}]}"))
          (chunk (sbcl-agent::parse-openai-stream-json-line line)))
@@ -2244,10 +2643,25 @@ fi
                     "streaming ask should still stage assistant actions")
       (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "streaming ask should retain staged actions in session state")
-      (assert-true (find :provider-stream
-                         (sbcl-agent::agent-session-events updated-session)
-                         :key #'sbcl-agent::event-kind)
-                   "streaming ask should log provider stream events"))))
+      (let* ((provider-event (find :provider-stream
+                                   (sbcl-agent::agent-session-events updated-session)
+                                   :key #'sbcl-agent::event-kind))
+             (provider-operation (find :provider-run
+                                       (sbcl-agent::agent-session-operations updated-session)
+                                       :key #'sbcl-agent::operation-kind)))
+        (assert-true provider-event
+                     "streaming ask should log provider stream events")
+        (assert-true provider-operation
+                     "streaming ask should create a provider-run operation")
+        (assert-equal (sbcl-agent::operation-id provider-operation)
+                      (getf (sbcl-agent::event-metadata provider-event) :operation-id)
+                      "streaming ask provider stream events should correlate to the provider-run operation")
+        (assert-equal (getf (getf result :thread) :id)
+                      (sbcl-agent::event-thread-id provider-event)
+                      "streaming ask provider stream events should carry thread identity")
+        (assert-equal (getf (getf result :turn) :id)
+                      (sbcl-agent::event-turn-id provider-event)
+                      "streaming ask provider stream events should carry turn identity")))))
 
 (defun default-streaming-ask-dispatch-test ()
   (let* ((provider (make-test-provider))
@@ -2382,6 +2796,35 @@ fi
         (assert-equal :completed (getf monitor-result :status)
                       "monitor-task should report the completed task status")))))
 
+(defun task-monitoring-prefers-environment-agent-state-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/task-monitoring-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/task-monitoring-environment/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (multiple-value-bind (enqueue-result enqueue-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
+         provider
+         session)
+      (declare (ignore enqueue-kind))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(run-next-task))
+       provider
+       updated-session)
+      (sbcl-agent::refresh-environment-agent-domain environment updated-session)
+      (setf (sbcl-agent::agent-session-tasks updated-session) '()
+            (sbcl-agent::agent-session-tasks-tail updated-session) nil)
+      (let ((task-id (getf (getf enqueue-result :queued-task) :id)))
+        (assert-true (sbcl-agent::find-task updated-session task-id)
+                     "find-task should prefer environment-backed agent state when bound")
+        (let ((monitor-result (sbcl-agent::execute-monitor-task-command (list task-id) updated-session)))
+          (assert-equal :completed (getf monitor-result :status)
+                        "monitor-task should read task status from environment-backed agent state")
+          (assert-true (> (length (getf monitor-result :recent-progress-events)) 0)
+                       "monitor-task should retain progress events from environment-backed agent state"))))))
+
 (defun task-queue-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
@@ -2402,6 +2845,23 @@ fi
       (declare (ignore updated-session))
       (assert-equal :list-tasks kind "list-tasks should dispatch correctly")
       (assert-equal 1 (length tasks) "list-tasks should return one task summary"))))
+
+(defun enqueue-task-updates-environment-agent-state-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/enqueue-task-environment-sync/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/enqueue-task-environment-sync/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     provider
+     session)
+    (let ((agent-summary (sbcl-agent::environment-agent-state-summaries
+                          (sbcl-agent::environment-agent-state environment))))
+      (assert-equal 1
+                    (getf agent-summary :task-count)
+                    "enqueue-task should update environment agent task counts immediately"))))
 
 (defun task-run-next-test ()
   (let* ((provider (make-test-provider))
@@ -2471,6 +2931,37 @@ fi
           (assert-equal :stop-worker stop-kind "stop-worker should dispatch correctly")
           (assert-true (not (getf stop-result :running-p)) "stop-worker should mark the worker as stopped"))))))
 
+(defun worker-mutations-update-environment-agent-state-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/worker-environment-sync/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/worker-environment-sync/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (multiple-value-bind (start-result start-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(start-worker))
+         provider
+         session)
+      (assert-equal :start-worker start-kind "start-worker should dispatch correctly for environment sync")
+      (let ((agent-summary (sbcl-agent::environment-agent-state-summaries
+                            (sbcl-agent::environment-agent-state environment))))
+        (assert-equal 1
+                      (getf agent-summary :worker-count)
+                      "start-worker should update environment agent worker count immediately")
+        (assert-equal 1
+                      (getf agent-summary :active-worker-count)
+                      "start-worker should update environment active worker count immediately"))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command `(stop-worker ,(getf start-result :id)))
+       provider
+       updated-session)
+      (let ((agent-summary (sbcl-agent::environment-agent-state-summaries
+                            (sbcl-agent::environment-agent-state environment))))
+        (assert-equal 0
+                      (getf agent-summary :active-worker-count)
+                      "stop-worker should update environment active worker count immediately")))))
+
 
 (defun worker-introspection-test ()
   (let* ((provider (make-test-provider))
@@ -2497,10 +2988,37 @@ fi
           (assert-equal :describe-worker worker-kind "describe-worker should dispatch correctly")
           (assert-equal (getf start-result :id) (getf worker-result :id)
                         "describe-worker should return the matching worker id"))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command `(stop-worker ,(getf start-result :id)))
+       provider
+       introspected-session)))))
+
+(defun worker-monitoring-prefers-environment-agent-state-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/worker-monitoring-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/worker-monitoring-environment/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (multiple-value-bind (start-result start-kind updated-session)
         (sbcl-agent::execute-command
-         (sbcl-agent::normalize-form-command `(stop-worker ,(getf start-result :id)))
+         (sbcl-agent::normalize-form-command '(start-worker))
          provider
-         introspected-session)))))
+         session)
+      (assert-equal :start-worker start-kind "start-worker should dispatch correctly for environment-backed monitoring")
+      (sbcl-agent::refresh-environment-agent-domain environment updated-session)
+      (setf (sbcl-agent::agent-session-workers updated-session) '()
+            (sbcl-agent::agent-session-workers-tail updated-session) nil)
+      (let ((workers (sbcl-agent::list-worker-summaries updated-session))
+            (worker-id (getf start-result :id)))
+        (assert-equal 1 (length workers)
+                      "list-worker-summaries should prefer environment-backed agent state when bound")
+        (assert-equal worker-id
+                      (getf (sbcl-agent::worker-summary (sbcl-agent::find-worker updated-session worker-id)) :id)
+                      "find-worker should prefer environment-backed agent state when bound")
+        (setf (sbcl-agent::worker-state-running-p
+               (sbcl-agent::find-worker updated-session worker-id))
+              nil)))))
 
 (defun work-item-creation-test ()
   (let* ((provider (make-test-provider))
@@ -2711,6 +3229,36 @@ fi
                     (sbcl-agent::work-item-live-validation-result work-item))
                    "live validation should carry taint when run against tainted image state"))))
 
+(defun validation-and-reconciliation-event-correlation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Validation event correlation" :transaction-scope :test)))
+    (sbcl-agent::update-work-item-validation-results
+     session
+     work-item
+     :passed
+     (list :validator :live)
+     :failed
+     (list :validator :cold))
+    (let ((validation-event (find :validation-completed
+                                  (sbcl-agent::agent-session-events session)
+                                  :key #'sbcl-agent::event-kind))
+          (reconciliation-event (find :reconciliation-created
+                                      (sbcl-agent::agent-session-events session)
+                                      :key #'sbcl-agent::event-kind)))
+      (assert-true validation-event
+                   "validation completion should emit a workflow event")
+      (assert-true reconciliation-event
+                   "reconciliation creation should emit a workflow event")
+      (assert-equal :workflow
+                    (sbcl-agent::event-family validation-event)
+                    "validation completion events should be classified as workflow events")
+      (assert-equal (sbcl-agent::work-item-id work-item)
+                    (getf (sbcl-agent::event-metadata validation-event) :work-item-id)
+                    "validation completion events should carry work-item correlation metadata")
+      (assert-equal (sbcl-agent::work-item-workflow-record-ref work-item)
+                    (getf (sbcl-agent::event-metadata reconciliation-event) :workflow-record-id)
+                    "reconciliation events should carry workflow-record correlation metadata"))))
+
 (defun work-item-taint-shell-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -2870,6 +3418,38 @@ fi
     (assert-true (> (length (sbcl-agent::workflow-record-operator-interventions record)) 1)
                  "quarantine and resume should both record operator interventions")))
 
+(defun workflow-milestone-event-correlation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Workflow milestone events" :transaction-scope :test))
+         (record (first (sbcl-agent::agent-session-workflow-records session))))
+    (sbcl-agent::quarantine-work-item session work-item "Needs operator review")
+    (sbcl-agent::resume-work-item session work-item :note "Resume requested")
+    (sbcl-agent::close-workflow-record session record '(:done t) :status :committed)
+    (let ((quarantine-event (find :workflow-record-quarantined
+                                  (sbcl-agent::agent-session-events session)
+                                  :key #'sbcl-agent::event-kind))
+          (resume-event (find :workflow-record-resumed
+                              (sbcl-agent::agent-session-events session)
+                              :key #'sbcl-agent::event-kind))
+          (close-event (find :workflow-record-closed
+                             (sbcl-agent::agent-session-events session)
+                             :key #'sbcl-agent::event-kind)))
+      (assert-true quarantine-event
+                   "quarantine-work-item should emit a workflow-record-quarantined event")
+      (assert-true resume-event
+                   "resume-work-item should emit a workflow-record-resumed event")
+      (assert-true close-event
+                   "close-workflow-record should emit a workflow-record-closed event")
+      (assert-equal :workflow
+                    (sbcl-agent::event-family quarantine-event)
+                    "workflow milestone events should remain in the workflow family")
+      (assert-equal (sbcl-agent::work-item-id work-item)
+                    (getf (sbcl-agent::event-metadata quarantine-event) :work-item-id)
+                    "workflow milestone events should carry work-item correlation metadata")
+      (assert-equal (sbcl-agent::workflow-record-id record)
+                    (getf (sbcl-agent::event-metadata close-event) :workflow-record-id)
+                    "workflow closure events should carry workflow-record correlation metadata"))))
+
 (defun workflow-record-operator-shell-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -2939,7 +3519,28 @@ fi
                     "approval-gated work should report approval waiting state")
       (assert-true (equal :await-approval
                           (getf (getf report :next-action) :type))
-                   "approval-gated work should expose a resumable next action"))))
+                   "approval-gated work should expose a resumable next action"))
+    (let* ((runtime-session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+           (provider (make-test-provider)))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+       provider
+       runtime-session)
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command
+            '(runtime/eval "(progn (defparameter sbcl-agent-user::*wait-report-cold* nil) (setf sbcl-agent-user::*wait-report-cold* :ok) sbcl-agent-user::*wait-report-cold*)" :mutating t))
+           provider
+           runtime-session)
+        (declare (ignore kind updated-session))
+        (let* ((cold-work-item (sbcl-agent::find-work-item runtime-session (getf result :work-item-id)))
+               (report (sbcl-agent::work-item-wait-report runtime-session cold-work-item)))
+          (assert-equal :cold-validation-required
+                        (getf report :why)
+                        "awaiting-cold-validation work should report a dedicated cold-validation wait reason")
+          (assert-true (equal :complete-pending-validations
+                              (getf (getf report :next-action) :type))
+                       "awaiting-cold-validation work should expose a cold-validation next action"))))))
 
 (defun why-waiting-shell-command-test ()
   (let* ((provider (make-test-provider))
@@ -2978,22 +3579,52 @@ fi
 (defun session-wait-summary-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
          (work-a (sbcl-agent::create-work-item session "Approval blocked" :transaction-scope :test))
-         (work-b (sbcl-agent::create-work-item session "Validation pending" :transaction-scope :test)))
-    (declare (ignore work-b))
+         (work-b (sbcl-agent::create-work-item session "Validation pending" :transaction-scope :test))
+         (provider (make-test-provider)))
     (sbcl-agent::request-work-item-approval session work-a :process-run :reason "Need process execution")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          '(runtime/eval "(progn (defparameter sbcl-agent-user::*wait-summary-cold* nil) (setf sbcl-agent-user::*wait-summary-cold* :ok) sbcl-agent-user::*wait-summary-cold*)" :mutating t))
+         provider
+         session)
+      (declare (ignore kind updated-session))
+      (setf work-b (sbcl-agent::find-work-item session (getf result :work-item-id))))
     (let* ((summary (sbcl-agent::session-wait-summary session))
            (reasons (getf summary :by-reason))
            (session-summary (sbcl-agent::session-summary session)))
-      (assert-equal 2
+      (assert-equal 3
                     (getf summary :blocked-count)
                     "session-wait-summary should count blocked work items")
       (assert-true (find :approval-required reasons :key (lambda (entry) (getf entry :why)))
                    "session-wait-summary should include approval blockers")
+      (assert-true (find :cold-validation-required reasons :key (lambda (entry) (getf entry :why)))
+                   "session-wait-summary should include cold-validation blockers")
       (assert-true (find :pending-validation reasons :key (lambda (entry) (getf entry :why)))
                    "session-wait-summary should include pending validation blockers")
-      (assert-equal 2
+      (assert-equal 3
                     (getf (getf session-summary :wait-summary) :blocked-count)
                     "session-summary should expose wait-summary data"))))
+
+(defun session-wait-summary-prefers-environment-workflow-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/session-wait-summary-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/session-wait-summary-environment/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Environment wait authority" :transaction-scope :test)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
+    (let ((environment-summary (sbcl-agent::session-wait-summary session)))
+      (setf (sbcl-agent::agent-session-work-items session) '()
+            (sbcl-agent::agent-session-work-items-tail session) nil)
+      (let ((summary (sbcl-agent::session-wait-summary session)))
+        (assert-equal (getf environment-summary :blocked-count)
+                      (getf summary :blocked-count)
+                      "session-wait-summary should prefer environment-backed workflow state when bound")))))
 
 
 (defun checkpoint-linked-resume-payload-test ()
@@ -3058,6 +3689,24 @@ fi
         (assert-equal 1 (length result)
                       "list-replay-groups should return one aggregated replay group")))))
 
+(defun replay-groups-prefer-environment-workflow-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/list-replay-groups-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/list-replay-groups-environment/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Environment replay groups" :transaction-scope :test)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let* ((records (sbcl-agent::work-item-validator-tasks work-item))
+           (group-id (sbcl-agent::validator-task-record-replay-id (first records))))
+      (setf (sbcl-agent::validator-task-record-replay-id (second records)) group-id)
+      (sbcl-agent::sync-environment-from-session environment session)
+      (setf (sbcl-agent::agent-session-work-items session) '()
+            (sbcl-agent::agent-session-work-items-tail session) nil)
+      (let ((result (sbcl-agent::session-validator-replay-groups session)))
+        (assert-equal 1 (length result)
+                      "replay group summaries should prefer environment-backed workflow state when bound")))))
+
 (defun list-image-reconciliations-command-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -3073,6 +3722,22 @@ fi
       (assert-equal :list-image-reconciliations kind "list-image-reconciliations should dispatch correctly")
       (assert-equal 1 (length result)
                     "list-image-reconciliations should return one reconciliation record"))))
+
+(defun image-reconciliations-prefer-environment-workflow-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/list-reconciliations-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/list-reconciliations-environment/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Environment reconciliations" :transaction-scope :test)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
+    (sbcl-agent::sync-environment-from-session environment session)
+    (setf (sbcl-agent::agent-session-work-items session) '()
+          (sbcl-agent::agent-session-work-items-tail session) nil)
+    (let ((result (sbcl-agent::session-image-reconciliation-summary session)))
+      (assert-equal 1 (length result)
+                    "image reconciliation summaries should prefer environment-backed workflow state when bound"))))
 
 (defun replay-validator-set-mixed-status-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -3192,13 +3857,17 @@ fi
            provider
            session)
         (declare (ignore updated-session))
-        (assert-equal :replay-validator-task kind "replay-validator-task should dispatch correctly")
-        (assert-equal 1
-                      (length (getf result :pending-validations))
-                      "replaying one validator should leave one pending validator")
-        (assert-equal :passed
-                      (getf (getf result :live-validation-result) :status)
-                      "replaying the first validator should record a passed live validation")))))
+      (assert-equal :replay-validator-task kind "replay-validator-task should dispatch correctly")
+      (assert-equal 1
+                    (length (getf result :pending-validations))
+                    "replaying one validator should leave one pending validator")
+      (assert-equal :passed
+                    (getf (getf result :live-validation-result) :status)
+                    "replaying the first validator should record a passed live validation")
+      (assert-true (find :validation
+                         (sbcl-agent::agent-session-artifacts session)
+                         :key #'sbcl-agent::artifact-kind)
+                   "replaying a validator should create a validation artifact")))))
 
 (defun reconcile-image-only-source-command-test ()
   (let* ((provider (make-test-provider))
@@ -3217,7 +3886,11 @@ fi
                     "reconciling image-only work should return a committed work-item detail")
       (assert-equal :committed-to-source-and-image
                     (getf result :closure-decision)
-                    "reconciling image-only work should produce a durable closure decision"))))
+                    "reconciling image-only work should produce a durable closure decision")
+      (assert-true (find :reconciliation
+                         (sbcl-agent::agent-session-artifacts session)
+                         :key #'sbcl-agent::artifact-kind)
+                   "reconciling image-only work should create a reconciliation artifact"))))
 
 (defun image-only-outcome-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -3250,7 +3923,9 @@ fi
       (assert-equal 1 (getf status :blocked-count)
                     "operator status should count blocked work items")
       (assert-equal 1 (getf status :quarantined-count)
-                    "operator status should count quarantined work items"))))
+                    "operator status should count quarantined work items")
+      (assert-equal 0 (getf status :incident-count)
+                    "operator status should report incident count when none are recorded"))))
 
 (defun operator-status-tool-test ()
   (let* ((provider (make-test-provider))
@@ -3293,7 +3968,7 @@ fi
                    "doctor command should print blocked work-item count")
       (assert-true (search ":APPROVAL-REQUIRED" output)
                    "doctor command should print blocked work-item reasons")
-      (assert-true (search "Operator status: ready=0 blocked=1 quarantined=0 image-only=0 durable=0" output)
+      (assert-true (search "Operator status: ready=0 blocked=1 quarantined=0 image-only=0 durable=0 incidents=0 open-incidents=0" output)
                    "doctor command should print operator status counts"))))
 
 (defun task-persistence-test ()
@@ -3358,7 +4033,7 @@ fi
       (assert-equal 1 (length (getf result :action-results))
                     "ask should return immediate eval results")
       (assert-equal 303
-                    (getf (first (getf result :action-results)) :result)
+                    (getf (getf (first (getf result :action-results)) :result) :result)
                     "immediate eval action should execute in the current image")
       (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
                     "only non-eval actions should remain staged")
@@ -3396,10 +4071,10 @@ fi
          (code-action (sbcl-agent::make-assistant-action :type :eval
                                                          :payload '(:code "(+ 100 203)"))))
     (assert-equal 303
-                  (sbcl-agent::execute-assistant-action action session)
+                  (getf (sbcl-agent::execute-assistant-action action session) :result)
                   "assistant eval actions should execute Common Lisp forms in the current image")
     (assert-equal 303
-                  (sbcl-agent::execute-assistant-action code-action session)
+                  (getf (sbcl-agent::execute-assistant-action code-action session) :result)
                   "assistant eval actions should also accept payloads under :code")))
 
 (defun pasted-assistant-action-command-test ()
@@ -3412,7 +4087,7 @@ fi
         (sbcl-agent::execute-command command provider session)
       (assert-equal :assistant-action kind
                     "pasted assistant-action objects should normalize into a dedicated shell command")
-      (assert-equal 303 result
+      (assert-equal 303 (getf result :result)
                     "pasted assistant-action command should execute the assistant action payload")
       (assert-true (find :assistant-action
                          (sbcl-agent::agent-session-transcript updated-session)
@@ -3445,7 +4120,7 @@ fi
                         "follow-up journal ask should not leave staged actions behind")
           (assert-equal 1 (length (getf second-result :action-results))
                         "follow-up journal ask should report the eval result")
-          (let ((rendered (getf (first (getf second-result :action-results)) :result)))
+          (let ((rendered (getf (getf (first (getf second-result :action-results)) :result) :result)))
             (assert-true (stringp rendered)
                          "executed journal code should return a date/time string")
             (assert-true (search "-" rendered)
@@ -3481,6 +4156,9 @@ fi
                    "provider session summary should expose persisted turn count")
       (assert-true (integerp (getf summary :operation-count))
                    "provider session summary should expose persisted operation count")
+      (assert-equal 0
+                    (getf summary :incident-count)
+                    "provider session summary should expose incident count")
       (assert-equal 1
                     (length (getf summary :recent-transcript))
                     "provider session summary should keep recent transcript entries")
@@ -3489,6 +4167,7 @@ fi
 
 (defun provider-request-context-test ()
   (let* ((session (sbcl-agent::make-default-session))
+         (environment (sbcl-agent::make-default-environment :session session))
          (thread (sbcl-agent::current-thread session))
          (user-message (sbcl-agent::create-message session thread :user "inspect provider request"))
          (turn (sbcl-agent::start-turn session thread user-message
@@ -3504,6 +4183,14 @@ fi
                    :operator-mode :conversation
                    :stream-p t)))
     (declare (ignore ignore))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (setf request (sbcl-agent::make-provider-request-from-session
+                   "inspect provider request"
+                   session
+                   :thread thread
+                   :turn turn
+                   :operator-mode :conversation
+                   :stream-p t))
     (assert-equal :conversation
                   (sbcl-agent::provider-request-operator-mode request)
                   "provider request should retain the operator mode")
@@ -3518,13 +4205,47 @@ fi
     (assert-equal (sbcl-agent::agent-session-cwd session)
                   (getf (sbcl-agent::provider-request-runtime-summary request) :cwd)
                   "provider request should expose runtime summary")
+    (assert-equal 0
+                  (getf (sbcl-agent::provider-request-runtime-summary request) :open-incident-count)
+                  "provider request runtime summary should expose open incident count")
     (assert-equal (sbcl-agent::agent-session-cwd session)
                   (getf (sbcl-agent::provider-request-workspace-summary request) :cwd)
                   "provider request should expose workspace summary")
+    (assert-equal 0
+                  (getf (sbcl-agent::provider-request-workspace-summary request) :incident-count)
+                  "provider request workspace summary should expose incident count")
     (assert-true (listp (getf (sbcl-agent::provider-request-policy-summary request) :approved-policies))
                  "provider request should expose policy summary")
+    (assert-equal (sbcl-agent::environment-id environment)
+                  (getf (sbcl-agent::provider-request-environment-context request) :environment-id)
+                  "provider request should expose linked environment context")
+    (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request) :thread-refs))
+                 "provider request environment context should expose compact thread refs")
     (assert-true (listp (sbcl-agent::provider-request-session-summary request))
                  "provider request should preserve the compact session summary")))
+
+(defun environment-provider-context-precedence-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-provider-precedence/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-provider-precedence/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Provider context precedence" :transaction-scope :test)
+    (let* ((environment-summary (sbcl-agent::environment-summary environment))
+           (session-summary (sbcl-agent::provider-session-summary session))
+           (workspace-summary (sbcl-agent::provider-workspace-summary session)))
+      (assert-equal (getf environment-summary :thread-count)
+                    (getf session-summary :thread-count)
+                    "provider session summary should align with environment-owned thread counts when bound")
+      (assert-equal (getf environment-summary :artifact-count)
+                    (getf workspace-summary :artifact-count)
+                    "provider workspace summary should align with environment-owned artifact counts when bound")
+      (assert-equal (getf environment-summary :work-item-count)
+                    (getf workspace-summary :work-item-count)
+                    "provider workspace summary should align with environment-owned workflow counts when bound")
+      (assert-equal (getf environment-summary :id)
+                    (getf session-summary :environment-id)
+                    "provider session summary should expose the active environment identity"))))
 
 (defun provider-rendering-context-test ()
   (let* ((request (sbcl-agent::make-provider-request
@@ -3532,9 +4253,13 @@ fi
                    :session-summary '(:recent-transcript ((:role :assistant :content "Earlier")))
                    :thread-context '(:id "thread-1" :title "Default Thread")
                    :turn-context '(:id "turn-1" :status :running)
-                   :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER")
-                   :workspace-summary '(:cwd "/tmp/project" :artifact-count 2)
-                   :policy-summary '(:approved-policies (:safe-read))
+                   :environment-context '(:environment-id "env-1"
+                                          :thread-count 2
+                                          :work-item-count 1
+                                          :thread-refs ((:id "thread-1" :title "Default Thread" :status :active)))
+                   :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER" :open-incident-count 1)
+                   :workspace-summary '(:cwd "/tmp/project" :artifact-count 2 :incident-count 1)
+                   :policy-summary '(:approved-policies (:safe-read) :open-incident-count 1)
                    :operator-mode :conversation
                    :stream-p t))
          (prompt (sbcl-agent::build-openai-user-prompt request))
@@ -3543,14 +4268,21 @@ fi
                  "build-openai-user-prompt should render operator mode")
     (assert-true (search "Thread: (:ID \"thread-1\"" prompt)
                  "build-openai-user-prompt should render thread context")
+    (assert-true (search "Environment context: (:ENVIRONMENT-ID \"env-1\"" prompt)
+                 "build-openai-user-prompt should render environment context")
     (assert-true (search "Runtime summary: (:CWD \"/tmp/project\"" prompt)
                  "build-openai-user-prompt should render runtime summary")
+    (assert-true (search ":OPEN-INCIDENT-COUNT 1" prompt)
+                 "build-openai-user-prompt should render incident posture in summaries")
     (assert-equal :conversation
                   (getf (sbcl-agent::assistant-response-metadata mock-response) :operator-mode)
                   "mock provider responses should preserve operator mode metadata")
     (assert-equal "thread-1"
                   (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :thread) :id)
-                  "mock provider responses should preserve thread context metadata")))
+                  "mock provider responses should preserve thread context metadata")
+    (assert-equal "env-1"
+                  (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :environment) :environment-id)
+                  "mock provider responses should preserve environment context metadata")))
 
 (defun session-plan-test ()
   (let* ((provider (make-test-provider))
@@ -3625,6 +4357,1044 @@ fi
       (assert-equal 1
                     (length (sbcl-agent::agent-session-transcript loaded))
                     "loaded session should preserve transcript entries"))))
+
+(defun serializable-session-copy-trims-transcript-test ()
+  (let ((session (sbcl-agent::make-default-session)))
+    (sbcl-agent::append-transcript-entry session :user "trim session transcript")
+    (let ((serializable (sbcl-agent::serializable-session-copy session)))
+      (assert-equal nil
+                    (sbcl-agent::agent-session-transcript serializable)
+                    "serializable-session-copy should not duplicate transcript state when events are persisted"))))
+
+(defun environment-creation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-root/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-root/"
+                       :session session))
+         (summary (sbcl-agent::environment-summary environment)))
+    (assert-true (typep environment 'sbcl-agent::environment)
+                 "make-default-environment should create an environment")
+    (assert-equal "/tmp/environment-root/"
+                  (sbcl-agent::environment-storage-root environment)
+                  "environment should preserve the requested storage root")
+    (assert-equal (sbcl-agent::agent-session-id session)
+                  (getf summary :session-id)
+                  "environment summary should expose the compatibility session")
+    (assert-equal (sbcl-agent::agent-session-current-thread-id session)
+                  (getf summary :active-thread-id)
+                  "environment summary should reflect the active thread")))
+
+(defun environment-persistence-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-test.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-root/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-root/"
+                       :session session)))
+    (sbcl-agent::update-session-plan session "Persist environment")
+    (sbcl-agent::append-transcript-entry session :user "hello environment")
+    (sbcl-agent::append-session-event session
+                                      :environment-persistence-test
+                                      '(:checkpoint :before-save)
+                                      :family :runtime
+                                      :entity-id "persist-1")
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (loaded-event (find :environment-persistence-test
+                               (sbcl-agent::environment-event-log loaded-environment)
+                               :key #'sbcl-agent::event-kind)))
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (sbcl-agent::environment-id loaded-environment)
+                    "load-environment should preserve the environment id")
+      (assert-equal "Persist environment"
+                    (sbcl-agent::agent-session-plan loaded-session)
+                    "load-environment should preserve the compatibility session")
+      (assert-equal 1
+                    (length (sbcl-agent::agent-session-transcript loaded-session))
+                    "load-environment should preserve transcript state")
+      (assert-true loaded-event
+                   "load-environment should preserve projected environment events")
+      (assert-equal (sbcl-agent::environment-id loaded-environment)
+                    (getf (sbcl-agent::event-metadata loaded-event) :environment-id)
+                    "persisted environment event should retain its environment id metadata")
+      (assert-equal "persist-1"
+                    (sbcl-agent::event-entity-id loaded-event)
+                    "persisted environment event should retain its entity id"))))
+
+(defun environment-serializes-compatibility-payload-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-compatibility-payload/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-compatibility-payload/"
+                       :session session))
+         (serializable (sbcl-agent::serializable-environment-copy environment))
+         (payload (sbcl-agent::environment-compatibility-session serializable)))
+  (assert-true (typep payload 'sbcl-agent::environment-compatibility-payload)
+               "serializable-environment-copy should store an explicit compatibility payload instead of a full agent-session")
+  (assert-equal (sbcl-agent::agent-session-id session)
+                (sbcl-agent::environment-compatibility-payload-session-id payload)
+                "compatibility payload should preserve only the compatibility session identity")))
+
+(defun compatibility-payload-reconstructs-legacy-session-header-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/compatibility-header/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/compatibility-header/"
+                       :session session)))
+    (sbcl-agent::create-thread session :title "Compatibility header thread")
+    (sbcl-agent::sync-environment-from-session environment session)
+    (let* ((payload (sbcl-agent::make-environment-compatibility-payload-from-session session))
+           (rehydrated (sbcl-agent::compatibility-payload->session payload environment)))
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (sbcl-agent::agent-session-id rehydrated)
+                    "compatibility payload reconstruction should preserve session identity")
+      (assert-equal "/tmp/compatibility-header/"
+                    (sbcl-agent::agent-session-cwd rehydrated)
+                    "compatibility payload reconstruction should derive cwd from the environment")
+      (assert-equal "SBCL-AGENT-USER"
+                    (sbcl-agent::agent-session-package rehydrated)
+                    "compatibility payload reconstruction should derive package from the environment runtime summary")
+      (assert-equal (sbcl-agent::environment-active-thread-id environment)
+                    (sbcl-agent::agent-session-current-thread-id rehydrated)
+                    "compatibility payload reconstruction should derive the active thread from the environment"))))
+
+(defun serializable-environment-copy-preserves-existing-compatibility-payload-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-preserve-compatibility-payload/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-preserve-compatibility-payload/"
+                       :session session))
+         (payload (sbcl-agent::make-environment-compatibility-payload-from-session session)))
+    (setf (sbcl-agent::environment-compatibility-session environment) payload)
+    (let ((serializable (sbcl-agent::serializable-environment-copy environment))
+          (copied-payload (sbcl-agent::environment-compatibility-session
+                           (sbcl-agent::serializable-environment-copy environment))))
+      (declare (ignore serializable))
+      (assert-true (typep copied-payload 'sbcl-agent::environment-compatibility-payload)
+                   "serializable-environment-copy should preserve an existing compatibility payload")
+      (assert-equal (sbcl-agent::environment-compatibility-payload-session-id payload)
+                    (sbcl-agent::environment-compatibility-payload-session-id copied-payload)
+                    "serializable-environment-copy should preserve the compatibility payload session id"))))
+
+(defun load-environment-normalizes-legacy-compatibility-session-test ()
+  (let* ((path "/tmp/sbcl-agent-legacy-compatibility-session.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/legacy-compatibility-session/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/legacy-compatibility-session/"
+                       :session session)))
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (let ((*print-circle* t)
+            (*print-pretty* t))
+        (write environment :stream stream)))
+    (let* ((loaded (sbcl-agent::load-environment path))
+           (loaded-compatibility (sbcl-agent::environment-compatibility-session loaded))
+           (rehydrated (sbcl-agent::environment-session loaded)))
+      (assert-true (typep loaded-compatibility 'sbcl-agent::environment-compatibility-payload)
+                   "load-environment should normalize legacy embedded compatibility sessions down to payloads")
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (sbcl-agent::environment-compatibility-payload-session-id loaded-compatibility)
+                    "load-environment should preserve the legacy compatibility session identity")
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (sbcl-agent::agent-session-id rehydrated)
+                    "environment-session should still reconstruct the compatibility session after legacy normalization"))))
+
+(defun environment-serializable-copy-trims-derived-indexes-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-trimmed-indexes/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-trimmed-indexes/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Trim derived indexes" :transaction-scope :test)
+    (let ((artifact (sbcl-agent::create-environment-artifact
+                     session
+                     :validation
+                     nil
+                     :title "Derived index artifact"
+                     :summary "Ensure derived indexes are reconstructed from domain state.")))
+      (declare (ignore artifact))
+      (let ((serializable (sbcl-agent::serializable-environment-copy environment)))
+        (assert-equal nil
+                      (sbcl-agent::environment-thread-set serializable)
+                      "serializable environment copy should omit duplicated top-level thread-set")
+        (assert-equal nil
+                      (sbcl-agent::environment-artifact-index serializable)
+                      "serializable environment copy should omit duplicated top-level artifact-index")
+        (assert-equal nil
+                      (sbcl-agent::environment-work-item-graph serializable)
+                      "serializable environment copy should omit duplicated top-level work-item graph")
+        (assert-equal nil
+                      (sbcl-agent::environment-runtime-set serializable)
+                      "serializable environment copy should omit duplicated top-level runtime set")))))
+
+(defun load-environment-rehydrates-derived-indexes-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-derived-indexes.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-derived-indexes/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-derived-indexes/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Rehydrate derived indexes" :transaction-scope :test)
+    (sbcl-agent::create-environment-artifact
+     session
+     :validation
+     nil
+     :title "Reloaded derived index artifact"
+     :summary "Environment load should rebuild top-level indexes from domain state.")
+    (sbcl-agent::save-environment environment path)
+    (let ((loaded-environment (sbcl-agent::load-environment path)))
+      (assert-true (plusp (length (sbcl-agent::environment-thread-set loaded-environment)))
+                   "load-environment should rebuild the top-level thread set from conversation state")
+      (assert-true (plusp (length (sbcl-agent::environment-artifact-index loaded-environment)))
+                   "load-environment should rebuild the top-level artifact index from conversation state")
+      (assert-true (plusp (length (sbcl-agent::environment-work-item-graph loaded-environment)))
+                   "load-environment should rebuild the top-level work-item graph from workflow state")
+      (assert-equal 1
+                    (length (sbcl-agent::environment-runtime-set loaded-environment))
+                    "load-environment should rebuild the top-level runtime set from runtime state"))))
+
+(defun load-environment-rehydrates-session-events-and-transcript-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-session-events.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-session-events/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-session-events/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-transcript-entry session :user "rehydrate me")
+    (sbcl-agent::append-session-event session
+                                      :session-event-rehydration-test
+                                      '(:status :ok)
+                                      :family :runtime
+                                      :entity-id "rehydrate-event-1")
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment)))
+      (assert-equal 1
+                    (length (sbcl-agent::agent-session-transcript loaded-session))
+                    "load-environment should rebuild transcript entries from the environment event log")
+      (assert-true (find :session-event-rehydration-test
+                         (sbcl-agent::agent-session-events loaded-session)
+                         :key #'sbcl-agent::event-kind)
+                   "load-environment should rebuild session events from the environment event log")
+      (assert-equal "rehydrate me"
+                    (getf (first (sbcl-agent::agent-session-transcript loaded-session)) :content)
+                    "rehydrated transcript entries should preserve content"))))
+
+(defun load-environment-rehydrates-pending-actions-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-pending-actions.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-pending-actions/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-pending-actions/"
+                       :session session))
+         (action (sbcl-agent::make-assistant-action
+                  :type :eval
+                  :payload '(:code "(+ 1 2)" :language :lisp))))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::stage-pending-actions session (list action))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (loaded-actions (sbcl-agent::agent-session-pending-actions loaded-session))
+           (loaded-action (first loaded-actions)))
+      (assert-equal 1
+                    (length loaded-actions)
+                    "load-environment should rebuild pending actions from environment-owned state")
+      (assert-equal :eval
+                    (sbcl-agent::assistant-action-type loaded-action)
+                    "rehydrated pending actions should preserve action type")
+      (assert-equal '(:code "(+ 1 2)" :language :lisp)
+                    (sbcl-agent::assistant-action-payload loaded-action)
+                    "rehydrated pending actions should preserve action payload"))))
+
+(defun load-environment-rehydrates-incidents-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-incidents.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-incidents/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-incidents/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-incident session
+                                 :runtime-condition
+                                 "Environment-owned incident"
+                                 "Incident should survive via environment agent state."
+                                 :metadata '(:source :test))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (loaded-incidents (sbcl-agent::agent-session-incidents loaded-session))
+           (loaded-incident (first loaded-incidents))
+           (summary (sbcl-agent::environment-summary loaded-environment)))
+      (assert-equal 1
+                    (length loaded-incidents)
+                    "load-environment should rebuild incidents from environment-owned state")
+      (assert-equal "Environment-owned incident"
+                    (sbcl-agent::incident-title loaded-incident)
+                    "rehydrated incidents should preserve title")
+      (assert-equal 1
+                    (getf summary :incident-count)
+                    "environment-summary should derive incident count from environment-owned agent state"))))
+
+(defun load-environment-rehydrates-tasks-and-workers-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-tasks-workers.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-tasks-workers/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-tasks-workers/"
+                       :session session))
+         (command (sbcl-agent::normalize-form-command '(ask "rehydrate worker task"))))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::enqueue-task session command :priority 3)
+    (let ((worker (sbcl-agent::make-worker-state :id "worker-rehydrated"
+                                                 :thread nil
+                                                 :running-p nil
+                                                 :session-id (sbcl-agent::agent-session-id session))))
+      (setf (sbcl-agent::agent-session-workers session) (list worker)
+            (sbcl-agent::agent-session-workers-tail session) (last (sbcl-agent::agent-session-workers session)))
+      (sbcl-agent::refresh-environment-agent-domain environment session))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (loaded-tasks (sbcl-agent::agent-session-tasks loaded-session))
+           (loaded-workers (sbcl-agent::agent-session-workers loaded-session))
+           (agent-summary (getf (sbcl-agent::environment-summary loaded-environment) :agent-state)))
+      (assert-equal 1
+                    (length loaded-tasks)
+                    "load-environment should rebuild tasks from environment-owned agent state")
+      (assert-equal :ask
+                    (sbcl-agent::task-kind (first loaded-tasks))
+                    "rehydrated tasks should preserve task kind")
+      (assert-equal 1
+                    (length loaded-workers)
+                    "load-environment should rebuild workers from environment-owned agent state")
+      (assert-equal "worker-rehydrated"
+                    (sbcl-agent::worker-state-id (first loaded-workers))
+                    "rehydrated workers should preserve worker identity")
+      (assert-equal 1
+                    (getf agent-summary :task-count)
+                    "environment agent summary should report task count from environment-owned state")
+      (assert-equal 1
+                    (getf agent-summary :worker-count)
+                    "environment agent summary should report worker count from environment-owned state"))))
+
+(defun load-environment-rehydrates-capability-grants-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-capability-grants.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-capability-grants/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-capability-grants/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::approve-policy session :runtime-eval-mutate)
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (grants (sbcl-agent::agent-session-capability-grants loaded-session))
+           (grant-summary (first (sbcl-agent::session-capability-grants-summary loaded-session))))
+      (assert-equal 1
+                    (length grants)
+                    "load-environment should rebuild capability grants from environment policy-state")
+      (assert-equal :runtime-eval-mutate
+                    (sbcl-agent::capability-grant-policy-id (first grants))
+                    "rehydrated capability grants should preserve policy identity")
+      (assert-equal :runtime-eval-mutate
+                    (getf grant-summary :policy-id)
+                    "rehydrated capability grant summaries should preserve policy identity"))))
+
+(defun load-environment-rehydrates-plan-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-plan.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-plan/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-plan/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::update-session-plan session "Environment-owned plan")
+    (sbcl-agent::refresh-environment-agent-domain environment session)
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (summary (sbcl-agent::environment-summary loaded-environment)))
+      (assert-equal "Environment-owned plan"
+                    (sbcl-agent::agent-session-plan loaded-session)
+                    "load-environment should rebuild the session plan from environment agent-state")
+      (assert-equal "Environment-owned plan"
+                    (getf summary :plan)
+                    "environment-summary should expose the environment-owned plan"))))
+
+(defun load-environment-derives-compatibility-header-from-environment-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-compatibility-header.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-compatibility-header/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-compatibility-header/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::approve-policy session :runtime-package-switch)
+    (sbcl-agent::tool-runtime-set-package session :package "COMMON-LISP")
+    (let ((thread (sbcl-agent::create-thread session :title "Header thread")))
+      (sbcl-agent::use-thread session (sbcl-agent::thread-id thread)))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment)))
+      (assert-equal "/tmp/environment-compatibility-header/"
+                    (sbcl-agent::agent-session-cwd loaded-session)
+                    "load-environment should derive session cwd from the environment")
+      (assert-equal "COMMON-LISP"
+                    (sbcl-agent::agent-session-package loaded-session)
+                    "load-environment should derive session package from the environment runtime state")
+      (assert-equal (sbcl-agent::environment-active-thread-id loaded-environment)
+                    (sbcl-agent::agent-session-current-thread-id loaded-session)
+                    "load-environment should derive current thread identity from the environment"))))
+
+(defun environment-workflow-rehydration-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-workflow-rehydration.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-workflow-rehydration/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-workflow-rehydration/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Environment-native workflow rehydration"
+                                                  :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (loaded-work-item (first (sbcl-agent::agent-session-work-items loaded-session)))
+           (loaded-record (first (sbcl-agent::agent-session-workflow-records loaded-session))))
+      (assert-equal 1
+                    (length (sbcl-agent::agent-session-work-items loaded-session))
+                    "environment load should rehydrate work-items from environment workflow state")
+      (assert-equal 1
+                    (length (sbcl-agent::agent-session-workflow-records loaded-session))
+                    "environment load should rehydrate workflow records from environment workflow state")
+      (assert-equal (sbcl-agent::work-item-id work-item)
+                    (sbcl-agent::work-item-id loaded-work-item)
+                    "rehydrated environment work-items should preserve work-item identity")
+      (assert-equal (sbcl-agent::work-item-workflow-record-ref loaded-work-item)
+                    (sbcl-agent::workflow-record-id loaded-record)
+                    "rehydrated environment workflow should preserve work-item to workflow-record linkage")
+      (assert-true (> (length (sbcl-agent::work-item-checkpoints loaded-work-item)) 0)
+                   "rehydrated environment work-items should preserve checkpoint state"))))
+
+(defun environment-workflow-write-through-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-workflow-write-through/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-workflow-write-through/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((work-item (sbcl-agent::create-work-item session "Environment workflow write-through"
+                                                    :transaction-scope :test))
+           (workflow-state (sbcl-agent::environment-workflow-state environment))
+           (environment-work-item (find (sbcl-agent::work-item-id work-item)
+                                        (sbcl-agent::environment-workflow-state-work-items workflow-state)
+                                        :key #'sbcl-agent::work-item-id
+                                        :test #'string=))
+           (environment-record (find (sbcl-agent::work-item-workflow-record-ref work-item)
+                                     (sbcl-agent::environment-workflow-state-workflow-records workflow-state)
+                                     :key #'sbcl-agent::workflow-record-id
+                                     :test #'string=)))
+      (assert-true environment-work-item
+                   "bound environment should receive new work-items through explicit workflow write-through")
+      (assert-true environment-record
+                   "bound environment should receive new workflow records through explicit workflow write-through")
+      (assert-equal (sbcl-agent::work-item-id work-item)
+                    (sbcl-agent::work-item-id environment-work-item)
+                    "environment workflow write-through should preserve work-item identity")
+      (assert-equal (sbcl-agent::work-item-workflow-record-ref work-item)
+                    (sbcl-agent::workflow-record-id environment-record)
+                    "environment workflow write-through should preserve workflow linkage"))))
+
+(defun environment-workflow-event-write-through-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-workflow-event-write-through/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-workflow-event-write-through/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((initial-event-count (length (sbcl-agent::environment-event-log environment)))
+           (work-item (sbcl-agent::create-work-item session "Environment workflow event write-through"
+                                                    :transaction-scope :test))
+           (events (sbcl-agent::environment-event-log environment))
+           (work-item-event (find (sbcl-agent::work-item-id work-item)
+                                  events
+                                  :key #'sbcl-agent::event-entity-id
+                                  :test #'string=))
+           (workflow-event (find (sbcl-agent::work-item-workflow-record-ref work-item)
+                                 events
+                                 :key #'sbcl-agent::event-entity-id
+                                 :test #'string=)))
+      (assert-true (> (length events) initial-event-count)
+                   "bound environment should append workflow events immediately when workflow state changes")
+      (assert-true work-item-event
+                   "bound environment should project work-item-created into the environment event log")
+      (assert-true workflow-event
+                   "bound environment should project workflow-record-created into the environment event log")
+      (assert-equal :workflow
+                    (sbcl-agent::event-family work-item-event)
+                    "work-item-created environment event should use workflow family")
+      (assert-equal :workflow-record-created
+                    (sbcl-agent::event-kind workflow-event)
+                    "workflow record creation should be visible as a distinct environment event")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::event-metadata work-item-event) :environment-id)
+                    "workflow events should carry active environment metadata"))))
+
+(defun environment-event-envelope-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-events/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-events/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-session-event session
+                                      :test-event
+                                      '(:payload :ok)
+                                      :family :runtime
+                                      :entity-id "entity-1"
+                                      :thread-id (sbcl-agent::agent-session-current-thread-id session)
+                                      :metadata '(:note "project me"))
+    (sbcl-agent::sync-environment-from-session environment session)
+    (let ((event (car (last (sbcl-agent::environment-event-log environment))))
+          (source-event (car (last (sbcl-agent::agent-session-events session)))))
+      (assert-true event
+                   "sync-environment-from-session should project events into the environment log")
+      (assert-equal :test-event
+                    (sbcl-agent::event-kind event)
+                    "projected environment event should preserve the event kind")
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (getf (sbcl-agent::event-metadata source-event) :session-id)
+                    "session-originated events should include session-id correlation metadata")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::event-metadata source-event) :environment-id)
+                    "session-originated events should include environment-id correlation metadata when bound")
+      (assert-equal :runtime
+                    (sbcl-agent::event-family event)
+                    "projected environment event should preserve event family")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::event-metadata event) :environment-id)
+                    "projected environment event should include its environment id")
+      (assert-equal (sbcl-agent::event-id source-event)
+                    (getf (sbcl-agent::event-metadata event) :source-event-id)
+                    "projected environment event should retain the source event id")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::event-payload event) :environment-id)
+                    "projected environment event payload should include the environment id")
+      (assert-equal '(:payload :ok)
+                    (getf (sbcl-agent::event-payload event) :event-summary)
+                    "projected non-transcript environment events should store compact payload summaries"))))
+
+(defun environment-transcript-event-preserves-full-payload-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-transcript-events/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-transcript-events/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-transcript-entry session :user "preserve transcript payload")
+    (let ((event (car (last (sbcl-agent::environment-event-log environment)))))
+      (assert-equal :transcript
+                    (sbcl-agent::event-kind event)
+                    "transcript append should project a transcript environment event")
+      (assert-equal "preserve transcript payload"
+                    (getf (getf (sbcl-agent::event-payload event) :event) :content)
+                    "projected transcript environment events should preserve full payload for reload reconstruction"))))
+
+(defun incident-environment-event-projection-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/Volumes/data/development/sbcl-agent/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/eval "(error \"environment incident projection\")"))
+        provider
+        session))
+     "environment incident projection"
+     "test setup should create a runtime incident")
+    (let ((incident-event (find :incident-created
+                                (sbcl-agent::environment-event-log environment)
+                                :key #'sbcl-agent::event-kind)))
+      (assert-true incident-event
+                   "environment event log should include projected incident-created events")
+      (assert-equal :incident
+                    (sbcl-agent::event-family incident-event)
+                    "projected incident event should keep incident family")
+      (assert-true (getf (sbcl-agent::event-metadata incident-event) :incident-id)
+                   "projected incident event should retain incident correlation metadata")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::event-metadata incident-event) :environment-id)
+                    "projected incident event should include the active environment id"))))
+
+(defun environment-domain-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-domains/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-domains/"
+                       :session session))
+         (summary (sbcl-agent::environment-summary environment)))
+    (assert-true (listp (getf summary :runtime-state))
+                 "environment summary should expose runtime-state summary data")
+    (assert-true (listp (getf summary :conversation-state))
+                 "environment summary should expose conversation-state summary data")
+    (assert-true (listp (getf summary :workflow-state))
+                 "environment summary should expose workflow-state summary data")
+    (assert-true (listp (getf summary :agent-state))
+                 "environment summary should expose agent-state summary data")
+    (assert-equal 1
+                  (getf (getf summary :runtime-state) :runtime-count)
+                  "runtime-state summary should report one primary runtime")
+    (assert-equal (length (sbcl-agent::agent-session-threads session))
+                  (getf (getf summary :conversation-state) :thread-count)
+                  "conversation-state summary should mirror thread count")
+    (assert-equal (length (sbcl-agent::agent-session-work-items session))
+                  (getf (getf summary :workflow-state) :work-item-count)
+                  "workflow-state summary should mirror work-item count")
+    (assert-equal 0
+                  (getf (getf summary :agent-state) :agent-count)
+                  "agent-state summary should start empty")))
+
+(defun environment-runtime-domain-summary-helper-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-runtime-domain-helper/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-runtime-domain-helper/"
+                       :session session))
+         (runtime-summary (sbcl-agent::environment-runtime-domain-summary environment)))
+    (assert-true (listp runtime-summary)
+                 "environment runtime domain helper should return a runtime summary plist")
+    (assert-equal "SBCL-AGENT-USER"
+                  (getf runtime-summary :package)
+                  "environment runtime domain helper should expose the active package")
+    (assert-equal 1
+                  (getf runtime-summary :runtime-count)
+                  "environment runtime domain helper should report one active runtime")))
+
+(defun environment-conversation-domain-summary-helper-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-conversation-domain-helper/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-conversation-domain-helper/"
+                       :session session)))
+    (sbcl-agent::create-thread session :title "Conversation domain helper")
+    (sbcl-agent::sync-environment-from-session environment session)
+    (let ((conversation-summary (sbcl-agent::environment-conversation-domain-summary environment)))
+      (assert-true (listp conversation-summary)
+                   "environment conversation domain helper should return a conversation summary plist")
+      (assert-equal 2
+                    (getf conversation-summary :thread-count)
+                    "environment conversation domain helper should reflect synchronized thread count")
+      (assert-equal (sbcl-agent::agent-session-current-thread-id session)
+                    (getf conversation-summary :active-thread-id)
+                    "environment conversation domain helper should expose the active thread id"))))
+
+(defun environment-workflow-domain-summary-helper-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-workflow-domain-helper/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-workflow-domain-helper/"
+                       :session session)))
+    (sbcl-agent::create-work-item session "Workflow domain helper" :transaction-scope :test)
+    (sbcl-agent::sync-environment-from-session environment session)
+    (let ((workflow-summary (sbcl-agent::environment-workflow-domain-summary environment)))
+      (assert-true (listp workflow-summary)
+                   "environment workflow domain helper should return a workflow summary plist")
+      (assert-equal 1
+                    (getf workflow-summary :work-item-count)
+                    "environment workflow domain helper should reflect synchronized work-item count")
+      (assert-equal 1
+                    (getf workflow-summary :workflow-record-count)
+                    "environment workflow domain helper should reflect synchronized workflow-record count"))))
+
+(defun environment-artifact-domain-helper-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-artifact-domain-helper/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-artifact-domain-helper/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-environment-artifact
+     session
+     :validation
+     nil
+     :title "Artifact domain helper"
+     :summary "Environment artifact helper should expose environment-native artifact evidence.")
+    (let ((artifact-summary (sbcl-agent::environment-artifact-summary environment)))
+      (assert-true (listp artifact-summary)
+                   "environment artifact helper should return an artifact summary plist")
+      (assert-true (> (sbcl-agent::environment-artifact-count environment) 0)
+                   "environment artifact helper should count synchronized artifacts")
+      (assert-true (> (getf artifact-summary :validation-count) 0)
+                   "environment artifact helper should expose validation evidence from the environment artifact index"))))
+
+(defun environment-summary-prefers-domain-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-domain-preference/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-domain-preference/"
+                       :session session)))
+    (sbcl-agent::create-work-item session "Environment-owned workflow state" :transaction-scope :test)
+    (sbcl-agent::sync-environment-from-session environment session)
+    (setf (sbcl-agent::environment-compatibility-session environment) nil)
+    (let ((summary (sbcl-agent::environment-summary environment)))
+      (assert-equal 1
+                    (getf summary :thread-count)
+                    "environment-summary should still report thread count from environment-owned conversation state")
+      (assert-equal 1
+                    (getf summary :work-item-count)
+                    "environment-summary should still report work-item count from environment-owned workflow state")
+      (assert-equal nil
+                    (getf summary :session-id)
+                    "environment-summary should tolerate a detached compatibility session"))))
+
+(defun environment-summary-does-not-resync-on-read-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-summary-no-read-resync/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-summary-no-read-resync/"
+                       :session session)))
+    (setf (sbcl-agent::agent-session-package session) "COMMON-LISP")
+    (let ((summary (sbcl-agent::environment-summary environment)))
+      (assert-equal "SBCL-AGENT-USER"
+                    (getf (getf summary :runtime-state) :package)
+                    "environment-summary should report persisted environment runtime state, not silently resync from the compatibility session"))))
+
+(defun environment-first-binding-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-first-binding/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-first-binding/"
+                       :session session)))
+    (setf sbcl-agent::*current-environment* environment
+          sbcl-agent::*current-session* nil)
+    (let ((resolved-session (sbcl-agent::ensure-session)))
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (sbcl-agent::agent-session-id resolved-session)
+                    "ensure-session should resolve through the current environment when session is absent")
+      (assert-equal (sbcl-agent::environment-id environment)
+                    (getf (sbcl-agent::environment-summary environment) :id)
+                    "environment-first session resolution should keep the current environment bound"))))
+
+(defun environment-runtime-history-persistence-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-runtime-history.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-runtime-history/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-runtime-history/"
+                       :session session)))
+    (declare (ignore environment))
+    (sbcl-agent::approve-policy session :runtime-package-switch)
+    (sbcl-agent::approve-policy session :runtime-eval-mutate)
+    (sbcl-agent::tool-runtime-set-package session :package "COMMON-LISP")
+    (sbcl-agent::tool-runtime-eval session :form "(+ 20 22)")
+    (sbcl-agent::tool-runtime-eval session
+                                   :form "(progn (defparameter sbcl-agent-user::*runtime-history-flag* nil) (setf sbcl-agent-user::*runtime-history-flag* :ok) sbcl-agent-user::*runtime-history-flag*)"
+                                   :mutating t)
+    (sbcl-agent::save-environment (sbcl-agent::ensure-environment) path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (runtime-state (sbcl-agent::environment-runtime-state loaded-environment))
+           (history (sbcl-agent::environment-runtime-state-eval-history runtime-state)))
+      (assert-true (>= (length history) 3)
+                   "load-environment should preserve runtime history entries")
+      (assert-equal :package-switch
+                    (getf (first history) :kind)
+                    "load-environment should preserve the package switch history entry")
+      (assert-equal 3
+                    (length (sbcl-agent::environment-artifact-index loaded-environment))
+                    "load-environment should preserve runtime artifacts created by structured operations"))))
+
+(defun load-environment-does-not-resync-on-read-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-no-read-resync.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-load-no-read-resync/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-load-no-read-resync/"
+                       :session session)))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment)))
+      (setf (sbcl-agent::agent-session-package loaded-session) "COMMON-LISP")
+      (let ((summary (sbcl-agent::environment-summary loaded-environment)))
+        (assert-equal "SBCL-AGENT-USER"
+                      (getf (getf summary :runtime-state) :package)
+                      "load-environment should keep the persisted environment summary stable until an explicit sync occurs")))))
+
+(defun environment-status-uses-environment-owned-state-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-status-owned-state.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-status-owned-state/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-status-owned-state/"
+                       :session session)))
+    (let* ((thread (sbcl-agent::create-thread session :title "Owned state thread"))
+           (user-message (sbcl-agent::create-message session thread :user "owned state"))
+           (turn (sbcl-agent::start-turn session thread user-message))
+           (assistant-message (sbcl-agent::create-message session thread :assistant "done")))
+      (sbcl-agent::complete-turn session thread turn assistant-message :status :completed))
+    (sbcl-agent::save-environment environment path)
+    (setf sbcl-agent::*current-session* nil
+          sbcl-agent::*current-environment* nil)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (status (sbcl-agent::environment-status loaded-environment)))
+      (assert-equal nil
+                    sbcl-agent::*current-session*
+                    "environment-status should not need to materialize a compatibility session to orient the operator")
+      (assert-equal (sbcl-agent::environment-active-thread-id loaded-environment)
+                    (getf (getf status :active-thread) :id)
+                    "environment-status should derive the active thread from environment-owned conversation state")
+      (assert-true (stringp (getf (getf status :active-turn) :id))
+                   "environment-status should derive the active turn from environment-owned turn summaries"))))
+
+(defun provider-request-single-environment-snapshot-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-environment-snapshot/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-environment-snapshot/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Provider snapshot consistency" :transaction-scope :test)
+    (let* ((request (sbcl-agent::make-provider-request-from-session "snapshot check" session))
+           (environment-context (sbcl-agent::provider-request-environment-context request))
+           (session-summary (sbcl-agent::provider-request-session-summary request))
+           (runtime-summary (sbcl-agent::provider-request-runtime-summary request))
+           (workspace-summary (sbcl-agent::provider-request-workspace-summary request))
+           (policy-summary (sbcl-agent::provider-request-policy-summary request))
+           (environment-summary (sbcl-agent::environment-summary environment)))
+      (assert-equal (getf environment-summary :id)
+                    (getf session-summary :environment-id)
+                    "provider session summary should use the request snapshot environment id")
+      (assert-equal (getf environment-summary :id)
+                    (getf runtime-summary :environment-id)
+                    "provider runtime summary should use the request snapshot environment id")
+      (assert-equal (getf environment-summary :id)
+                    (getf workspace-summary :environment-id)
+                    "provider workspace summary should use the request snapshot environment id")
+      (assert-equal (getf environment-summary :id)
+                    (getf policy-summary :environment-id)
+                    "provider policy summary should use the request snapshot environment id")
+      (assert-equal (getf environment-summary :id)
+                    (getf environment-context :environment-id)
+                    "provider environment context should use the same request snapshot environment id")
+      (assert-equal (getf environment-summary :work-item-count)
+                    (getf workspace-summary :work-item-count)
+                    "provider workspace summary should use the request snapshot work-item count")
+      (assert-equal (getf environment-summary :work-item-count)
+                    (getf environment-context :work-item-count)
+                    "provider environment context should use the same request snapshot work-item count"))))
+
+(defun provider-context-bundle-consistency-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-context-bundle/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-context-bundle/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Bundle consistency" :transaction-scope :test)
+    (let* ((thread (sbcl-agent::current-thread session))
+           (user-message (sbcl-agent::create-message session thread :user "bundle check"))
+           (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :bundle-test)))
+           (assistant-message (sbcl-agent::create-message session thread :assistant "bundle response"))
+           (ignore (sbcl-agent::complete-turn session thread turn assistant-message :status :completed))
+           (bundle (sbcl-agent::build-provider-context-bundle session :thread thread :turn turn))
+           (request (sbcl-agent::make-provider-request-from-session "bundle check" session :thread thread :turn turn)))
+      (declare (ignore ignore))
+      (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
+                    (sbcl-agent::provider-request-session-summary request)
+                    "provider request session summary should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-thread-context bundle)
+                    (sbcl-agent::provider-request-thread-context request)
+                    "provider request thread context should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-turn-context bundle)
+                    (sbcl-agent::provider-request-turn-context request)
+                    "provider request turn context should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-environment-context bundle)
+                    (sbcl-agent::provider-request-environment-context request)
+                    "provider request environment context should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-runtime-summary bundle)
+                    (sbcl-agent::provider-request-runtime-summary request)
+                    "provider request runtime summary should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-workspace-summary bundle)
+                    (sbcl-agent::provider-request-workspace-summary request)
+                    "provider request workspace summary should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-policy-summary bundle)
+                    (sbcl-agent::provider-request-policy-summary request)
+                    "provider request policy summary should come from the provider context bundle"))))
+
+(defun provider-request-snapshot-conversion-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-snapshot/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-request-snapshot/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-work-item session "Request snapshot conversion" :transaction-scope :test)
+    (let* ((bundle (sbcl-agent::build-provider-context-bundle session))
+           (snapshot (sbcl-agent::provider-context-bundle->request-snapshot bundle))
+           (request (sbcl-agent::make-provider-request-from-session "snapshot conversion" session)))
+      (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
+                    (sbcl-agent::provider-request-snapshot-session-summary snapshot)
+                    "provider request snapshot should preserve the bundle session summary")
+      (assert-equal (sbcl-agent::provider-context-bundle-environment-context bundle)
+                    (sbcl-agent::provider-request-snapshot-environment-context snapshot)
+                    "provider request snapshot should preserve the bundle environment context")
+      (assert-equal (sbcl-agent::provider-request-snapshot-runtime-summary snapshot)
+                    (sbcl-agent::provider-request-runtime-summary request)
+                    "provider request should consume the request snapshot runtime summary")
+      (assert-equal (sbcl-agent::provider-request-snapshot-policy-summary snapshot)
+                    (sbcl-agent::provider-request-policy-summary request)
+                    "provider request should consume the request snapshot policy summary"))))
+
+(defun provider-summaries-prefer-environment-snapshot-domains-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-snapshot-domains/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-snapshot-domains/"
+                       :session session))
+         (command (sbcl-agent::normalize-form-command '(ask "queued from provider snapshot domain test")))
+         (action (sbcl-agent::make-assistant-action
+                  :type :eval
+                  :payload '(:code "(+ 40 2)" :language :lisp))))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::enqueue-task session command :priority 2)
+    (let ((worker (sbcl-agent::make-worker-state :id "provider-worker"
+                                                 :thread nil
+                                                 :running-p t
+                                                 :session-id (sbcl-agent::agent-session-id session))))
+      (setf (sbcl-agent::agent-session-workers session) (list worker)
+            (sbcl-agent::agent-session-workers-tail session) (last (sbcl-agent::agent-session-workers session))))
+    (sbcl-agent::stage-pending-actions session (list action))
+    (sbcl-agent::create-environment-artifact
+     session
+     :validation
+     nil
+     :title "Provider snapshot artifact"
+     :summary "Provider summaries should use environment-native artifact evidence.")
+    (sbcl-agent::create-incident session
+                                 :runtime-condition
+                                 "Provider snapshot incident"
+                                 "Provider summaries should use environment-native incident counts.")
+    (sbcl-agent::refresh-environment-agent-domain environment session)
+    (setf (sbcl-agent::agent-session-pending-actions session) '()
+          (sbcl-agent::agent-session-workers session) '()
+          (sbcl-agent::agent-session-workers-tail session) nil
+          (sbcl-agent::agent-session-incidents session) '()
+          (sbcl-agent::agent-session-incidents-tail session) nil
+          (sbcl-agent::agent-session-artifacts session) '()
+          (sbcl-agent::agent-session-artifacts-tail session) nil
+          (sbcl-agent::agent-session-tasks session) '()
+          (sbcl-agent::agent-session-tasks-tail session) nil)
+    (let* ((request (sbcl-agent::make-provider-request-from-session "provider snapshot domains" session))
+           (session-summary (sbcl-agent::provider-request-session-summary request))
+           (runtime-summary (sbcl-agent::provider-request-runtime-summary request))
+           (workspace-summary (sbcl-agent::provider-request-workspace-summary request)))
+      (assert-equal 1
+                    (getf session-summary :pending-action-count)
+                    "provider session summary should prefer environment agent-state pending-action counts")
+      (assert-equal 1
+                    (getf session-summary :active-worker-count)
+                    "provider session summary should prefer environment agent-state worker counts")
+      (assert-equal 1
+                    (getf session-summary :incident-count)
+                    "provider session summary should prefer environment incident counts")
+      (assert-equal 1
+                    (getf runtime-summary :pending-action-count)
+                    "provider runtime summary should prefer environment agent-state pending actions")
+      (assert-equal 1
+                    (getf runtime-summary :active-worker-count)
+                    "provider runtime summary should prefer environment agent-state active workers")
+      (assert-true (> (getf workspace-summary :artifact-count) 0)
+                   "provider workspace summary should prefer environment artifact counts")
+      (assert-true (> (getf (getf workspace-summary :artifact-summary) :validation-count) 0)
+                   "provider workspace summary should preserve environment-native artifact evidence")
+      (assert-equal 1
+                    (getf workspace-summary :incident-count)
+                    "provider workspace summary should prefer environment incident counts"))))
+
+(defun provider-summary-does-not-require-session-resync-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-summary-owned-state/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-summary-owned-state/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let ((baseline-artifact-summary (getf (sbcl-agent::environment-summary environment) :artifact-summary)))
+      (setf (sbcl-agent::agent-session-cwd session) "/tmp/provider-summary-mutated/"
+            (sbcl-agent::agent-session-package session) "COMMON-LISP"
+            (sbcl-agent::agent-session-current-thread-id session) "thread-mutated"
+            (sbcl-agent::agent-session-plan session) "mutated plan")
+      (let ((summary (sbcl-agent::provider-session-summary session)))
+        (assert-equal "/tmp/provider-summary-owned-state/"
+                      (getf summary :cwd)
+                      "provider-session-summary should prefer environment-owned storage root over mutated session cwd")
+        (assert-equal "SBCL-AGENT-USER"
+                      (getf summary :package)
+                      "provider-session-summary should prefer environment-owned runtime package over mutated session package")
+        (assert-equal (sbcl-agent::environment-active-thread-id environment)
+                      (getf summary :current-thread-id)
+                      "provider-session-summary should prefer environment-owned active thread over mutated session state")
+        (assert-equal nil
+                      (getf summary :plan)
+                      "provider-session-summary should prefer the environment-backed plan value")
+        (assert-equal baseline-artifact-summary
+                      (getf summary :artifact-summary)
+                      "provider-session-summary should not call back into session-summary for artifact summary fallback")))))
+
+(defun provider-context-defaults-prefer-environment-conversation-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-context-owned-conversation/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-context-owned-conversation/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((active-thread (sbcl-agent::current-thread session))
+           (user-message (sbcl-agent::create-message session active-thread :user "environment-owned provider context"))
+           (turn (sbcl-agent::start-turn session active-thread user-message))
+           (assistant-message (sbcl-agent::create-message session active-thread :assistant "done")))
+      (sbcl-agent::complete-turn session active-thread turn assistant-message :status :completed)
+      (sbcl-agent::refresh-environment-conversation-domain environment session)
+      (let ((second-thread (sbcl-agent::make-thread :id "thread-session-drift"
+                                                    :title "Session drift thread"
+                                                    :created-at (get-universal-time)
+                                                    :updated-at (get-universal-time)
+                                                    :summary "Only the session should see this drift thread."
+                                                    :message-ids '()
+                                                    :message-ids-tail nil
+                                                    :turn-ids '()
+                                                    :turn-ids-tail nil
+                                                    :artifact-ids '()
+                                                    :artifact-ids-tail nil
+                                                    :status :active
+                                                    :metadata '())))
+        (setf (sbcl-agent::agent-session-threads session)
+              (append (sbcl-agent::agent-session-threads session) (list second-thread))
+              (sbcl-agent::agent-session-threads-tail session)
+              (last (sbcl-agent::agent-session-threads session))
+              (sbcl-agent::agent-session-current-thread-id session)
+              (sbcl-agent::thread-id second-thread)))
+      (let* ((request (sbcl-agent::make-provider-request-from-session "context drift" session))
+             (thread-context (sbcl-agent::provider-request-thread-context request))
+             (turn-context (sbcl-agent::provider-request-turn-context request)))
+        (assert-equal (sbcl-agent::thread-id active-thread)
+                      (getf thread-context :id)
+                      "provider request thread context should prefer environment-owned active thread over drifted session state")
+        (assert-equal (sbcl-agent::turn-id turn)
+                      (getf turn-context :id)
+                      "provider request turn context should prefer environment-owned active turn over drifted session state")
+        (assert-equal (sbcl-agent::thread-id active-thread)
+                      (getf turn-context :thread-id)
+                      "provider request turn context should preserve the environment-owned active thread linkage")))))
+
+(defun provider-policy-and-operator-summary-prefer-snapshot-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-policy-snapshot/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-policy-snapshot/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::grant-capability session :runtime-read)
+    (let ((work-item (sbcl-agent::create-work-item session "Provider policy snapshot" :transaction-scope :test)))
+      (sbcl-agent::quarantine-work-item session work-item "snapshot quarantine"))
+    (sbcl-agent::refresh-bound-environment-agent-state session)
+    (setf (sbcl-agent::agent-session-capability-grants session) '()
+          (sbcl-agent::agent-session-capability-grants-tail session) nil
+          (sbcl-agent::agent-session-incidents session) '()
+          (sbcl-agent::agent-session-incidents-tail session) nil
+          (sbcl-agent::agent-session-work-items session) '()
+          (sbcl-agent::agent-session-work-items-tail session) nil)
+    (let* ((request (sbcl-agent::make-provider-request-from-session "provider policy snapshot" session))
+           (workspace-summary (sbcl-agent::provider-request-workspace-summary request))
+           (policy-summary (sbcl-agent::provider-request-policy-summary request))
+           (session-summary (sbcl-agent::provider-request-session-summary request)))
+      (assert-true (member :runtime-read
+                           (getf policy-summary :approved-policies))
+                   "provider policy summary should prefer environment policy state over mutated session grants")
+      (assert-true (find :runtime-read
+                         (getf policy-summary :capability-grants)
+                         :key (lambda (entry) (getf entry :policy-id))
+                         :test #'eq)
+                   "provider policy summary should preserve environment capability grant summaries")
+      (assert-equal 1
+                    (getf workspace-summary :quarantined-work-item-count)
+                    "provider workspace summary should prefer environment operator posture over mutated session work-items")
+      (assert-true (member :runtime-read
+                           (getf session-summary :approved-policies))
+                   "provider session summary should carry snapshot-backed approved policies"))))
+
 
 (defun session-tail-rebuild-after-load-test ()
   (let* ((provider (make-test-provider))
@@ -3714,7 +5484,10 @@ fi
       (assert-equal 2 (length (getf thread-result :messages))
                     "thread/show should expose persisted thread messages")
       (assert-equal 1 (length (getf thread-result :turns))
-                    "thread/show should expose persisted thread turns"))
+                    "thread/show should expose persisted thread turns")
+      (assert-equal 0
+                    (getf (getf thread-result :detail-summary) :runtime-artifact-count)
+                    "thread/show should summarize runtime artifact counts"))
     (multiple-value-bind (turn-result turn-kind turn-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(turn/status))
@@ -3735,6 +5508,9 @@ fi
       (assert-equal :safe-read
                     (getf (getf (first (getf turn-result :operations)) :policy-decision) :policy-id)
                     "turn/status should expose operation policy decisions")
+      (assert-equal 0
+                    (getf (getf turn-result :detail-summary) :runtime-operation-count)
+                    "turn/status should summarize runtime operation counts")
       (assert-true (not (getf (getf turn-result :awaiting-approval) :awaiting-approval-p))
                    "completed turn/status should report no approval wait")
       (assert-equal 0
@@ -3764,7 +5540,12 @@ fi
                     "turn/status should report one blocked operation")
       (assert-equal :workspace-write
                     (getf (first (getf (getf turn-result :awaiting-approval) :blocked-operations)) :policy-id)
-                    "turn/status should report the waiting policy id"))))
+                    "turn/status should report the waiting policy id")
+      (assert-true (getf (getf turn-result :recovery) :resumable-p)
+                   "turn/status should report approval-gated turns as resumable")
+      (assert-equal 1
+                    (getf (getf turn-result :recovery) :resumable-operation-count)
+                    "turn/status should report one resumable blocked operation"))))
 
 (defun turn-resume-approval-flow-test ()
   (let* ((provider (make-instance 'patch-action-provider))
@@ -3829,6 +5610,9 @@ fi
       (assert-equal "generated.txt"
                     (getf (first (getf turn-result :artifacts)) :title)
                     "turn/resume should expose the created file artifact")
+      (assert-equal :committed
+                    (getf (getf turn-result :detail-summary) :work-item-status)
+                    "turn/status should summarize the bound work-item status after resume")
       (assert-true (stringp (getf (first (getf turn-result :artifacts)) :work-item-id))
                    "turn/resume should attach the resumed artifact to the originating work-item")
       (let ((patch-op (find "assistant-patch"
@@ -3846,7 +5630,10 @@ fi
       (declare (ignore thread-session))
       (assert-equal :thread-show thread-kind "thread/show should dispatch after turn resume")
       (assert-equal 1 (length (getf thread-result :artifacts))
-                    "thread/show should expose persisted thread artifacts after resume"))))
+                    "thread/show should expose persisted thread artifacts after resume")
+      (assert-equal 1
+                    (getf (getf thread-result :detail-summary) :work-item-artifact-count)
+                    "thread/show should summarize work-item artifact counts after resume"))))
 
 (defun turn-resume-isolates-pending-actions-by-turn-test ()
   (let* ((provider (make-instance 'patch-action-provider))
@@ -3999,6 +5786,1409 @@ fi
                     (sbcl-agent::agent-session-plan loaded-session)
                     "session/load should restore the saved plan"))))
 
+(defun session-summary-prefers-environment-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/describe-session-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/describe-session-environment/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::approve-policy session :runtime-eval-mutate)
+    (sbcl-agent::update-session-plan session "Environment-governed plan")
+    (sbcl-agent::stage-pending-actions
+     session
+     (list (sbcl-agent::make-assistant-action :type :eval
+                                              :payload '(:code "(+ 1 1)" :language :lisp))))
+    (sbcl-agent::sync-environment-from-session environment session)
+    (setf (sbcl-agent::agent-session-plan session) nil
+          (sbcl-agent::agent-session-capability-grants session) '()
+          (sbcl-agent::agent-session-capability-grants-tail session) nil
+          (sbcl-agent::agent-session-pending-actions session) '())
+    (let ((summary (sbcl-agent::session-summary session)))
+      (assert-equal "Environment-governed plan"
+                    (getf summary :plan)
+                    "session-summary should prefer the environment-owned plan")
+      (assert-equal 1
+                    (getf summary :pending-action-count)
+                    "session-summary should prefer environment-owned pending action counts")
+      (assert-true (find :runtime-eval-mutate
+                         (getf summary :approved-policies)
+                         :test #'eq)
+                   "session-summary should prefer environment-owned approved policy state"))))
+
+(defun session-summary-prefers-environment-event-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/session-summary-environment-events/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/session-summary-environment-events/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-transcript-entry session :user "event authority")
+    (let ((environment-event-summary (getf (sbcl-agent::environment-summary environment) :event-summary)))
+      (setf (sbcl-agent::agent-session-events session) '()
+            (sbcl-agent::agent-session-events-tail session) nil)
+      (let ((summary (sbcl-agent::session-summary session)))
+      (assert-equal (getf environment-event-summary :event-count)
+                      (getf (getf summary :event-summary) :event-count)
+                      "session-summary should prefer environment-backed event counts")
+        (assert-true (find :transcript
+                           (getf (getf summary :event-summary) :recent-kinds)
+                           :test #'eq)
+                     "session-summary should preserve environment-backed recent event kinds")
+        (assert-true (listp (getf summary :operator-evidence))
+                     "session-summary should expose consolidated operator evidence when bound to an environment")))))
+
+(defun environment-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (path "/tmp/sbcl-agent-shell-environment.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/shell-environment-root/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/shell-environment-root/"
+                       :session session)))
+    (declare (ignore environment))
+    (sbcl-agent::update-session-plan session "Environment persistence")
+    (multiple-value-bind (show-result show-kind shown-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(environment/show))
+         provider
+         session)
+      (declare (ignore shown-session))
+      (assert-equal :environment-show show-kind "environment/show should dispatch correctly")
+      (assert-equal (sbcl-agent::agent-session-id session)
+                    (getf show-result :session-id)
+                    "environment/show should expose the compatibility session id")
+      (assert-equal 0
+                    (getf show-result :incident-count)
+                    "environment/show should report incident counts")
+      (assert-true (listp (getf show-result :runtime-state))
+                   "environment/show should expose runtime-state summary data"))
+    (sbcl-agent::append-session-event session :environment-test '(:ok t) :family :runtime)
+    (multiple-value-bind (events-result events-kind events-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(environment/events :tail 1))
+         provider
+         session)
+      (declare (ignore events-session))
+      (assert-equal :environment-events events-kind
+                    "environment/events should dispatch correctly")
+      (assert-equal 1
+                    (length (getf events-result :events))
+                    "environment/events should honor the requested tail size")
+      (assert-equal (sbcl-agent::environment-id (sbcl-agent::ensure-environment))
+                    (getf (sbcl-agent::event-metadata (first (getf events-result :events))) :environment-id)
+                    "environment/events should return projected environment events"))
+    (multiple-value-bind (save-result save-kind saved-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(environment/save ,path))
+         provider
+         session)
+      (declare (ignore saved-session))
+      (assert-equal :environment-save save-kind "environment/save should dispatch correctly")
+      (assert-equal path (getf save-result :saved)
+                    "environment/save should report the saved path"))
+    (let ((fresh-session (sbcl-agent::make-default-session :cwd "/tmp/fresh-environment-root/")))
+      (sbcl-agent::make-default-environment
+       :storage-root "/tmp/fresh-environment-root/"
+       :session fresh-session))
+    (multiple-value-bind (load-result load-kind loaded-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(environment/load ,path))
+         provider
+         (sbcl-agent::make-default-session))
+      (assert-equal :environment-load load-kind "environment/load should dispatch correctly")
+      (assert-equal path (getf load-result :loaded)
+                    "environment/load should report the loaded path")
+      (assert-equal "Environment persistence"
+                    (sbcl-agent::agent-session-plan loaded-session)
+                    "environment/load should restore the compatibility session plan")
+      (assert-equal (sbcl-agent::agent-session-id loaded-session)
+                    (getf (getf load-result :summary) :session-id)
+                    "environment/load should summarize the loaded compatibility session")
+      (multiple-value-bind (reloaded-events reloaded-kind reloaded-events-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(environment/events :tail 5))
+           provider
+           loaded-session)
+        (declare (ignore reloaded-events-session))
+        (assert-equal :environment-events reloaded-kind
+                      "environment/events should remain available after environment/load")
+        (assert-true (find :environment-test
+                           (getf reloaded-events :events)
+                           :key #'sbcl-agent::event-kind)
+                     "environment/events should surface persisted projected events after load")
+        (let ((event (find :environment-test
+                           (getf reloaded-events :events)
+                           :key #'sbcl-agent::event-kind)))
+          (assert-equal (getf reloaded-events :environment-id)
+                        (getf (sbcl-agent::event-metadata event) :environment-id)
+                        "post-load environment/events should preserve environment-id metadata"))))))
+
+(defun environment-load-shell-orientation-test ()
+  (let* ((provider (make-test-provider))
+         (path "/tmp/sbcl-agent-shell-environment-orientation.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-load-orientation/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-load-orientation/"
+                       :session session)))
+    (declare (ignore environment))
+    (sbcl-agent::create-work-item session "Orientation blocker" :transaction-scope :test)
+    (sbcl-agent::save-environment (sbcl-agent::ensure-environment) path)
+    (setf sbcl-agent::*current-session* nil
+          sbcl-agent::*current-environment* nil)
+    (multiple-value-bind (load-result load-kind loaded-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(environment/load ,path))
+         provider
+         (sbcl-agent::make-default-session))
+      (assert-equal :environment-load load-kind
+                    "environment/load should dispatch for orientation test")
+      (assert-equal path (getf load-result :loaded)
+                    "environment/load should report the loaded path")
+      (multiple-value-bind (status-result status-kind status-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(environment/status))
+           provider
+           loaded-session)
+        (declare (ignore status-session))
+        (assert-equal :environment-status status-kind
+                      "environment/status should remain available immediately after environment/load")
+        (assert-equal (getf (getf load-result :summary) :id)
+                      (getf (getf status-result :environment) :id)
+                      "post-load environment/status should orient around the loaded environment")
+        (assert-equal (sbcl-agent::agent-session-current-thread-id loaded-session)
+                      (getf (getf status-result :active-thread) :id)
+                      "post-load environment/status should orient around the loaded thread")))))
+
+(defun shell-environment-orientation-render-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/shell-environment-orientation/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/shell-environment-orientation/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Shell orientation blocker" :transaction-scope :test)))
+    (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need approval")
+    (sbcl-agent::bind-session-to-environment session environment)
+    (multiple-value-bind (_ stdout stderr)
+        (with-captured-output
+          (lambda ()
+            (sbcl-agent::print-shell-environment-orientation environment)))
+      (declare (ignore _ stderr))
+      (assert-true (search "Environment:" stdout)
+                   "shell environment orientation should print environment identity first")
+      (assert-true (search "Orientation:" stdout)
+                   "shell environment orientation should print active thread/runtime context")
+      (assert-true (search "Operator posture:" stdout)
+                   "shell environment orientation should print operator posture counts"))))
+
+(defun environment-load-rendering-test ()
+  (let* ((summary (list :id "environment-load-test"
+                        :session-id "session-load-test"
+                        :operator-status (list :blocked-count 1
+                                               :quarantined-count 0
+                                               :incident-count 2
+                                               :open-incident-count 1)))
+         (result (list :loaded "/tmp/environment-load.sexp"
+                       :summary summary)))
+    (multiple-value-bind (_ stdout stderr)
+        (with-captured-output
+          (lambda ()
+            (sbcl-agent::print-shell-result result :environment-load)))
+      (declare (ignore _ stderr))
+      (assert-true (search "environment-load>" stdout)
+                   "environment-load rendering should print the loaded environment summary")
+      (assert-true (search "environment-load-operator>" stdout)
+                   "environment-load rendering should print operator posture for the loaded environment"))))
+
+(defun environment-status-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (blocked (sbcl-agent::create-work-item session "Blocked status item" :transaction-scope :test)))
+    (sbcl-agent::request-work-item-approval session blocked :process-run :reason "Need process approval")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(environment/status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :environment-status kind
+                    "environment/status should dispatch correctly")
+      (assert-equal (sbcl-agent::environment-id (sbcl-agent::ensure-environment))
+                    (getf (getf result :environment) :id)
+                    "environment/status should expose the active environment identity")
+      (assert-equal (sbcl-agent::agent-session-current-thread-id session)
+                    (getf (getf result :active-thread) :id)
+                    "environment/status should expose the active thread")
+      (assert-equal (sbcl-agent::agent-session-package session)
+                    (getf (getf result :active-runtime) :package)
+                    "environment/status should expose the active runtime package")
+      (assert-equal 1
+                    (getf (getf result :blocked-work) :count)
+                    "environment/status should expose blocked work-item count")
+      (assert-equal 1
+                    (getf (getf result :operator-posture) :outstanding-approval-count)
+                    "environment/status should summarize outstanding approvals")
+      (assert-true (listp (getf result :operator-evidence))
+                   "environment/status should expose consolidated operator evidence")
+      (assert-equal (getf (getf result :operator-posture) :blocked-count)
+                    (getf (getf (getf result :operator-evidence) :posture) :blocked-count)
+                    "environment/status operator evidence should align with rendered posture"))))
+
+(defun environment-status-incident-summary-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/eval "(error \"environment status incident\")"))
+        provider
+        session))
+     "environment status incident"
+     "test setup should create an incident for environment/status")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(environment/status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :environment-status kind
+                    "environment/status should still dispatch after runtime incidents")
+      (assert-equal 1
+                    (getf (getf result :incidents) :open-count)
+                    "environment/status should summarize open incidents")
+      (assert-equal 1
+                    (getf (getf result :operator-posture) :open-incident-count)
+                    "environment/status should carry operator incident posture"))))
+
+(defun environment-status-blocked-work-summary-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (approval-item (sbcl-agent::create-work-item session "Approval item" :transaction-scope :test))
+         (review-item (sbcl-agent::create-work-item session "Review item" :transaction-scope :test))
+         (cold-item (sbcl-agent::create-work-item session "Cold item" :transaction-scope :test)))
+    (sbcl-agent::request-work-item-approval session approval-item :process-run :reason "Need operator approval")
+    (sbcl-agent::quarantine-work-item session review-item "Review required")
+    (setf (sbcl-agent::work-item-status cold-item) :awaiting-cold-validation
+          (sbcl-agent::work-item-pending-validations cold-item) '(:cold))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(environment/status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :environment-status kind
+                    "environment/status should dispatch for blocked summary analysis")
+      (assert-equal 3
+                    (getf (getf result :blocked-work) :count)
+                    "environment/status should count all blocked work items")
+      (assert-equal 1
+                    (getf (getf result :blocked-work) :approval-count)
+                    "environment/status should count approval blockers")
+      (assert-equal 1
+                    (getf (getf result :blocked-work) :operator-review-count)
+                    "environment/status should count operator review blockers")
+      (assert-equal 1
+                    (getf (getf result :blocked-work) :cold-validation-count)
+                    "environment/status should count cold validation blockers"))))
+
+(defun runtime-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (multiple-value-bind (package-result package-kind package-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/current-package))
+         provider
+         session)
+      (declare (ignore package-session))
+      (assert-equal :runtime-current-package package-kind
+                    "runtime/current-package should report its command kind")
+      (assert-equal :runtime/current-package (getf package-result :tool)
+                    "runtime/current-package should dispatch through the runtime tool surface")
+      (assert-equal "SBCL-AGENT-USER" (getf package-result :package)
+                    "runtime/current-package should report the current session package"))
+    (multiple-value-bind (systems-result systems-kind systems-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/list-loaded-systems))
+         provider
+         session)
+      (declare (ignore systems-session))
+      (assert-equal :runtime-list-loaded-systems systems-kind
+                    "runtime/list-loaded-systems should report its command kind")
+      (assert-equal :runtime/list-loaded-systems (getf systems-result :tool)
+                    "runtime/list-loaded-systems should dispatch through the runtime tool surface")
+      (assert-true (find "sbcl-agent" (getf systems-result :systems) :test #'string=)
+                   "runtime/list-loaded-systems should include the current system"))
+    (multiple-value-bind (symbol-result symbol-kind symbol-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/describe-symbol "CAR" :package "COMMON-LISP"))
+         provider
+         session)
+      (declare (ignore symbol-session))
+      (assert-equal :runtime-describe-symbol symbol-kind
+                    "runtime/describe-symbol should report its command kind")
+      (assert-equal :runtime/describe-symbol (getf symbol-result :tool)
+                    "runtime/describe-symbol should dispatch through the runtime tool surface")
+      (assert-equal "CAR" (getf symbol-result :symbol)
+                    "runtime/describe-symbol should describe the requested symbol")
+      (assert-true (getf symbol-result :fboundp)
+                   "runtime/describe-symbol should report function bindings"))
+    (multiple-value-bind (definition-result definition-kind definition-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/find-definition "runtime-shell-commands-test"))
+         provider
+         session)
+      (declare (ignore definition-session))
+      (assert-equal :runtime-find-definition definition-kind
+                    "runtime/find-definition should report its command kind")
+      (assert-equal :runtime/find-definition (getf definition-result :tool)
+                    "runtime/find-definition should dispatch through the runtime tool surface")
+      (assert-true (>= (getf definition-result :definition-count) 1)
+                   "runtime/find-definition should find source definitions inside the workspace"))
+    (multiple-value-bind (method-result method-kind method-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/methods "PRINT-OBJECT" :package "COMMON-LISP"))
+         provider
+         session)
+      (declare (ignore method-session))
+      (assert-equal :runtime-methods method-kind
+                    "runtime/methods should report its command kind")
+      (assert-equal :runtime/methods (getf method-result :tool)
+                    "runtime/methods should dispatch through the runtime tool surface")
+      (assert-true (> (getf method-result :method-count) 0)
+                   "runtime/methods should report generic function methods"))
+    (multiple-value-bind (eval-result eval-kind eval-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/eval "(package-name *package*)"))
+         provider
+         session)
+      (declare (ignore eval-session))
+      (assert-equal :runtime-eval eval-kind
+                    "runtime/eval should report its command kind")
+      (assert-equal :runtime/eval (getf eval-result :tool)
+                    "runtime/eval should dispatch through the runtime tool surface")
+      (assert-equal "SBCL-AGENT-USER" (getf eval-result :result)
+                    "runtime/eval should execute inside the current session package"))
+    (multiple-value-bind (history-result history-kind history-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/history :tail 5))
+         provider
+         session)
+      (declare (ignore history-session))
+      (assert-equal :runtime-history history-kind
+                    "runtime/history should report its command kind")
+      (assert-equal :runtime/history (getf history-result :tool)
+                    "runtime/history should dispatch through the runtime tool surface")
+      (assert-true (>= (length (getf history-result :entries)) 1)
+                   "runtime/history should return recent runtime entries"))))
+
+(defun runtime-callers-test ()
+  (let* ((provider (make-test-provider))
+         (root (make-temporary-directory "/tmp/sbcl-agent-runtime-nav-XXXXXX"))
+         (source (merge-pathnames "nav-target.lisp" (pathname (format nil "~A/" root))))
+         (session (sbcl-agent::make-default-session :cwd (format nil "~A/" root))))
+    (with-open-file (stream source :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "(in-package #:sbcl-agent-user)" stream)
+      (write-line "(defun nav-target () :ok)" stream)
+      (write-line "(defun nav-caller () (nav-target))" stream))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/callers "nav-target"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-callers kind
+                    "runtime/callers should dispatch correctly")
+      (assert-equal :runtime/callers (getf result :tool)
+                    "runtime/callers should dispatch through the runtime tool surface")
+      (assert-true (>= (getf result :caller-count) 2)
+                   "runtime/callers should report source references for the requested symbol"))))
+
+(defun runtime-find-definition-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/find-definition "runtime-find-definition-test"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-find-definition kind
+                    "runtime/find-definition should dispatch correctly")
+      (assert-true (> (getf result :definition-count) 0)
+                   "runtime/find-definition should find definitions in the workspace")
+      (assert-true (find "tests/smoke.lisp"
+                         (getf result :definitions)
+                         :key (lambda (entry) (getf entry :path))
+                         :test #'search)
+                   "runtime/find-definition should report definition locations"))))
+
+(defun runtime-methods-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/methods "PRINT-OBJECT" :package "COMMON-LISP"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-methods kind
+                    "runtime/methods should dispatch correctly")
+      (assert-equal :generic-function
+                    (getf (getf result :runtime-presence) :function-kind)
+                    "runtime/methods should identify generic functions")
+      (assert-true (> (getf result :method-count) 0)
+                   "runtime/methods should report generic function methods"))))
+
+(defun runtime-source-image-divergence-test ()
+  (let* ((provider (make-test-provider))
+         (root (make-temporary-directory "/tmp/sbcl-agent-runtime-divergence-XXXXXX"))
+         (source (merge-pathnames "divergence-target.lisp" (pathname (format nil "~A/" root))))
+         (session (sbcl-agent::make-default-session :cwd (format nil "~A/" root))))
+    (with-open-file (stream source :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "(in-package #:sbcl-agent-user)" stream)
+      (write-line "(defun divergence-source-only () :source)" stream))
+    (multiple-value-bind (source-result source-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/source-image-divergence "divergence-source-only"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-source-image-divergence source-kind
+                    "runtime/source-image-divergence should dispatch correctly")
+      (assert-equal :source-only (getf source-result :divergence)
+                    "runtime/source-image-divergence should report source-only symbols"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command
+      '(runtime/eval "(progn (defun divergence-runtime-only () :runtime) #'divergence-runtime-only)" :mutating t))
+     provider
+     session)
+    (multiple-value-bind (runtime-result runtime-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/source-image-divergence "divergence-runtime-only"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-source-image-divergence runtime-kind
+                    "runtime/source-image-divergence should remain available after runtime mutation")
+      (assert-equal :runtime-only (getf runtime-result :divergence)
+                    "runtime/source-image-divergence should report runtime-only symbols"))))
+
+(defun runtime-package-switch-approval-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/set-package "COMMON-LISP"))
+        provider
+        session))
+     "Approval required for :RUNTIME-PACKAGE-SWITCH"
+     "runtime/set-package should require explicit approval")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-package-switch))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/set-package "COMMON-LISP"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :runtime-set-package kind
+                    "runtime/set-package should report its command kind")
+      (assert-equal "COMMON-LISP" (getf result :package)
+                    "runtime/set-package should switch the active session package")
+      (assert-equal 1 (length (sbcl-agent::agent-session-artifacts session))
+                    "runtime/set-package should create a runtime artifact")
+      (assert-equal "COMMON-LISP" (sbcl-agent::agent-session-package session)
+                    "runtime/set-package should mutate the active session package"))))
+
+(defun runtime-mutating-eval-approval-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command
+         '(runtime/eval "(progn (setf sbcl-agent-user::*structured-runtime-flag* :set) sbcl-agent-user::*structured-runtime-flag*)" :mutating t))
+        provider
+        session))
+     "Approval required for :RUNTIME-EVAL-MUTATE"
+     "mutating runtime/eval should require explicit approval")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          '(runtime/eval "(progn (defparameter sbcl-agent-user::*structured-runtime-flag* nil) (setf sbcl-agent-user::*structured-runtime-flag* :set) sbcl-agent-user::*structured-runtime-flag*)" :mutating t))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (let ((work-item (sbcl-agent::find-work-item session (getf result :work-item-id))))
+        (assert-equal :runtime-eval kind
+                      "mutating runtime/eval should report its command kind")
+        (assert-equal :runtime-eval-mutate (getf result :policy-id)
+                      "mutating runtime/eval should record runtime-eval-mutate policy")
+        (assert-equal :set (getf result :result)
+                      "mutating runtime/eval should return the evaluated result")
+        (assert-equal 1 (length (sbcl-agent::agent-session-artifacts session))
+                      "mutating runtime/eval should create a runtime artifact")
+        (assert-true (stringp (getf result :work-item-id))
+                     "mutating runtime/eval should return the created work-item id")
+        (assert-true work-item
+                     "mutating runtime/eval should create a persisted work-item")
+        (assert-equal :awaiting-cold-validation (sbcl-agent::work-item-status work-item)
+                      "mutating runtime/eval should stop at awaiting-cold-validation until colder evidence exists")
+        (assert-true (member :cold (sbcl-agent::work-item-pending-validations work-item))
+                     "mutating runtime/eval should leave cold validation pending")
+        (assert-equal :awaiting-cold-validation
+                      (sbcl-agent::workflow-record-status
+                       (sbcl-agent::work-item-workflow-record session work-item))
+                      "mutating runtime/eval should leave the workflow record awaiting cold validation")
+        (assert-equal 1 (length (sbcl-agent::work-item-checkpoints work-item))
+                      "mutating runtime/eval should capture a work-item checkpoint")
+        (assert-true (>= (length (sbcl-agent::work-item-runtime-observations work-item)) 2)
+                     "mutating runtime/eval should append runtime observations to the work-item")))))
+
+(defun runtime-reload-file-approval-and-workflow-test ()
+  (let* ((provider (make-test-provider))
+         (root (uiop:ensure-directory-pathname
+                (format nil "/tmp/sbcl-agent-runtime-reload-~D-~D/"
+                        (get-universal-time)
+                        (random 1000000))))
+         (ignore (ensure-directories-exist root))
+         (path (merge-pathnames #P"reload-target.lisp" root))
+         (session (sbcl-agent::make-default-session :cwd (namestring root))))
+    (declare (ignore ignore))
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-line "(in-package #:sbcl-agent-user)" stream)
+      (write-line "(defun reloaded-runtime-target () :reloaded-ok)" stream))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/reload-file "reload-target.lisp"))
+        provider
+        session))
+     "Approval required for :RUNTIME-RELOAD"
+     "runtime/reload-file should require explicit approval")
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-reload))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/reload-file "reload-target.lisp"))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (let ((work-item (sbcl-agent::find-work-item session (getf result :work-item-id))))
+        (assert-equal :runtime-reload-file kind
+                      "runtime/reload-file should report its command kind")
+        (assert-equal :runtime/reload-file (getf result :tool)
+                      "runtime/reload-file should dispatch through the runtime tool surface")
+        (assert-true (fboundp 'sbcl-agent-user::reloaded-runtime-target)
+                     "runtime/reload-file should load definitions into the live image")
+        (assert-equal :reloaded-ok (sbcl-agent-user::reloaded-runtime-target)
+                      "runtime/reload-file should make the loaded definition callable")
+        (assert-true (stringp (getf result :work-item-id))
+                     "runtime/reload-file should return a workflow work-item id")
+        (assert-true work-item
+                     "runtime/reload-file should create a persisted work-item")
+        (assert-equal :awaiting-cold-validation (sbcl-agent::work-item-status work-item)
+                      "runtime/reload-file should stop at awaiting-cold-validation until colder evidence exists")
+        (assert-equal :awaiting-cold-validation (sbcl-agent::work-item-closure-decision work-item)
+                      "runtime/reload-file should not claim durable closure before cold validation runs")
+        (assert-true (member :cold (sbcl-agent::work-item-pending-validations work-item))
+                     "runtime/reload-file should leave cold validation pending")
+        (assert-equal 1 (length (sbcl-agent::work-item-checkpoints work-item))
+                      "runtime/reload-file should capture a checkpoint")
+        (assert-true (>= (length (sbcl-agent::work-item-runtime-observations work-item)) 2)
+                     "runtime/reload-file should append runtime observations")
+        (assert-true (find :runtime-reload
+                           (sbcl-agent::agent-session-artifacts session)
+                           :key #'sbcl-agent::artifact-kind)
+                     "runtime/reload-file should create a runtime reload artifact")))))
+
+(defun runtime-eval-incident-recording-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/eval "(error \"incident from direct runtime eval\")"))
+        provider
+        session))
+     "incident from direct runtime eval"
+     "failing runtime/eval should still surface the original error")
+    (multiple-value-bind (list-result list-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(incident/list))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :incident-list list-kind
+                    "incident/list should dispatch through the shell command surface")
+      (assert-equal 1 (length list-result)
+                    "failing direct runtime/eval should create one incident")
+      (let ((incident-id (getf (first list-result) :id)))
+        (assert-true (stringp incident-id)
+                     "incident/list should expose incident ids")
+        (multiple-value-bind (incident-result incident-kind incident-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
+             provider
+             session)
+          (declare (ignore incident-session))
+          (assert-equal :incident-show incident-kind
+                        "incident/show should dispatch through the shell command surface")
+          (assert-equal :runtime-eval-failure (getf incident-result :kind)
+                        "failing runtime/eval should record a runtime-eval-failure incident")
+          (assert-true (search "incident from direct runtime eval"
+                               (getf incident-result :condition))
+                       "incident/show should expose the runtime condition text")
+          (assert-true (listp (getf incident-result :thread))
+                       "incident/show should expose linked thread context")
+          (assert-equal (sbcl-agent::agent-session-current-thread-id session)
+                        (getf (getf incident-result :thread) :id)
+                        "incident/show should link the incident back to the active thread")
+          (assert-true (listp (getf incident-result :recovery))
+                       "incident/show should expose compact turn recovery context when a turn is linked")
+          (assert-equal 0
+                        (or (getf (getf incident-result :recovery) :resumable-operation-count) 0)
+                        "direct runtime incidents should not invent resumable operations")
+          (assert-equal nil
+                        (getf incident-result :operation)
+                        "direct runtime incidents should not invent operation links"))))))
+
+(defun turn-resume-runtime-incident-quarantine-test ()
+  (let ((provider (make-instance 'failing-mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (multiple-value-bind (resume-result resume-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :turn-resume resume-kind
+                    "turn/resume should still return a structured result when a governed action fails")
+      (assert-equal 1 (getf resume-result :resumed-operation-count)
+                    "turn/resume should report the resumed failing operation"))
+    (multiple-value-bind (turn-result turn-kind turn-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore turn-session))
+      (assert-equal :turn-status turn-kind
+                    "turn/status should remain available after a runtime incident")
+      (assert-equal :failed (getf turn-result :status)
+                    "a failing resumed runtime mutation should fail the turn")
+      (assert-equal 1 (length (getf turn-result :incidents))
+                    "the failed turn should expose one linked incident")
+      (assert-equal 1
+                    (getf (getf turn-result :detail-summary) :incident-count)
+                    "turn/detail summary should count linked incidents")
+      (let* ((incident (first (getf turn-result :incidents)))
+             (incident-id (getf incident :id))
+             (work-item-id (getf incident :work-item-id))
+             (work-item (sbcl-agent::find-work-item session work-item-id)))
+        (assert-equal :runtime-eval-failure (getf incident :kind)
+                      "failed resumed runtime eval should record a runtime-eval-failure incident")
+        (assert-true (stringp incident-id)
+                     "incident ids should be durable on failed turns")
+        (assert-true (search "runtime incident boom" (getf incident :condition))
+                     "incident detail should preserve the original runtime condition")
+        (assert-true work-item
+                     "the failed governed turn should still reference its work-item")
+        (assert-equal :quarantined (sbcl-agent::work-item-status work-item)
+                      "failed governed runtime mutations should quarantine the bound work-item")
+        (multiple-value-bind (incident-result incident-kind incident-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
+             provider
+             session)
+          (declare (ignore incident-session))
+          (assert-equal :incident-show incident-kind
+                        "incident/show should remain available for governed incident analysis")
+          (assert-equal (getf incident :turn-id)
+                        (getf (getf incident-result :turn) :id)
+                        "incident/show should link governed incidents back to the failed turn")
+          (assert-equal (getf incident :operation-id)
+                        (getf (getf incident-result :operation) :id)
+                        "incident/show should link governed incidents back to the failed operation")
+          (assert-equal work-item-id
+                        (getf (getf incident-result :work-item) :id)
+                        "incident/show should link governed incidents back to the bound work-item")
+          (assert-true (listp (getf incident-result :wait))
+                       "incident/show should expose the bound work-item wait report")
+          (assert-equal :operator-review-required
+                        (getf (getf incident-result :wait) :why)
+                        "quarantined governed incidents should explain the operator wait reason")
+          (assert-true (listp (getf incident-result :recommended-actions))
+                       "incident/show should expose deterministic next actions")
+          (assert-true (find :work-item-next-action
+                             (mapcar (lambda (action) (getf action :type))
+                                     (getf incident-result :recommended-actions)))
+                       "incident/show should recommend the bound work-item next action")
+          (assert-true (listp (getf incident-result :workflow-record))
+                       "incident/show should expose linked workflow context for governed incidents"))))))
+
+(defun incident-workspace-runtime-context-test ()
+  (let ((provider (make-instance 'failing-mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (let* ((incident-id (getf (first (sbcl-agent::list-incident-summaries session)) :id)))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :incident-show kind
+                      "incident/show should dispatch for runtime context analysis")
+        (assert-true (listp (getf result :runtime-context))
+                     "incident/show should expose richer runtime context")
+        (assert-equal "SBCL-AGENT-USER"
+                      (getf (getf result :runtime-context) :package)
+                      "incident runtime context should expose the active runtime package")
+        (assert-true (> (getf (getf result :runtime-context) :runtime-observation-count) 0)
+                     "incident runtime context should expose work-item observations")
+        (assert-true (listp (getf (getf result :runtime-context) :recent-runtime-history))
+                     "incident runtime context should expose recent runtime history")))))
+
+(defun incident-recommended-recovery-test ()
+  (let ((provider (make-instance 'failing-mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (let* ((incident-id (getf (first (sbcl-agent::list-incident-summaries session)) :id)))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :incident-show kind
+                      "incident/show should dispatch for recovery planning analysis")
+        (assert-true (listp (getf result :recovery-plan))
+                     "incident/show should expose a structured recovery plan")
+        (assert-equal :operator-review-required
+                      (getf (getf result :recovery-plan) :wait-reason)
+                      "incident recovery plan should expose the governing wait reason")
+        (assert-true (find :inspect-runtime-context
+                           (mapcar (lambda (entry) (getf entry :type))
+                                   (getf (getf result :recovery-plan) :actions)))
+                     "incident recovery plan should recommend runtime-context inspection")
+        (assert-true (find :work-item-next-action
+                           (mapcar (lambda (entry) (getf entry :type))
+                                   (getf result :recommended-actions)))
+                     "incident recommended actions should still surface the work-item next action")))))
+
+(defun incident-recovery-artifact-test ()
+  (let ((provider (make-instance 'failing-mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (assert-true (find :plan
+                       (sbcl-agent::agent-session-artifacts session)
+                       :key #'sbcl-agent::artifact-kind)
+                 "runtime incidents with actionable recovery should create a recovery-plan artifact")
+    (let ((artifact (find :plan
+                          (sbcl-agent::agent-session-artifacts session)
+                          :key #'sbcl-agent::artifact-kind)))
+      (assert-equal :incident-recovery-plan
+                    (getf (sbcl-agent::artifact-metadata artifact) :source)
+                    "recovery-plan artifacts should be tagged with incident-recovery-plan source")
+      (assert-true (stringp (getf (sbcl-agent::artifact-metadata artifact) :incident-id))
+                   "recovery-plan artifacts should link back to the source incident"))))
+
+(defun incident-aware-session-and-environment-summary-test ()
+  (let ((provider (make-test-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-command
+        (sbcl-agent::normalize-form-command '(runtime/eval "(error \"summary incident\")"))
+        provider
+        session))
+     "summary incident"
+     "test setup should create a runtime incident")
+    (let* ((session-summary (sbcl-agent::session-summary session))
+           (environment-summary (sbcl-agent::environment-summary)))
+      (assert-equal 1
+                    (getf session-summary :incident-count)
+                    "session-summary should expose total incident count")
+      (assert-equal 1
+                    (getf (getf session-summary :incident-summary) :open-count)
+                    "session-summary should expose open incident count")
+      (assert-equal 1
+                    (getf (getf session-summary :operator-status) :incident-count)
+                    "session operator status should surface incident totals")
+      (assert-equal 1
+                    (getf environment-summary :incident-count)
+                    "environment-summary should surface incident totals")
+      (assert-equal 1
+                    (getf (getf environment-summary :incident-summary) :open-count)
+                    "environment-summary should expose open incident count")
+      (let ((provider-summary (sbcl-agent::provider-session-summary session)))
+        (assert-equal 1
+                      (getf provider-summary :incident-count)
+                      "provider-session-summary should carry incident totals")
+        (assert-equal 1
+                      (getf provider-summary :open-incident-count)
+                      "provider-session-summary should carry open incident totals")))))
+
+(defun non-thread-validation-artifact-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Non-thread validation artifact" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((validator-id (sbcl-agent::validator-task-record-id
+                         (first (sbcl-agent::work-item-validator-tasks work-item)))))
+      (sbcl-agent::execute-validator-task-record session work-item validator-id :status :passed)
+      (let ((artifact (find :validation
+                            (sbcl-agent::agent-session-artifacts session)
+                            :key #'sbcl-agent::artifact-kind)))
+        (assert-true artifact
+                     "validator execution should create a validation artifact even outside a conversation turn")
+        (assert-equal nil
+                      (sbcl-agent::artifact-turn-id artifact)
+                      "non-thread validation artifacts should not require a turn binding")
+        (assert-true (stringp (sbcl-agent::artifact-thread-id artifact))
+                     "non-thread validation artifacts should still anchor into the session evidence stream")))))
+
+(defun environment-level-evidence-summary-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/Volumes/data/development/sbcl-agent/"
+                       :session session))
+         (work-item (sbcl-agent::create-work-item session "Environment evidence summary" :transaction-scope :test)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (let ((validator-id (sbcl-agent::validator-task-record-id
+                         (first (sbcl-agent::work-item-validator-tasks work-item)))))
+      (sbcl-agent::execute-validator-task-record session work-item validator-id :status :passed))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Environment evidence image-only")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source evidence")
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((summary (sbcl-agent::environment-summary))
+           (artifact-summary (getf summary :artifact-summary)))
+      (assert-true (listp artifact-summary)
+                   "environment-summary should expose artifact evidence summaries")
+      (assert-true (> (getf artifact-summary :validation-count) 0)
+                   "environment-summary should count validation artifacts")
+      (assert-true (> (getf artifact-summary :reconciliation-count) 0)
+                   "environment-summary should count reconciliation artifacts")
+      (assert-true (find :validation
+                         (getf artifact-summary :kind-counts)
+                         :key (lambda (entry) (getf entry :kind))
+                         :test #'eq)
+                   "environment-summary should expose validation artifact kinds"))))
+
+(defun environment-native-artifact-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-native-artifacts/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-native-artifacts/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let ((artifact (sbcl-agent::create-environment-artifact
+                     session
+                     :validation
+                     nil
+                     :title "Cold validation pending"
+                     :summary "Validation evidence attached to the environment."
+                     :metadata '(:source :environment-test))))
+      (let ((summary (sbcl-agent::environment-summary environment)))
+        (assert-equal nil
+                      (sbcl-agent::artifact-thread-id artifact)
+                      "environment-native artifacts should not require thread ownership")
+        (assert-equal nil
+                      (sbcl-agent::artifact-turn-id artifact)
+                      "environment-native artifacts should not require turn ownership")
+        (assert-equal :environment
+                      (getf (sbcl-agent::artifact-metadata artifact) :ownership)
+                      "environment-native artifacts should be marked with environment ownership")
+        (assert-equal 1
+                      (getf summary :artifact-count)
+                      "environment-summary should count environment-native artifacts")
+        (assert-equal 1
+                      (getf (getf summary :artifact-summary) :validation-count)
+                      "environment-summary should classify environment-native validation artifacts")
+        (assert-equal (sbcl-agent::artifact-id artifact)
+                      (getf (first (sbcl-agent::environment-artifact-index environment)) :id)
+                      "environment artifact index should retain environment-native artifact references")))))
+
+(defun environment-artifact-summary-prefers-environment-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-artifact-summary-authority/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-artifact-summary-authority/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-environment-artifact
+     session
+     :validation
+     nil
+     :title "Authoritative environment artifact"
+     :summary "Environment conversation state should own artifact evidence summary.")
+    (setf (sbcl-agent::agent-session-artifacts session) '()
+          (sbcl-agent::agent-session-artifacts-tail session) nil)
+    (let* ((summary (sbcl-agent::environment-summary environment))
+           (artifact-summary (getf summary :artifact-summary)))
+      (assert-equal 1
+                    (getf summary :artifact-count)
+                    "environment-summary should keep artifact count from environment conversation state")
+      (assert-equal 1
+                    (getf artifact-summary :validation-count)
+                    "environment-summary should keep validation counts from environment conversation state"))))
+
+(defun provider-artifact-summary-prefers-environment-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-artifact-summary-authority/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-artifact-summary-authority/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-environment-artifact
+     session
+     :reconciliation
+     nil
+     :title "Provider artifact authority"
+     :summary "Provider summaries should use environment-native artifact aggregates.")
+    (setf (sbcl-agent::agent-session-artifacts session) '()
+          (sbcl-agent::agent-session-artifacts-tail session) nil)
+    (let ((provider-session-summary (sbcl-agent::provider-session-summary session))
+          (provider-workspace-summary (sbcl-agent::provider-workspace-summary session)))
+      (assert-equal 1
+                    (getf (getf provider-session-summary :artifact-summary) :reconciliation-count)
+                    "provider-session-summary should use the environment-native artifact summary")
+      (assert-equal 1
+                    (getf (getf provider-workspace-summary :artifact-summary) :reconciliation-count)
+                    "provider-workspace-summary should use the environment-native artifact summary"))))
+
+(defun artifact-inspection-prefers-environment-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-artifact-inspection/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-artifact-inspection/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((thread (sbcl-agent::current-thread session))
+           (user-message (sbcl-agent::create-message session thread :user "artifact authority"))
+           (turn (sbcl-agent::start-turn session thread user-message))
+           (artifact (sbcl-agent::create-artifact session
+                                                  thread
+                                                  turn
+                                                  nil
+                                                  :validation
+                                                  "tmp/evidence.txt"
+                                                  :title "Environment-owned artifact"
+                                                  :summary "Artifact lookup should prefer environment state."))
+           (artifact-id (sbcl-agent::artifact-id artifact))
+           (turn-id (sbcl-agent::turn-id turn))
+           (thread-id (sbcl-agent::thread-id thread)))
+      (setf (sbcl-agent::agent-session-artifacts session) '()
+            (sbcl-agent::agent-session-artifacts-tail session) nil)
+      (let ((found (sbcl-agent::find-artifact session artifact-id))
+            (thread-artifacts (sbcl-agent::list-thread-artifacts session thread-id))
+            (turn-artifacts (sbcl-agent::list-turn-artifacts session turn-id))
+            (artifact-summary (sbcl-agent::session-artifact-summary session)))
+        (assert-equal artifact-id
+                      (sbcl-agent::artifact-id found)
+                      "find-artifact should prefer environment-native artifact state when bound")
+        (assert-equal 1 (length thread-artifacts)
+                      "list-thread-artifacts should prefer environment-native artifact state when bound")
+        (assert-equal artifact-id
+                      (sbcl-agent::artifact-id (first thread-artifacts))
+                      "list-thread-artifacts should return the environment-owned artifact")
+        (assert-equal 1 (length turn-artifacts)
+                      "list-turn-artifacts should prefer environment-native artifact state when bound")
+        (assert-equal artifact-id
+                      (sbcl-agent::artifact-id (first turn-artifacts))
+                      "list-turn-artifacts should return the environment-owned artifact")
+        (assert-equal 1
+                      (getf artifact-summary :validation-count)
+                      "session-artifact-summary should resolve through environment-native artifact state")))))
+
+(defun reconciliation-artifact-coverage-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Reconciliation artifact coverage" :transaction-scope :test)))
+    (sbcl-agent::mark-work-item-image-only session work-item :reason "Coverage image-only")
+    (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Coverage source patch")
+    (let ((session-summary (sbcl-agent::session-summary session)))
+      (assert-true (find :reconciliation
+                         (getf (getf session-summary :artifact-summary) :kind-counts)
+                         :key (lambda (entry) (getf entry :kind))
+                         :test #'eq)
+                   "session-summary should expose reconciliation artifacts in the artifact summary")
+      (assert-true (> (getf (getf session-summary :artifact-summary) :reconciliation-count) 0)
+                   "session-summary should count reconciliation artifacts"))))
+
+(defun turn-resume-mutating-runtime-eval-turn-evidence-test ()
+  (let ((provider (make-instance 'mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "mutate runtime state through conversation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (multiple-value-bind (turn-result turn-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :turn-status turn-kind
+                    "turn/status should dispatch after mutating runtime eval resume")
+      (assert-equal :completed (getf turn-result :status)
+                    "mutating runtime eval resume should complete the turn")
+      (assert-equal 1 (length (getf turn-result :artifacts))
+                    "mutating runtime eval resume should attach a runtime artifact to the turn")
+      (assert-equal 1
+                    (getf (getf turn-result :detail-summary) :runtime-operation-count)
+                    "turn/status should summarize runtime operation counts for runtime eval turns")
+      (assert-equal 1
+                    (getf (getf turn-result :detail-summary) :runtime-artifact-count)
+                    "turn/status should summarize runtime artifact counts for runtime eval turns")
+      (let ((eval-op (find "assistant-eval"
+                           (getf turn-result :operations)
+                           :key (lambda (entry) (getf entry :name))
+                           :test #'string=)))
+        (assert-true eval-op
+                     "turn/status should expose the resumed assistant-eval operation")
+        (assert-equal :completed (getf eval-op :status)
+                      "assistant-eval operation should be completed after resume")
+        (assert-true (stringp (getf (getf (getf eval-op :output) :result) :work-item-id))
+                     "assistant-eval output should expose the bound work-item id")
+        (assert-true (consp (getf (getf eval-op :metadata) :artifact-ids))
+                     "assistant-eval metadata should expose linked artifact ids")
+        (let ((work-item (sbcl-agent::find-work-item session
+                                                     (getf (getf (getf eval-op :output) :result) :work-item-id))))
+          (assert-equal :awaiting-cold-validation
+                        (sbcl-agent::work-item-status work-item)
+                        "conversation-driven mutating runtime eval should remain awaiting cold validation"))))))
+
+(defun turn-resume-runtime-reload-turn-evidence-test ()
+  (let* ((provider (make-instance 'runtime-reload-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
+    (ensure-directories-exist path)
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-line "(in-package #:sbcl-agent-user)" stream)
+      (write-line "(defun conversation-reloaded-runtime-target () :conversation-reloaded)" stream))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "reload runtime source through conversation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-reload))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (multiple-value-bind (turn-result turn-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/status))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :turn-status turn-kind
+                    "turn/status should dispatch after runtime reload resume")
+      (assert-equal :completed (getf turn-result :status)
+                    "runtime reload resume should complete the turn")
+      (assert-equal 1 (length (getf turn-result :artifacts))
+                    "runtime reload resume should attach a runtime artifact to the turn")
+      (assert-equal 1
+                    (getf (getf turn-result :detail-summary) :runtime-operation-count)
+                    "turn/status should summarize runtime operation counts for reload turns")
+      (assert-equal 1
+                    (getf (getf turn-result :detail-summary) :runtime-artifact-count)
+                    "turn/status should summarize runtime artifact counts for reload turns")
+      (assert-true (fboundp 'sbcl-agent-user::conversation-reloaded-runtime-target)
+                   "runtime reload resume should load the file into the live image")
+      (assert-equal :conversation-reloaded
+                    (sbcl-agent-user::conversation-reloaded-runtime-target)
+                    "runtime reload resume should make the loaded definition callable")
+      (let ((reload-op (find "assistant-tool"
+                             (getf turn-result :operations)
+                             :key (lambda (entry) (getf entry :name))
+                             :test #'string=)))
+        (assert-true reload-op
+                     "turn/status should expose the resumed assistant-tool operation")
+        (assert-equal :completed (getf reload-op :status)
+                      "assistant-tool operation should be completed after runtime reload resume")
+        (assert-equal :runtime/reload-file
+                      (getf (getf (getf reload-op :output) :result) :tool)
+                      "assistant-tool output should expose the runtime reload result")
+        (assert-true (stringp (getf (getf (getf reload-op :output) :result) :work-item-id))
+                     "assistant-tool output should expose the bound work-item id")
+        (assert-true (consp (getf (getf reload-op :metadata) :artifact-ids))
+                     "assistant-tool metadata should expose linked artifact ids")
+        (let ((work-item (sbcl-agent::find-work-item session
+                                                     (getf (getf (getf reload-op :output) :result) :work-item-id))))
+          (assert-equal :awaiting-cold-validation
+                        (sbcl-agent::work-item-status work-item)
+                        "conversation-driven runtime reload should remain awaiting cold validation"))))))
+
+(defun mutation-review-command-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(review/mutation))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :review-mutation kind
+                    "review/mutation should dispatch correctly")
+      (assert-equal :awaiting-approval
+                    (getf (getf result :turn) :status)
+                    "review/mutation should expose the current turn state")
+      (assert-true (> (getf (getf result :mutation) :operation-count) 0)
+                   "review/mutation should summarize at least one mutation-related operation")
+      (assert-equal :approval-required
+                    (getf (getf (getf result :governance) :wait) :why)
+                    "review/mutation should expose the governing wait reason")
+      (assert-true (listp (getf (getf result :governance) :next-action))
+                   "review/mutation should expose a deterministic next action"))))
+
+(defun mutation-review-cold-validation-test ()
+  (let* ((provider (make-instance 'runtime-reload-action-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
+    (ensure-directories-exist path)
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-line "(in-package #:sbcl-agent-user)" stream)
+      (write-line "(defun conversation-reloaded-runtime-target () :conversation-reloaded)" stream))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "reload runtime source through conversation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-reload))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(review/mutation))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :review-mutation kind
+                    "review/mutation should remain available after runtime reload resume")
+      (assert-equal :awaiting-cold-validation
+                    (getf (getf (getf result :governance) :work-item) :status)
+                    "review/mutation should expose awaiting cold validation work-items")
+      (assert-equal :cold-validation-required
+                    (getf (getf (getf result :governance) :wait) :why)
+                    "review/mutation should make cold validation blockers explicit")
+      (assert-equal 1
+                    (getf (getf result :evidence) :checkpoint-count)
+                    "review/mutation should expose captured checkpoint evidence")
+      (assert-equal 1
+                    (length (getf (getf result :evidence) :runtime-artifacts))
+                    "review/mutation should surface runtime artifacts as evidence"))))
+
+(defun mutation-review-incident-linked-test ()
+  (let ((provider (make-instance 'failing-mutating-eval-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(turn/resume))
+     provider
+     session)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(review/mutation))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :review-mutation kind
+                    "review/mutation should dispatch for failed governed mutations")
+      (assert-equal 1
+                    (length (getf result :incidents))
+                    "review/mutation should expose linked incidents")
+      (assert-equal :operator-review-required
+                    (getf (getf (getf result :governance) :wait) :why)
+                    "review/mutation should expose operator review blockers after incidents")
+      (assert-true (search "runtime incident boom"
+                           (getf (first (getf result :incidents)) :condition))
+                   "review/mutation should preserve the linked incident condition text"))))
+
+(defun runtime-cold-validation-finalization-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (result (progn
+                   (sbcl-agent::execute-command
+                    (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+                    provider
+                    session)
+                   (nth-value
+                    0
+                    (sbcl-agent::execute-command
+                     (sbcl-agent::normalize-form-command
+                      '(runtime/eval "(progn (defparameter sbcl-agent-user::*cold-validation-finalize* nil) (setf sbcl-agent-user::*cold-validation-finalize* :ok) sbcl-agent-user::*cold-validation-finalize*)" :mutating t))
+                     provider
+                     session))))
+         (work-item (sbcl-agent::find-work-item session (getf result :work-item-id)))
+         (cold-validator (find :cold
+                               (sbcl-agent::work-item-validator-tasks work-item)
+                               :key #'sbcl-agent::validator-task-record-kind)))
+    (assert-true cold-validator
+                 "governed runtime mutations should create a cold validator task")
+    (sbcl-agent::execute-validator-task-record session
+                                               work-item
+                                               (sbcl-agent::validator-task-record-id cold-validator)
+                                               :status :passed)
+    (assert-equal :committed
+                  (sbcl-agent::work-item-status work-item)
+                  "passing cold validation should promote the work-item to committed")
+    (assert-equal :committed-to-image
+                  (sbcl-agent::work-item-closure-decision work-item)
+                  "passing cold validation should restore the final closure decision")
+    (assert-equal :committed
+                  (sbcl-agent::workflow-record-status
+                   (sbcl-agent::work-item-workflow-record session work-item))
+                  "passing cold validation should close the workflow record")))
+
+(defun turn-recovery-persists-across-session-load-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (path (format nil "/tmp/sbcl-agent-turn-recovery-~D-~D.sexp"
+                       (get-universal-time)
+                       (random 1000000)))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (multiple-value-bind (turn-result turn-kind turn-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(turn/status))
+           provider
+           loaded)
+        (declare (ignore turn-session))
+        (assert-equal :turn-status turn-kind
+                      "turn/status should dispatch after session reload")
+        (assert-true (getf (getf turn-result :recovery) :resumable-p)
+                     "turn/status should preserve recovery summary after session reload")
+        (assert-true (getf (getf turn-result :recovery) :work-item-resume-payload)
+                     "turn/status should preserve work-item resume payload after session reload")
+        (assert-equal 1
+                      (getf (getf turn-result :recovery) :resumable-operation-count)
+                      "turn/status should preserve blocked resumable operation counts after session reload")))))
+
+(defun interrupted-turn-state-recovered-on-session-load-test ()
+  (let* ((path (format nil "/tmp/sbcl-agent-turn-interruption-~D-~D.sexp"
+                       (get-universal-time)
+                       (random 1000000)))
+         (session (sbcl-agent::make-default-session))
+         (thread (sbcl-agent::current-thread session))
+         (user-message (sbcl-agent::create-message session thread :user "start long-running work"))
+         (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :test)))
+         (operation (sbcl-agent::start-operation session
+                                                 thread
+                                                 turn
+                                                 :tool-call
+                                                 "long-running-op"
+                                                 '(:tool-id :proc/run)
+                                                 :metadata '(:synthetic-test-p t))))
+    (declare (ignore operation))
+    (sbcl-agent::save-session session path)
+    (let ((loaded (sbcl-agent::load-session path)))
+      (multiple-value-bind (turn-result turn-kind turn-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(turn/status))
+           (make-test-provider)
+           loaded)
+        (declare (ignore turn-session))
+        (assert-equal :turn-status turn-kind
+                      "turn/status should dispatch for interrupted recovered turns")
+        (assert-equal :interrupted
+                      (getf turn-result :status)
+                      "loading a session with an in-flight turn should mark the turn interrupted")
+        (assert-true (getf (getf turn-result :recovery) :interrupted-p)
+                     "turn recovery summary should flag interrupted recovered operations")
+        (assert-equal 1
+                      (getf (getf turn-result :recovery) :interrupted-operation-count)
+                      "turn recovery summary should count interrupted operations")
+        (let ((loaded-operation (first (getf turn-result :operations))))
+          (assert-equal :interrupted
+                        (getf loaded-operation :status)
+                        "loading a session with an in-flight operation should mark the operation interrupted")
+          (assert-true (getf (getf loaded-operation :metadata) :interrupted-during-load-p)
+                       "interrupted recovered operations should carry recovery metadata"))))))
+
 (defun list-tools-test ()
   (let ((tools (sbcl-agent::list-tools)))
     (assert-true (find :fs/read tools :key (lambda (entry) (getf entry :id)))
@@ -4009,6 +7199,26 @@ fi
                  "tool registry should include :git/status")
     (assert-true (find :session/summary tools :key (lambda (entry) (getf entry :id)))
                  "tool registry should include :session/summary")
+    (assert-true (find :runtime/current-package tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/current-package")
+    (assert-true (find :runtime/list-loaded-systems tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/list-loaded-systems")
+    (assert-true (find :runtime/describe-symbol tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/describe-symbol")
+    (assert-true (find :runtime/find-definition tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/find-definition")
+    (assert-true (find :runtime/callers tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/callers")
+    (assert-true (find :runtime/methods tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/methods")
+    (assert-true (find :runtime/source-image-divergence tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/source-image-divergence")
+    (assert-true (find :runtime/set-package tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/set-package")
+    (assert-true (find :runtime/eval tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/eval")
+    (assert-true (find :runtime/reload-file tools :key (lambda (entry) (getf entry :id)))
+                 "tool registry should include :runtime/reload-file")
     (assert-true (find :docs/read tools :key (lambda (entry) (getf entry :id)))
                  "tool registry should include :docs/read")
     (assert-equal :process-run
@@ -4017,6 +7227,21 @@ fi
     (assert-equal :git-read
                   (getf (sbcl-agent::describe-tool :git/status) :policy)
                   "git status should advertise git-read policy")
+    (assert-equal :runtime-read
+                  (getf (sbcl-agent::describe-tool :runtime/current-package) :policy)
+                  "runtime package inspection should advertise runtime-read policy")
+    (assert-equal :runtime-read
+                  (getf (sbcl-agent::describe-tool :runtime/find-definition) :policy)
+                  "runtime definition lookup should advertise runtime-read policy")
+    (assert-equal :runtime-package-switch
+                  (getf (sbcl-agent::describe-tool :runtime/set-package) :policy)
+                  "runtime package switching should advertise runtime-package-switch policy")
+    (assert-equal :runtime-eval-safe
+                  (getf (sbcl-agent::describe-tool :runtime/eval) :policy)
+                  "runtime eval should advertise runtime-eval-safe policy")
+    (assert-equal :runtime-reload
+                  (getf (sbcl-agent::describe-tool :runtime/reload-file) :policy)
+                  "runtime reload should advertise runtime-reload policy")
     (assert-equal :safe-read
                   (getf (sbcl-agent::describe-tool :session/summary) :policy)
                   "session summary should advertise safe-read policy")))
@@ -4035,7 +7260,30 @@ fi
       (assert-equal :session/summary (getf result :tool) "session summary tool should identify itself")
       (assert-equal "Inspect runtime state"
                     (getf (getf result :session) :plan)
-                    "session summary tool should return the current session plan"))))
+                    "session summary tool should return the current session plan")
+      (assert-equal 0
+                    (getf (getf result :session) :incident-count)
+                    "session summary tool should expose incident counts")
+      (assert-true (listp (getf (getf result :session) :event-summary))
+                   "session summary tool should expose event-backed evidence summary")
+      (assert-true (listp (getf (getf result :session) :operator-evidence))
+                   "session summary tool should expose consolidated operator evidence"))))
+
+(defun session-summary-uses-environment-thread-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/session-summary-environment-thread/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/session-summary-environment-thread/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-thread session :title "Environment-owned summary thread")
+    (sbcl-agent::sync-environment-from-session environment session)
+    (setf (sbcl-agent::agent-session-current-thread-id session) nil)
+    (let ((summary (sbcl-agent::session-summary session)))
+      (assert-equal 2
+                    (getf (getf summary :thread-state) :thread-count)
+                    "session-summary should use environment-backed thread counts")
+      (assert-true (stringp (getf (getf summary :thread-state) :current-thread-id))
+                   "session-summary should recover current thread identity from the environment facade"))))
 
 (defun session-events-tool-test ()
   (let* ((provider (make-test-provider))
@@ -4054,6 +7302,35 @@ fi
                     "session events tool should honor the requested tail size")
       (assert-true (find :transcript (getf result :events) :key #'sbcl-agent::event-kind)
                    "session events tool should return recent session events"))))
+
+(defun session-events-tool-prefers-environment-event-log-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/session-events-environment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/session-events-environment/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-transcript-entry session :user "hello from environment")
+    (setf (sbcl-agent::agent-session-events session) '()
+          (sbcl-agent::agent-session-events-tail session) nil)
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(tool :session/events :tail 2))
+         provider
+         session)
+      (declare (ignore updated-session))
+      (assert-equal :tool kind "session events tool should still dispatch as :tool")
+      (assert-true (getf result :environment-backed-p)
+                   "session events tool should expose when it is serving environment-backed events")
+      (assert-true (> (getf result :event-count) 0)
+                   "session events tool should recover non-empty event history from the bound environment log when session events drift")
+      (assert-true (listp (getf result :event-summary))
+                   "session events tool should expose an environment-backed event summary")
+      (assert-equal (getf result :event-count)
+                    (getf (getf result :event-summary) :event-count)
+                    "session events tool event summary should reflect the environment-backed event count")
+      (assert-true (> (length (or (getf (getf result :event-summary) :recent-kinds) '())) 0)
+                   "session events tool should preserve non-empty recent environment event kinds"))))
 
 (defun docs-read-tool-test ()
   (let* ((provider (make-test-provider))
@@ -4361,6 +7638,10 @@ fi
   (format t "PASS chat-argument-parsing-test~%")
   (command-normalization-test)
   (format t "PASS command-normalization-test~%")
+  (rgp-integration-snapshot-test)
+  (format t "PASS rgp-integration-snapshot-test~%")
+  (rgp-integration-shell-commands-test)
+  (format t "PASS rgp-integration-shell-commands-test~%")
   (shell-eval-test)
   (format t "PASS shell-eval-test~%")
   (ask-dispatch-test)
@@ -4379,6 +7660,10 @@ fi
   (format t "PASS streaming-provider-test~%")
   (provider-event-normalization-test)
   (format t "PASS provider-event-normalization-test~%")
+  (event-envelope-correlation-fields-test)
+  (format t "PASS event-envelope-correlation-fields-test~%")
+  (event-family-normalization-coverage-test)
+  (format t "PASS event-family-normalization-coverage-test~%")
   (openai-stream-line-parser-test)
   (format t "PASS openai-stream-line-parser-test~%")
   (openai-stream-response-decode-test)
@@ -4397,16 +7682,24 @@ fi
   (format t "PASS describe-task-progress-test~%")
   (monitor-task-test)
   (format t "PASS monitor-task-test~%")
+  (task-monitoring-prefers-environment-agent-state-test)
+  (format t "PASS task-monitoring-prefers-environment-agent-state-test~%")
   (task-queue-test)
   (format t "PASS task-queue-test~%")
+  (enqueue-task-updates-environment-agent-state-test)
+  (format t "PASS enqueue-task-updates-environment-agent-state-test~%")
   (task-run-next-test)
   (format t "PASS task-run-next-test~%")
   (task-cancel-test)
   (format t "PASS task-cancel-test~%")
   (worker-flow-test)
   (format t "PASS worker-flow-test~%")
+  (worker-mutations-update-environment-agent-state-test)
+  (format t "PASS worker-mutations-update-environment-agent-state-test~%")
   (worker-introspection-test)
   (format t "PASS worker-introspection-test~%")
+  (worker-monitoring-prefers-environment-agent-state-test)
+  (format t "PASS worker-monitoring-prefers-environment-agent-state-test~%")
   (work-item-creation-test)
   (format t "PASS work-item-creation-test~%")
   (work-item-persistence-test)
@@ -4425,6 +7718,8 @@ fi
   (format t "PASS work-item-provenance-shell-test~%")
   (work-item-taint-reconciliation-test)
   (format t "PASS work-item-taint-reconciliation-test~%")
+  (validation-and-reconciliation-event-correlation-test)
+  (format t "PASS validation-and-reconciliation-event-correlation-test~%")
   (work-item-taint-shell-test)
   (format t "PASS work-item-taint-shell-test~%")
   (workflow-record-creation-test)
@@ -4437,6 +7732,8 @@ fi
   (format t "PASS workflow-record-approval-state-test~%")
   (workflow-record-quarantine-resume-test)
   (format t "PASS workflow-record-quarantine-resume-test~%")
+  (workflow-milestone-event-correlation-test)
+  (format t "PASS workflow-milestone-event-correlation-test~%")
   (workflow-record-operator-shell-test)
   (format t "PASS workflow-record-operator-shell-test~%")
   (work-item-wait-report-test)
@@ -4447,6 +7744,8 @@ fi
   (format t "PASS workflow-record-resume-payload-test~%")
   (session-wait-summary-test)
   (format t "PASS session-wait-summary-test~%")
+  (session-wait-summary-prefers-environment-workflow-state-test)
+  (format t "PASS session-wait-summary-prefers-environment-workflow-state-test~%")
   (checkpoint-linked-resume-payload-test)
   (format t "PASS checkpoint-linked-resume-payload-test~%")
   (transaction-replay-id-test)
@@ -4457,8 +7756,12 @@ fi
   (format t "PASS validator-task-records-test~%")
   (list-replay-groups-command-test)
   (format t "PASS list-replay-groups-command-test~%")
+  (replay-groups-prefer-environment-workflow-state-test)
+  (format t "PASS replay-groups-prefer-environment-workflow-state-test~%")
   (list-image-reconciliations-command-test)
   (format t "PASS list-image-reconciliations-command-test~%")
+  (image-reconciliations-prefer-environment-workflow-state-test)
+  (format t "PASS image-reconciliations-prefer-environment-workflow-state-test~%")
   (replay-validator-set-mixed-status-test)
   (format t "PASS replay-validator-set-mixed-status-test~%")
   (replay-validator-set-command-test)
@@ -4505,6 +7808,8 @@ fi
   (format t "PASS session-summary-recent-transcript-test~%")
   (provider-session-summary-compact-test)
   (format t "PASS provider-session-summary-compact-test~%")
+  (environment-provider-context-precedence-test)
+  (format t "PASS environment-provider-context-precedence-test~%")
   (provider-request-context-test)
   (format t "PASS provider-request-context-test~%")
   (provider-rendering-context-test)
@@ -4517,6 +7822,72 @@ fi
   (format t "PASS capability-grant-session-test~%")
   (session-save-load-test)
   (format t "PASS session-save-load-test~%")
+  (serializable-session-copy-trims-transcript-test)
+  (format t "PASS serializable-session-copy-trims-transcript-test~%")
+  (environment-creation-test)
+  (format t "PASS environment-creation-test~%")
+  (environment-persistence-test)
+  (format t "PASS environment-persistence-test~%")
+  (environment-serializes-compatibility-payload-test)
+  (format t "PASS environment-serializes-compatibility-payload-test~%")
+  (compatibility-payload-reconstructs-legacy-session-header-test)
+  (format t "PASS compatibility-payload-reconstructs-legacy-session-header-test~%")
+  (serializable-environment-copy-preserves-existing-compatibility-payload-test)
+  (format t "PASS serializable-environment-copy-preserves-existing-compatibility-payload-test~%")
+  (load-environment-normalizes-legacy-compatibility-session-test)
+  (format t "PASS load-environment-normalizes-legacy-compatibility-session-test~%")
+  (environment-serializable-copy-trims-derived-indexes-test)
+  (format t "PASS environment-serializable-copy-trims-derived-indexes-test~%")
+  (load-environment-rehydrates-derived-indexes-test)
+  (format t "PASS load-environment-rehydrates-derived-indexes-test~%")
+  (load-environment-rehydrates-session-events-and-transcript-test)
+  (format t "PASS load-environment-rehydrates-session-events-and-transcript-test~%")
+  (load-environment-rehydrates-pending-actions-test)
+  (format t "PASS load-environment-rehydrates-pending-actions-test~%")
+  (load-environment-rehydrates-incidents-test)
+  (format t "PASS load-environment-rehydrates-incidents-test~%")
+  (load-environment-rehydrates-tasks-and-workers-test)
+  (format t "PASS load-environment-rehydrates-tasks-and-workers-test~%")
+  (load-environment-rehydrates-capability-grants-test)
+  (format t "PASS load-environment-rehydrates-capability-grants-test~%")
+  (load-environment-rehydrates-plan-test)
+  (format t "PASS load-environment-rehydrates-plan-test~%")
+  (load-environment-derives-compatibility-header-from-environment-test)
+  (format t "PASS load-environment-derives-compatibility-header-from-environment-test~%")
+  (environment-workflow-rehydration-test)
+  (format t "PASS environment-workflow-rehydration-test~%")
+  (environment-workflow-write-through-test)
+  (format t "PASS environment-workflow-write-through-test~%")
+  (environment-workflow-event-write-through-test)
+  (format t "PASS environment-workflow-event-write-through-test~%")
+  (environment-event-envelope-test)
+  (format t "PASS environment-event-envelope-test~%")
+  (environment-transcript-event-preserves-full-payload-test)
+  (format t "PASS environment-transcript-event-preserves-full-payload-test~%")
+  (incident-environment-event-projection-test)
+  (format t "PASS incident-environment-event-projection-test~%")
+  (environment-domain-summary-test)
+  (format t "PASS environment-domain-summary-test~%")
+  (environment-runtime-domain-summary-helper-test)
+  (format t "PASS environment-runtime-domain-summary-helper-test~%")
+  (environment-conversation-domain-summary-helper-test)
+  (format t "PASS environment-conversation-domain-summary-helper-test~%")
+  (environment-workflow-domain-summary-helper-test)
+  (format t "PASS environment-workflow-domain-summary-helper-test~%")
+  (environment-artifact-domain-helper-test)
+  (format t "PASS environment-artifact-domain-helper-test~%")
+  (environment-summary-prefers-domain-state-test)
+  (format t "PASS environment-summary-prefers-domain-state-test~%")
+  (environment-summary-does-not-resync-on-read-test)
+  (format t "PASS environment-summary-does-not-resync-on-read-test~%")
+  (environment-first-binding-test)
+  (format t "PASS environment-first-binding-test~%")
+  (environment-runtime-history-persistence-test)
+  (format t "PASS environment-runtime-history-persistence-test~%")
+  (load-environment-does-not-resync-on-read-test)
+  (format t "PASS load-environment-does-not-resync-on-read-test~%")
+  (environment-status-uses-environment-owned-state-test)
+  (format t "PASS environment-status-uses-environment-owned-state-test~%")
   (session-tail-rebuild-after-load-test)
   (format t "PASS session-tail-rebuild-after-load-test~%")
   (thread-shell-commands-test)
@@ -4533,12 +7904,98 @@ fi
   (format t "PASS turn-resume-provider-followup-test~%")
   (session-shell-commands-test)
   (format t "PASS session-shell-commands-test~%")
+  (session-summary-prefers-environment-summary-test)
+  (format t "PASS session-summary-prefers-environment-summary-test~%")
+  (session-summary-prefers-environment-event-summary-test)
+  (format t "PASS session-summary-prefers-environment-event-summary-test~%")
+  (environment-shell-commands-test)
+  (format t "PASS environment-shell-commands-test~%")
+  (environment-load-shell-orientation-test)
+  (format t "PASS environment-load-shell-orientation-test~%")
+  (shell-environment-orientation-render-test)
+  (format t "PASS shell-environment-orientation-render-test~%")
+  (environment-load-rendering-test)
+  (format t "PASS environment-load-rendering-test~%")
+  (environment-status-command-test)
+  (format t "PASS environment-status-command-test~%")
+  (environment-status-blocked-work-summary-test)
+  (format t "PASS environment-status-blocked-work-summary-test~%")
+  (environment-status-incident-summary-test)
+  (format t "PASS environment-status-incident-summary-test~%")
+  (runtime-shell-commands-test)
+  (format t "PASS runtime-shell-commands-test~%")
+  (runtime-package-switch-approval-test)
+  (format t "PASS runtime-package-switch-approval-test~%")
+  (runtime-mutating-eval-approval-test)
+  (format t "PASS runtime-mutating-eval-approval-test~%")
+  (runtime-reload-file-approval-and-workflow-test)
+  (format t "PASS runtime-reload-file-approval-and-workflow-test~%")
+  (runtime-cold-validation-finalization-test)
+  (format t "PASS runtime-cold-validation-finalization-test~%")
+  (runtime-eval-incident-recording-test)
+  (format t "PASS runtime-eval-incident-recording-test~%")
+  (turn-resume-mutating-runtime-eval-turn-evidence-test)
+  (format t "PASS turn-resume-mutating-runtime-eval-turn-evidence-test~%")
+  (turn-resume-runtime-reload-turn-evidence-test)
+  (format t "PASS turn-resume-runtime-reload-turn-evidence-test~%")
+  (mutation-review-command-test)
+  (format t "PASS mutation-review-command-test~%")
+  (mutation-review-cold-validation-test)
+  (format t "PASS mutation-review-cold-validation-test~%")
+  (mutation-review-incident-linked-test)
+  (format t "PASS mutation-review-incident-linked-test~%")
+  (turn-resume-runtime-incident-quarantine-test)
+  (format t "PASS turn-resume-runtime-incident-quarantine-test~%")
+  (incident-workspace-runtime-context-test)
+  (format t "PASS incident-workspace-runtime-context-test~%")
+  (incident-recommended-recovery-test)
+  (format t "PASS incident-recommended-recovery-test~%")
+  (incident-recovery-artifact-test)
+  (format t "PASS incident-recovery-artifact-test~%")
+  (incident-aware-session-and-environment-summary-test)
+  (format t "PASS incident-aware-session-and-environment-summary-test~%")
+  (provider-request-single-environment-snapshot-test)
+  (format t "PASS provider-request-single-environment-snapshot-test~%")
+  (provider-context-bundle-consistency-test)
+  (format t "PASS provider-context-bundle-consistency-test~%")
+  (provider-request-snapshot-conversion-test)
+  (format t "PASS provider-request-snapshot-conversion-test~%")
+  (provider-summaries-prefer-environment-snapshot-domains-test)
+  (format t "PASS provider-summaries-prefer-environment-snapshot-domains-test~%")
+  (provider-context-defaults-prefer-environment-conversation-state-test)
+  (format t "PASS provider-context-defaults-prefer-environment-conversation-state-test~%")
+  (provider-policy-and-operator-summary-prefer-snapshot-test)
+  (format t "PASS provider-policy-and-operator-summary-prefer-snapshot-test~%")
+  (provider-summary-does-not-require-session-resync-test)
+  (format t "PASS provider-summary-does-not-require-session-resync-test~%")
+  (non-thread-validation-artifact-test)
+  (format t "PASS non-thread-validation-artifact-test~%")
+  (environment-native-artifact-test)
+  (format t "PASS environment-native-artifact-test~%")
+  (environment-artifact-summary-prefers-environment-state-test)
+  (format t "PASS environment-artifact-summary-prefers-environment-state-test~%")
+  (provider-artifact-summary-prefers-environment-state-test)
+  (format t "PASS provider-artifact-summary-prefers-environment-state-test~%")
+  (artifact-inspection-prefers-environment-state-test)
+  (format t "PASS artifact-inspection-prefers-environment-state-test~%")
+  (environment-level-evidence-summary-test)
+  (format t "PASS environment-level-evidence-summary-test~%")
+  (reconciliation-artifact-coverage-test)
+  (format t "PASS reconciliation-artifact-coverage-test~%")
+  (turn-recovery-persists-across-session-load-test)
+  (format t "PASS turn-recovery-persists-across-session-load-test~%")
+  (interrupted-turn-state-recovered-on-session-load-test)
+  (format t "PASS interrupted-turn-state-recovered-on-session-load-test~%")
   (list-tools-test)
   (format t "PASS list-tools-test~%")
   (session-summary-tool-test)
   (format t "PASS session-summary-tool-test~%")
+  (session-summary-uses-environment-thread-state-test)
+  (format t "PASS session-summary-uses-environment-thread-state-test~%")
   (session-events-tool-test)
   (format t "PASS session-events-tool-test~%")
+  (session-events-tool-prefers-environment-event-log-test)
+  (format t "PASS session-events-tool-prefers-environment-event-log-test~%")
   (docs-read-tool-test)
   (format t "PASS docs-read-tool-test~%")
   (docs-read-path-escape-test)

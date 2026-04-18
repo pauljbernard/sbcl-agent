@@ -16,6 +16,32 @@
   (format t "  (thread/show [\"thread-id\"])       Show one thread with persisted messages and turns.~%")
   (format t "  (turn/status [\"turn-id\"])         Show one turn, or the latest turn on the active thread.~%")
   (format t "  (turn/resume [\"turn-id\"])         Resume an approval-gated turn using current pending actions.~%")
+  (format t "  (incident/list)                    List recorded incidents for the current session.~%")
+  (format t "  (incident/show \"incident-id\")     Show one incident with linked turn, operation, and workflow context.~%")
+  (format t "  (environment/status)               Show where you are, what is blocked, and what needs attention next.~%")
+  (format t "  (review/mutation [\"turn-id\"])     Show mutation, evidence, incidents, and closure state in one view.~%")
+  (format t "  (integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\") Bind this environment to an RGP governed runtime session.~%")
+  (format t "  (integration/rgp-show)              Show the governed-runtime snapshot RGP will reconcile.~%")
+  (format t "  (integration/rgp-export \"path\")   Export the governed-runtime snapshot as JSON for RGP ingest.~%")
+  (format t "  (integration/rgp-artifacts)         Show artifact summaries with lineage fields for RGP import.~%")
+  (format t "  (integration/rgp-approvals)         Show blocked approvals and resumable work-items for governed runtime control.~%")
+  (format t "  (integration/rgp-approve \"work-id\" :policy [:reason \"...\"]) Mark a governed runtime checkpoint as awaiting approval.~%")
+  (format t "  (integration/rgp-resume \"work-id\" [:note \"...\"]) Resume a governed runtime work-item after operator action.~%")
+  (format t "  (runtime/current-package)           Show the active Lisp package for the current runtime session.~%")
+  (format t "  (runtime/list-loaded-systems)       Show ASDF systems currently loaded in the image.~%")
+  (format t "  (runtime/describe-symbol \"name\" [:package \"PKG\"]) Inspect one symbol in the live image.~%")
+  (format t "  (runtime/find-definition \"name\" [:package \"PKG\"]) Find workspace definitions for a symbol and relate them to the image.~%")
+  (format t "  (runtime/callers \"name\" [:package \"PKG\"]) Find source-level callers for a symbol in the workspace.~%")
+  (format t "  (runtime/methods \"name\" [:package \"PKG\"]) List generic-function methods for a symbol in the image.~%")
+  (format t "  (runtime/source-image-divergence \"name\" [:package \"PKG\"]) Report source/image presence and pending drift for a symbol.~%")
+  (format t "  (runtime/set-package \"PKG\")       Change the active Lisp package after approval.~%")
+  (format t "  (runtime/eval form|string [:mutating t]) Evaluate in the active runtime package with policy checks.~%")
+  (format t "  (runtime/history [:tail N])         Show recent structured runtime operations recorded in the environment.~%")
+  (format t "  (runtime/reload-file \"path\")      Load a workspace source file into the live image after approval.~%")
+  (format t "  (environment/show)                  Print a summary of the current environment state.~%")
+  (format t "  (environment/events [:tail N])      Show recent projected environment events.~%")
+  (format t "  (environment/save \"path\")        Persist the current environment and compatibility session.~%")
+  (format t "  (environment/load \"path\")        Load a persisted environment into the current image.~%")
   (format t "  (execute-actions)                  Execute the currently staged assistant actions.~%")
   (format t "  (plan \"goal\")                    Set the current session plan goal.~%")
   (format t "  (enqueue-task '(tool ...))         Queue a normalized shell form for later execution.~%")
@@ -130,27 +156,6 @@
       (clear-pending-actions session)
       results)))
 
-(defun operation-assistant-action (operation)
-  (getf (operation-metadata operation) :assistant-action))
-
-(defun execute-turn-pending-actions (session operations &key thread turn)
-  (let ((actions (remove nil (mapcar #'operation-assistant-action operations))))
-    (unless actions
-      (error "No assistant actions are attached to the selected turn"))
-    (let ((results
-            (mapcar (lambda (operation)
-                      (let ((action (operation-assistant-action operation)))
-                        (list :action action
-                              :result (execute-assistant-action action
-                                                               session
-                                                               :thread thread
-                                                               :turn turn
-                                                               :operation operation))))
-                    operations)))
-      (append-session-event session :assistant-actions-executed results)
-      (remove-pending-actions session actions)
-      results)))
-
 (defun execute-session-save-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
@@ -197,24 +202,66 @@
     (t
      (format t "~&assistant-stream-event> ~S~%" event))))
 
-(defun handle-provider-stream-event (session event events)
-  (append-session-event session
-                        :provider-stream
-                        event
-                        :family :provider
-                        :visibility (provider-event-visibility event)
-                        :metadata (list :canonical-type (provider-event-effective-type event)
-                                        :legacy-type (provider-event-legacy-type event)
-                                        :provider-family (provider-event-family event)))
-  (when *task-progress-callback*
-    (funcall *task-progress-callback* :provider-stream event))
-  (when *stream-event-listener*
-    (funcall *stream-event-listener* event))
-  (append events (list event)))
+(defun handle-provider-stream-event (session event events
+                                   &key thread-id turn-id run-id operation-id)
+  (let* ((resolved-thread-id (or thread-id
+                                 (provider-event-thread-id event)))
+         (resolved-turn-id (or turn-id
+                               (provider-event-turn-id event)))
+         (resolved-run-id (or run-id
+                              (provider-event-run-id event)))
+         (resolved-operation-id (or operation-id
+                                    (provider-event-operation-id event)))
+         (metadata (merge-event-metadata
+                    (list :canonical-type (provider-event-effective-type event)
+                          :legacy-type (provider-event-legacy-type event)
+                          :provider-family (provider-event-family event))
+                    (provider-event-metadata event))))
+    (append-session-event session
+                          :provider-stream
+                          event
+                          :family :provider
+                          :entity-id (or (provider-event-entity-id event)
+                                         resolved-run-id
+                                         resolved-operation-id)
+                          :thread-id resolved-thread-id
+                          :turn-id resolved-turn-id
+                          :visibility (provider-event-visibility event)
+                          :metadata metadata
+                          :run-id resolved-run-id
+                          :operation-id resolved-operation-id)
+    (when *task-progress-callback*
+      (funcall *task-progress-callback* :provider-stream event))
+    (when *stream-event-listener*
+      (funcall *stream-event-listener* event))
+    (append events (list event))))
 
 (defun option-present-p (plist key)
   (and (listp plist)
        (member key plist)))
+
+(defun print-shell-environment-orientation (&optional environment)
+  (let* ((status (environment-status (ensure-environment environment)))
+         (environment-info (getf status :environment))
+         (active-thread (getf status :active-thread))
+         (active-runtime (getf status :active-runtime))
+         (blocked-work (getf status :blocked-work))
+         (incidents (getf status :incidents))
+         (operator-posture (getf status :operator-posture)))
+    (format t "Environment: ~A~%"
+            (or (getf environment-info :id) "<unknown>"))
+    (format t "Orientation: thread=~A runtime=~A blocked=~D open-incidents=~D~%"
+            (or (getf active-thread :id) :none)
+            (or (getf active-runtime :runtime-id) :none)
+            (or (getf blocked-work :count) 0)
+            (or (getf incidents :open-count) 0))
+    (format t "Operator posture: approvals=~D cold-validations=~D pending-validations=~D reviews=~D~%"
+            (or (getf operator-posture :outstanding-approval-count) 0)
+            (or (getf operator-posture :outstanding-cold-validation-count) 0)
+            (or (getf operator-posture :outstanding-pending-validation-count) 0)
+            (or (getf operator-posture :outstanding-operator-review-count) 0))
+    (finish-output)
+    status))
 
 (defun remove-plist-key (plist key)
   (cond
@@ -301,6 +348,201 @@
       (error "TURN/STATUS requires a string turn id when provided"))
     (turn-detail session turn-id)))
 
+(defun execute-incident-list-command (session)
+  (list-incident-summaries session))
+
+(defun execute-incident-show-command (arguments session)
+  (let ((incident-id (first arguments)))
+    (unless (stringp incident-id)
+      (error "INCIDENT/SHOW requires a string incident id"))
+    (let ((incident (find-incident session incident-id)))
+      (unless incident
+        (error "Unknown incident ~A" incident-id))
+      (incident-detail session incident))))
+
+(defun execute-environment-status-command (&optional environment)
+  (environment-status (ensure-environment environment)))
+
+(defun execute-review-mutation-command (arguments session)
+  (let ((turn-id (first arguments)))
+    (when (and turn-id (not (stringp turn-id)))
+      (error "REVIEW/MUTATION requires a string turn id when provided"))
+    (mutation-review session turn-id)))
+
+(defun execute-integration-rgp-bind-command (arguments session)
+  (when (oddp (length arguments))
+    (error "INTEGRATION/RGP-BIND arguments must be a property list"))
+  (let* ((binding (bind-environment-to-rgp session
+                                           :tenant-id (getf arguments :tenant-id)
+                                           :request-id (getf arguments :request-id)
+                                           :agent-session-id (getf arguments :agent-session-id)
+                                           :integration-id (getf arguments :integration-id)
+                                           :projection-id (getf arguments :projection-id)))
+         (environment (ensure-environment)))
+    (list :binding (rgp-binding-summary environment)
+          :governed-runtime (environment-rgp-runtime-summary environment)
+          :environment-id (environment-id environment)
+          :session-id (agent-session-id session)
+          :updated-binding binding)))
+
+(defun execute-integration-rgp-show-command (session)
+  (environment-rgp-snapshot (ensure-rgp-bound-environment session)))
+
+(defun execute-integration-rgp-export-command (arguments session)
+  (let ((path (first arguments)))
+    (unless (stringp path)
+      (error "INTEGRATION/RGP-EXPORT requires a string path"))
+    (export-environment-rgp-snapshot path (ensure-rgp-bound-environment session))))
+
+(defun execute-integration-rgp-artifacts-command (session)
+  (environment-rgp-artifact-summaries (ensure-rgp-bound-environment session)))
+
+(defun execute-integration-rgp-approvals-command (session)
+  (environment-rgp-approval-summaries (ensure-rgp-bound-environment session)))
+
+(defun execute-integration-rgp-approve-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (policy (second arguments))
+        (reason (getf (cddr arguments) :reason)))
+    (unless (stringp work-item-id)
+      (error "INTEGRATION/RGP-APPROVE requires a string work-item id"))
+    (unless (keywordp policy)
+      (error "INTEGRATION/RGP-APPROVE requires a keyword policy"))
+    (ensure-rgp-bound-environment session)
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (request-work-item-approval session work-item policy :reason reason)
+      (list :binding (rgp-binding-summary)
+            :approval (work-item-wait-report session work-item)
+            :work-item (enriched-work-item-detail session work-item)))))
+
+(defun execute-integration-rgp-resume-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (note (getf (rest arguments) :note)))
+    (unless (stringp work-item-id)
+      (error "INTEGRATION/RGP-RESUME requires a string work-item id"))
+    (ensure-rgp-bound-environment session)
+    (let ((work-item (find-work-item session work-item-id)))
+      (unless work-item
+        (error "Unknown work-item ~A" work-item-id))
+      (resume-work-item session work-item :note note)
+      (list :binding (rgp-binding-summary)
+            :approval (work-item-wait-report session work-item)
+            :work-item (enriched-work-item-detail session work-item)))))
+
+(defun execute-runtime-current-package-command (session)
+  (tool-runtime-current-package session))
+
+(defun execute-runtime-list-loaded-systems-command (session)
+  (tool-runtime-list-loaded-systems session))
+
+(defun execute-runtime-describe-symbol-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/DESCRIBE-SYMBOL requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/DESCRIBE-SYMBOL keyword options must be a property list"))
+    (apply #'tool-runtime-describe-symbol session :symbol symbol-name options)))
+
+(defun execute-runtime-find-definition-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/FIND-DEFINITION requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/FIND-DEFINITION keyword options must be a property list"))
+    (apply #'tool-runtime-find-definition session :symbol symbol-name options)))
+
+(defun execute-runtime-callers-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/CALLERS requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/CALLERS keyword options must be a property list"))
+    (apply #'tool-runtime-callers session :symbol symbol-name options)))
+
+(defun execute-runtime-methods-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/METHODS requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/METHODS keyword options must be a property list"))
+    (apply #'tool-runtime-methods session :symbol symbol-name options)))
+
+(defun execute-runtime-source-image-divergence-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/SOURCE-IMAGE-DIVERGENCE requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/SOURCE-IMAGE-DIVERGENCE keyword options must be a property list"))
+    (apply #'tool-runtime-source-image-divergence session :symbol symbol-name options)))
+
+(defun execute-runtime-set-package-command (arguments session)
+  (let ((package-name (first arguments)))
+    (unless (stringp package-name)
+      (error "RUNTIME/SET-PACKAGE requires a string package name"))
+    (tool-runtime-set-package session :package package-name)))
+
+(defun execute-runtime-eval-command (arguments session)
+  (let ((form-or-source (first arguments))
+        (options (rest arguments)))
+    (when (null arguments)
+      (error "RUNTIME/EVAL requires a form or source string"))
+    (when (oddp (length options))
+      (error "RUNTIME/EVAL keyword options must be a property list"))
+    (apply #'tool-runtime-eval session :form form-or-source options)))
+
+(defun execute-runtime-history-command (arguments session)
+  (declare (ignore session))
+  (let ((options arguments))
+    (when (oddp (length options))
+      (error "RUNTIME/HISTORY keyword options must be a property list"))
+    (apply #'tool-runtime-history (ensure-session) options)))
+
+(defun execute-runtime-reload-file-command (arguments session)
+  (let ((path (first arguments)))
+    (unless (stringp path)
+      (error "RUNTIME/RELOAD-FILE requires a string path"))
+    (tool-runtime-reload-file session :path path)))
+
+(defun execute-environment-show-command (&optional environment)
+  (environment-summary (ensure-environment environment)))
+
+(defun execute-environment-events-command (arguments &optional environment)
+  (let* ((options arguments)
+         (tail (getf options :tail))
+         (tail-count (normalize-tail-count tail))
+         (active-environment (ensure-environment environment))
+         (events (environment-event-log active-environment))
+         (start (max 0 (- (length events) tail-count))))
+    (list :environment-id (environment-id active-environment)
+          :event-count (length events)
+          :events (subseq events start))))
+
+(defun execute-environment-save-command (arguments &optional environment)
+  (let ((path (first arguments))
+        (active-environment (ensure-environment environment)))
+    (unless (stringp path)
+      (error "ENVIRONMENT/SAVE requires a string path"))
+    (save-environment active-environment path)
+    (list :saved path
+          :summary (environment-summary active-environment))))
+
+(defun execute-environment-load-command (arguments)
+  (let ((path (first arguments)))
+    (unless (stringp path)
+      (error "ENVIRONMENT/LOAD requires a string path"))
+    (let ((environment (load-environment path)))
+      (let ((session (environment-session environment)))
+      (values (list :loaded path
+                    :summary (environment-summary environment))
+              session)))))
+
 (defun resume-turn-command-target (session turn-id)
   (if turn-id
       (or (find-turn session turn-id)
@@ -308,66 +550,12 @@
       (or (most-recent-thread-turn session)
           (error "No turns recorded for the current thread"))))
 
-(defun resume-turn-operation-results (turn operations results &key followup)
-  (list :turn-id (turn-id turn)
-        :resumed-operation-count (length operations)
-        :action-result-count (length results)
-        :action-results results
-        :followup followup))
-
 (defun execute-turn-resume-command (arguments session &optional provider)
   (let* ((turn-id (first arguments))
-         (turn (resume-turn-command-target session turn-id))
-         (operations (remove-if-not (lambda (operation)
-                                      (or (eq (operation-status operation) :awaiting-approval)
-                                          (eq (operation-status operation) :staged)))
-                                    (list-turn-operations session (turn-id turn)))))
-    (unless (eq (turn-status turn) :awaiting-approval)
-      (error "TURN/RESUME requires a turn in :awaiting-approval state"))
-    (dolist (operation operations)
-      (let* ((decision (operation-policy-decision operation))
-             (policy-id (getf decision :policy-id)))
-        (when policy-id
-          (ensure-policy-approved session policy-id))))
-    (let* ((thread (or (find-thread session (turn-thread-id turn))
-                       (current-thread session)))
-           (results (execute-turn-pending-actions session
-                                                  operations
-                                                  :thread thread
-                                                  :turn turn))
-           (remaining-results nil)
-           (followup nil))
-      (setf remaining-results results)
-      (dolist (operation operations)
-        (update-work-item-status-from-operation session
-                                                operation
-                                                :mutating
-                                                :closure-decision :conversation-mutation-in-progress)
-        (let ((next-result (first remaining-results)))
-          (setf remaining-results (rest remaining-results))
-          (complete-operation session
-                              thread
-                              turn
-                              operation
-                              (or next-result (list :resumed-p t))
-                              :status :completed
-                              :metadata '(:execution :resumed))
-          (update-work-item-status-from-operation session
-                                                  operation
-                                                  :committed
-                                                  :closure-decision :committed-to-source-and-image
-                                                  :result next-result)))
-      (refresh-turn-status session turn :metadata '(:resumed-p t))
-      (when (and provider
-                 (provider-turn-followup-p provider)
-                 (eq (turn-status turn) :completed))
-        (setf followup (continue-conversation-turn provider
-                                                   session
-                                                   thread
-                                                   turn
-                                                   :source (or (getf (turn-metadata turn) :source) :say)
-                                                   :operator-mode :conversation)))
-      (resume-turn-operation-results turn operations results :followup followup))))
+         (turn (resume-turn-command-target session turn-id)))
+    (resume-conversation-turn provider session turn
+                              :source (or (getf (turn-metadata turn) :source) :say)
+                              :operator-mode :conversation)))
 
 (defun unwrap-task-form (form)
   (if (and (consp form)
@@ -589,6 +777,111 @@
        (values (execute-turn-resume-command (command-arguments command) active-session provider)
                :turn-resume
                active-session))
+      (:incident-list
+       (values (execute-incident-list-command active-session)
+               :incident-list
+               active-session))
+      (:incident-show
+       (values (execute-incident-show-command (command-arguments command) active-session)
+               :incident-show
+               active-session))
+      (:environment-status
+       (values (execute-environment-status-command)
+               :environment-status
+               active-session))
+      (:review-mutation
+       (values (execute-review-mutation-command (command-arguments command) active-session)
+               :review-mutation
+               active-session))
+      (:integration-rgp-bind
+       (values (execute-integration-rgp-bind-command (command-arguments command) active-session)
+               :integration-rgp-bind
+               active-session))
+      (:integration-rgp-show
+       (values (execute-integration-rgp-show-command active-session)
+               :integration-rgp-show
+               active-session))
+      (:integration-rgp-export
+       (values (execute-integration-rgp-export-command (command-arguments command) active-session)
+               :integration-rgp-export
+               active-session))
+      (:integration-rgp-artifacts
+       (values (execute-integration-rgp-artifacts-command active-session)
+               :integration-rgp-artifacts
+               active-session))
+      (:integration-rgp-approvals
+       (values (execute-integration-rgp-approvals-command active-session)
+               :integration-rgp-approvals
+               active-session))
+      (:integration-rgp-approve
+       (values (execute-integration-rgp-approve-command (command-arguments command) active-session)
+               :integration-rgp-approve
+               active-session))
+      (:integration-rgp-resume
+       (values (execute-integration-rgp-resume-command (command-arguments command) active-session)
+               :integration-rgp-resume
+               active-session))
+      (:runtime-current-package
+       (values (execute-runtime-current-package-command active-session)
+               :runtime-current-package
+               active-session))
+      (:runtime-list-loaded-systems
+       (values (execute-runtime-list-loaded-systems-command active-session)
+               :runtime-list-loaded-systems
+               active-session))
+      (:runtime-describe-symbol
+       (values (execute-runtime-describe-symbol-command (command-arguments command) active-session)
+               :runtime-describe-symbol
+               active-session))
+      (:runtime-find-definition
+       (values (execute-runtime-find-definition-command (command-arguments command) active-session)
+               :runtime-find-definition
+               active-session))
+      (:runtime-callers
+       (values (execute-runtime-callers-command (command-arguments command) active-session)
+               :runtime-callers
+               active-session))
+      (:runtime-methods
+       (values (execute-runtime-methods-command (command-arguments command) active-session)
+               :runtime-methods
+               active-session))
+      (:runtime-source-image-divergence
+       (values (execute-runtime-source-image-divergence-command (command-arguments command) active-session)
+               :runtime-source-image-divergence
+               active-session))
+      (:runtime-set-package
+       (values (execute-runtime-set-package-command (command-arguments command) active-session)
+               :runtime-set-package
+               active-session))
+      (:runtime-eval
+       (values (execute-runtime-eval-command (command-arguments command) active-session)
+               :runtime-eval
+               active-session))
+      (:runtime-history
+       (values (execute-runtime-history-command (command-arguments command) active-session)
+               :runtime-history
+               active-session))
+      (:runtime-reload-file
+       (values (execute-runtime-reload-file-command (command-arguments command) active-session)
+               :runtime-reload-file
+               active-session))
+      (:environment-show
+       (values (execute-environment-show-command)
+               :environment-show
+               active-session))
+      (:environment-events
+       (values (execute-environment-events-command (command-arguments command))
+               :environment-events
+               active-session))
+      (:environment-save
+       (values (execute-environment-save-command (command-arguments command))
+               :environment-save
+               active-session))
+      (:environment-load
+       (multiple-value-bind (result loaded-environment)
+           (execute-environment-load-command (command-arguments command))
+         (declare (ignore loaded-environment))
+         (values result :environment-load *current-session*)))
       (:execute-actions
        (let ((result (execute-pending-actions-command active-session)))
          (values result :execute-actions active-session)))
@@ -730,18 +1023,38 @@
              (format t "assistant-actions> ~S~%" (assistant-response-actions response))
              (format t "assistant-actions-staged> ~D~%" staged-count)))))
     (:turn-status
-     (format t "turn> ~A status=~A messages=~D operations=~D artifacts=~D~%"
+     (format t "turn> ~A status=~A messages=~D operations=~D artifacts=~D incidents=~D~%"
              (or (getf result :id) "<unknown>")
              (or (getf result :status) :unknown)
              (length (or (getf result :messages) '()))
              (length (or (getf result :operations) '()))
-             (length (or (getf result :artifacts) '())))
+             (length (or (getf result :artifacts) '()))
+             (length (or (getf result :incidents) '())))
+     (let ((summary (getf result :detail-summary)))
+       (when summary
+         (format t "turn-summary> runtime-ops=~D runtime-artifacts=~D incidents=~D work-item=~A work-status=~A workflow=~A~%"
+                 (or (getf summary :runtime-operation-count) 0)
+                 (or (getf summary :runtime-artifact-count) 0)
+                 (or (getf summary :incident-count) 0)
+                 (or (getf summary :work-item-id) :none)
+                 (or (getf summary :work-item-status) :none)
+                 (or (getf summary :workflow-record-status) :none))))
      (let ((assistant-message (getf result :assistant-message)))
        (when assistant-message
          (format t "assistant> ~A~%" (getf assistant-message :content))))
      (let ((approval (getf result :awaiting-approval)))
        (when (and approval (getf approval :awaiting-approval-p))
-         (format t "approval> blocked=~D~%" (getf approval :blocked-operation-count)))))
+         (format t "approval> blocked=~D~%" (getf approval :blocked-operation-count))))
+     (let ((recovery (getf result :recovery)))
+       (when (or (getf recovery :resumable-p)
+                 (getf recovery :interrupted-p))
+         (format t "recovery> resumable=~D interrupted=~D work-item=~A~%"
+                 (or (getf recovery :resumable-operation-count) 0)
+                 (or (getf recovery :interrupted-operation-count) 0)
+                 (or (getf recovery :work-item-id) :none))
+         (when (getf recovery :work-item-resume-payload)
+           (format t "recovery-payload> ~S~%" (getf recovery :work-item-resume-payload)))))
+     (finish-output))
     (:turn-resume
      (format t "turn-resume> turn=~A resumed=~D results=~D~%"
              (or (getf result :turn-id) "<unknown>")
@@ -753,8 +1066,116 @@
            (when response
              (format t "followup> ~A~%" (assistant-response->string response))))))
      (finish-output))
-    ((:thread-new :thread-list :thread-use :thread-show :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source)
+    (:thread-show
+     (format t "thread> ~A title=~A messages=~D turns=~D artifacts=~D incidents=~D~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :title) "<untitled>")
+             (length (or (getf result :messages) '()))
+             (length (or (getf result :turns) '()))
+             (length (or (getf result :artifacts) '()))
+             (length (or (getf result :incidents) '())))
+     (let ((summary (getf result :detail-summary)))
+       (when summary
+         (format t "thread-summary> runtime-artifacts=~D work-item-artifacts=~D incidents=~D~%"
+                 (or (getf summary :runtime-artifact-count) 0)
+                 (or (getf summary :work-item-artifact-count) 0)
+                 (or (getf summary :incident-count) 0))))
+     (finish-output))
+    (:environment-status
+     (format t "environment> ~A thread=~A runtime=~A blocked=~D open-incidents=~D~%"
+             (or (getf (getf result :environment) :id) "<unknown>")
+             (or (getf (getf result :active-thread) :id) :none)
+             (or (getf (getf result :active-runtime) :runtime-id) :none)
+             (or (getf (getf result :blocked-work) :count) 0)
+             (or (getf (getf result :incidents) :open-count) 0))
+     (format t "operator-posture> ~S~%" (getf result :operator-posture))
+     (finish-output))
+    (:incident-list
+     (format t "incidents> count=~D~%" (length (or result '())))
+     (dolist (incident result)
+       (format t "incident> ~A kind=~A status=~A turn=~A operation=~A~%"
+               (getf incident :id)
+               (getf incident :kind)
+               (getf incident :status)
+               (or (getf incident :turn-id) :none)
+               (or (getf incident :operation-id) :none)))
+     (finish-output))
+    (:incident-show
+     (format t "incident> ~A kind=~A status=~A~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :kind) :unknown)
+             (or (getf result :status) :unknown))
+     (format t "incident-summary> ~A~%" (or (getf result :summary) ""))
+     (when (getf result :condition)
+       (format t "condition> ~A~%" (getf result :condition)))
+     (when (getf result :turn)
+       (format t "incident-turn> ~A status=~A~%"
+               (getf (getf result :turn) :id)
+               (getf (getf result :turn) :status)))
+     (when (getf result :operation)
+       (format t "incident-operation> ~A name=~A status=~A~%"
+               (getf (getf result :operation) :id)
+               (getf (getf result :operation) :name)
+               (getf (getf result :operation) :status)))
+     (when (getf result :work-item)
+       (format t "incident-work-item> ~A status=~A closure=~A~%"
+               (getf (getf result :work-item) :id)
+               (getf (getf result :work-item) :status)
+               (getf (getf result :work-item) :closure-decision)))
+     (when (getf result :recovery)
+       (format t "incident-recovery> resumable=~D interrupted=~D work-item=~A~%"
+               (or (getf (getf result :recovery) :resumable-operation-count) 0)
+               (or (getf (getf result :recovery) :interrupted-operation-count) 0)
+               (or (getf (getf result :recovery) :work-item-id) :none)))
+     (when (getf result :runtime-context)
+       (format t "incident-runtime> package=~A checkpoints=~D observations=~D~%"
+               (or (getf (getf result :runtime-context) :package) :none)
+               (or (getf (getf result :runtime-context) :work-item-checkpoint-count) 0)
+               (or (getf (getf result :runtime-context) :runtime-observation-count) 0)))
+     (when (getf result :wait)
+       (format t "incident-wait> why=~A next=~A~%"
+               (or (getf result :why) (getf (getf result :wait) :why) :none)
+               (or (getf (getf result :wait) :next-action) :none)))
+     (when (getf result :recovery-plan)
+       (format t "incident-plan> wait=~A actions=~D~%"
+               (or (getf (getf result :recovery-plan) :wait-reason) :none)
+               (length (or (getf (getf result :recovery-plan) :actions) '()))))
+     (dolist (action (or (getf result :recommended-actions) '()))
+       (format t "incident-next> ~S~%" action))
+     (finish-output))
+    (:review-mutation
+     (format t "mutation-review> turn=~A status=~A operations=~D artifacts=~D incidents=~D~%"
+             (or (getf (getf result :turn) :id) "<unknown>")
+             (or (getf (getf result :turn) :status) :unknown)
+             (or (getf (getf result :mutation) :operation-count) 0)
+             (or (getf (getf result :mutation) :artifact-count) 0)
+             (length (or (getf result :incidents) '())))
+     (when (getf (getf result :governance) :work-item)
+       (format t "mutation-governance> work-item=~A status=~A wait=~A~%"
+               (getf (getf (getf result :governance) :work-item) :id)
+               (getf (getf (getf result :governance) :work-item) :status)
+               (or (getf (getf (getf result :governance) :wait) :why) :none)))
+     (when (getf (getf result :governance) :next-action)
+       (format t "mutation-next> ~S~%" (getf (getf result :governance) :next-action)))
+     (finish-output))
+    ((:runtime-find-definition :runtime-callers :runtime-methods :runtime-source-image-divergence)
+     (format t "runtime-nav> tool=~A symbol=~A package=~A~%"
+             (getf result :tool)
+             (or (getf result :symbol) :none)
+             (or (getf result :package) :none))
+     (when (getf result :definition-count)
+       (format t "runtime-definitions> ~D~%" (getf result :definition-count)))
+     (when (getf result :caller-count)
+       (format t "runtime-callers> ~D~%" (getf result :caller-count)))
+     (when (getf result :method-count)
+       (format t "runtime-methods> ~D~%" (getf result :method-count)))
+     (when (getf result :divergence)
+       (format t "runtime-divergence> ~A~%" (getf result :divergence)))
+     (finish-output))
+    ((:thread-new :thread-list :thread-use :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approvals :integration-rgp-approve :integration-rgp-resume)
      (format t "tasks> ~S~%" result))
+    ((:integration-rgp-bind :integration-rgp-show :integration-rgp-export)
+     (format t "rgp> ~S~%" result))
     (:execute-actions
      (format t "assistant-action-results> ~S~%" result))
     (:plan
@@ -771,16 +1192,90 @@
      (format t "session> ~S~%" result))
     (:session-reset
      (format t "session> ~S~%" result))
+    (:environment-show
+     (format t "environment> ~A runtime=~A threads=~D artifacts=~D incidents=~D events=~D~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :active-runtime-id) :none)
+             (or (getf result :thread-count) 0)
+             (or (getf result :artifact-count) 0)
+             (or (getf result :incident-count) 0)
+             (or (getf result :event-count) 0))
+     (let* ((operator-evidence (or (getf result :operator-evidence)
+                                   (and (getf result :summary)
+                                        (getf (getf result :summary) :operator-evidence))))
+            (operator-status (or (and operator-evidence (getf operator-evidence :posture))
+                                 (getf result :operator-status))))
+       (when operator-status
+         (format t "environment-operator> blocked=~D quarantined=~D incidents=~D open=~D~%"
+                 (or (getf operator-status :blocked-count) 0)
+                 (or (getf operator-status :quarantined-count) 0)
+                 (or (getf operator-status :incident-count) 0)
+                 (or (getf operator-status :open-incident-count) 0))))
+     (finish-output))
+    (:environment-events
+     (format t "environment-events> env=~A count=~D shown=~D~%"
+             (or (getf result :environment-id) "<unknown>")
+             (or (getf result :event-count) 0)
+             (length (or (getf result :events) '())))
+     (dolist (event (or (getf result :events) '()))
+       (format t "environment-event> ~A family=~A entity=~A env=~A~%"
+               (event-kind event)
+               (event-family event)
+               (or (event-entity-id event) :none)
+               (or (getf (event-metadata event) :environment-id) :none)))
+     (finish-output))
+    (:environment-load
+     (format t "environment-load> ~A env=~A session=~A~%"
+             (or (getf result :loaded) "<unknown>")
+             (or (getf (getf result :summary) :id) "<unknown>")
+             (or (getf (getf result :summary) :session-id) :none))
+     (let* ((operator-evidence (getf (getf result :summary) :operator-evidence))
+            (operator-status (or (and operator-evidence (getf operator-evidence :posture))
+                                 (getf (getf result :summary) :operator-status))))
+       (when operator-status
+         (format t "environment-load-operator> blocked=~D quarantined=~D incidents=~D open=~D~%"
+                 (or (getf operator-status :blocked-count) 0)
+                 (or (getf operator-status :quarantined-count) 0)
+                 (or (getf operator-status :incident-count) 0)
+                 (or (getf operator-status :open-incident-count) 0))))
+     (finish-output))
     (:describe-session
-     (format t "session> ~S~%" result))
+     (format t "session> ~A package=~A threads=~D turns=~D work-items=~D incidents=~D~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :package) "<unknown>")
+             (or (getf (getf result :thread-state) :thread-count) 0)
+             (or (getf result :turn-count) 0)
+             (or (getf result :work-item-count) 0)
+             (or (getf result :incident-count) 0))
+     (let* ((operator-evidence (getf result :operator-evidence))
+            (operator-status (or (and operator-evidence (getf operator-evidence :posture))
+                                 (getf result :operator-status)))
+            (incident-summary (or (and operator-evidence (getf operator-evidence :incidents))
+                                  (getf result :incident-summary))))
+       (when operator-status
+         (format t "session-operator> blocked=~D quarantined=~D incidents=~D open=~D durable=~D~%"
+                 (or (getf operator-status :blocked-count) 0)
+                 (or (getf operator-status :quarantined-count) 0)
+                 (or (getf operator-status :incident-count) 0)
+                 (or (getf operator-status :open-incident-count) 0)
+                 (or (getf operator-status :durable-count) 0)))
+       (when incident-summary
+         (format t "session-incidents> total=~D open=~D recent=~D~%"
+                 (or (getf incident-summary :count) 0)
+                 (or (getf incident-summary :open-count) 0)
+                 (length (or (getf incident-summary :recent) '())))))
+     (finish-output))
     (t
      (format t "=> ~S~%" result))))
 
 (defun start-shell (provider &optional session &key (default-stream-p nil))
-  (let ((active-session (ensure-session session)))
+  (let* ((active-session (ensure-session session))
+         (active-environment (or (session-bound-environment active-session)
+                                 (bind-session-to-environment active-session (ensure-environment)))))
     (format t "Starting Lisp-native shell with provider ~A.~%" (provider-name provider))
     (when default-stream-p
       (format t "Interactive streaming is enabled by default for ask requests.~%"))
+    (print-shell-environment-orientation active-environment)
     (format t "Session: ~A~%" (agent-session-id active-session))
     (format t "Enter (help) for commands. Press Ctrl-D to exit.~%")
     (let ((*stream-event-listener* #'render-stream-event)

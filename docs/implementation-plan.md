@@ -23,6 +23,8 @@ The target is not parity in implementation detail. The target is parity or advan
 
 The work is now best understood as three coordinated programs.
 
+The user-facing prioritization filter for these programs is captured in [User Journey Gap Matrix](/Volumes/data/development/sbcl-agent/docs/user-journey-gap-matrix.md), which evaluates the implemented system against the operator journeys implied by the objectives and vision.
+
 ### 1. Transactional live-image program
 
 This is the original architectural thesis:
@@ -61,25 +63,33 @@ Implemented or substantially in place:
 - SBCL-native CLI and Common Lisp shell
 - provider abstraction with mock and OpenAI-compatible backends
 - canonical provider-event normalization
+- concrete `Environment` object with save/load, summaries, and projected environment events
 - thread, message, turn, operation, and artifact records
 - shell commands for `say`, thread management, turn status, and turn resume
+- shell commands for incident inspection, environment inspection, and environment event inspection
 - shared `ask` and `say` turn execution with `ask` kept as the REPL-bridge compatibility path
 - approval-aware turn orchestration
 - governed mutation binding for patch turns, mutating runtime eval turns, and write-class tool turns
 - provider follow-up after resumed turns when the provider supports turn continuation
+- runtime commands for current package, loaded systems, symbol description, governed eval, history, and reload
+- incident recording, quarantine-aware failure handling, and incident-aware operator summaries
+- incident workspace-style inspection through `incident/show`, with linked turn, operation, work-item, and workflow summaries plus compact recovery and wait guidance
 - richer shell rendering for turn status and turn resume results
+- shell rendering that distinguishes resumable approval recovery from interrupted recovery
 - session persistence, tasks, workers, work-items, replay groups, and image reconciliation records
+- load-time interruption recovery for persisted in-flight turns and operations
+- governed runtime mutation flows that stop at `:awaiting-cold-validation` until colder evidence is recorded
+- provider requests enriched with compact environment-backed context
+- validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence is visible in the artifact stream
 
 Still incomplete or still planned:
 
-- a concrete Environment object that owns the major subsystems
 - a fully separated internal conversation/runtime/engineering state model
 - an explicit agent registry and environment-level resident actor model
 - a capability-translation layer that preserves legacy Lisp tool powers without reproducing their architectural metaphors
 - richer operation and artifact coverage across all mutating paths
-- runtime tool families for governed image inspection and mutation
-- stronger crash recovery and resumability
 - deeper cold-start validation and rollback fidelity
+- deeper incident workspace and restart-oriented runtime debugging services
 
 ## Delivery Stages
 
@@ -110,6 +120,18 @@ Already in place:
 - canonical provider event structures and normalization in the provider layer
 - shell support for event-driven streamed behavior
 - compatibility with the existing streamed `ask` flow
+- a shared event-envelope contract with explicit correlation metadata for environment, session, run, operation, work-item, artifact, and incident identity
+- streamed provider events correlated to provider-run operations and active thread/turn identity before entering the session/environment event log
+- workflow and incident milestone events correlated to work-item and workflow-record identity for validation, reconciliation, quarantine, resume, closure, and incident capture paths
+- environment-backed event summaries available to session-facing summary and event tools, reducing duplicate evidence assembly across session/environment views
+- consolidated operator-evidence bundles available to environment/session status surfaces, reducing renderer-side reconstruction of posture, blocked work, and incidents
+- workflow monitoring summaries (wait state, replay groups, reconciliations) reading environment workflow state first with compatibility fallback when environment monitoring state is not yet materialized
+- task and worker monitoring reads preferring environment agent state when authoritative, reducing dependence on session-owned task/worker lists for monitoring surfaces
+- task and worker mutation paths immediately refreshing the bound environment agent domain after enqueue, cancel, execution, worker start, worker stop, and stop-all-workers, reducing reliance on later read-time resynchronization
+- artifact summaries, lookup, and thread/turn artifact inspection preferring environment-owned artifact state when a session is bound, reducing dependence on duplicated compatibility-session artifact lists
+- serializable environments preserving payload-only compatibility identity even without a materialized session, and load paths normalizing legacy embedded `agent-session` compatibility state down to payload form at the persistence boundary
+- provider session/runtime/workspace/policy summaries resolving from one environment snapshot per request whenever a bound environment exists, with direct session fallbacks limited to the no-environment path and request-local transcript context
+- provider default thread/turn context resolving from environment conversation state when a bound environment exists, with conversation-domain refresh updating full conversation records rather than only aggregate counters
 
 Remaining work:
 
@@ -165,15 +187,36 @@ Exit condition:
 
 ### Stage 3.5. Environment composition root
 
-Status: newly required by the roadmap pivot
+Status: materially implemented, still being refined
 
 Goal:
 
 - introduce a concrete Environment object that becomes the primary architectural container
 
-Expected deliverables:
+Delivered now:
 
 - environment creation, load, save, and inspection APIs
+- projected environment event log plus `environment/events`
+- environment-aware shell, summary, and provider context integration
+- environment-first shell entry and load rendering, so operators are oriented around environment identity and posture before compatibility-session detail
+
+Remaining:
+
+- further reduce architectural dependence on `agent-session` as implicit primary truth
+- broaden environment-native APIs beyond the compatibility bridge
+
+The remaining gap here is now narrower than when this stage was first written. Environment-native summaries, events, workflow monitoring, artifact inspection, provider request assembly, and default provider thread/turn context all now prefer environment-owned state when available. What remains is less about basic authority and more about finishing the operator and API surfaces that still speak through compatibility-session adapters.
+
+Recent tightening:
+
+- runtime and conversation domain logic now have explicit module homes in `src/runtime-state.lisp` and `src/conversation-state.lisp`
+- environment summary and orientation paths consume those domain summary helpers instead of rebuilding runtime and conversation summaries entirely inside `src/environment.lisp`
+- workflow and artifact domain logic now also have explicit module homes in `src/workflow-state.lisp` and `src/artifact-state.lisp`
+- environment evidence and workflow summaries now consume those domain helpers instead of depending on mixed inline summary logic in `src/environment.lisp`
+- session-facing summary and event tools now act more clearly as compatibility facades over bound environment state instead of assuming the session is always the primary inspection root
+
+Expected deliverables:
+
 - references to runtime set, thread set, artifact graph, work-item graph, policy engine, event bus, and agent registry
 - a compatibility path where `agent-session` becomes a transitional component inside the Environment rather than the top-level concept
 
@@ -196,17 +239,23 @@ Expected deliverables:
 
 ### Stage 5. Runtime tool family
 
-Status: planned
+Status: materially implemented, still expandable
 
 Goal:
 
 - expose governed image-native operations such as runtime inspection, package control, and controlled evaluation as explicit tools rather than incidental shell effects
 
-Expected deliverables:
+Delivered now:
 
 - `src/tools-runtime.lisp`
 - runtime-specific capability classes
 - work-item-aware policies for mutating runtime operations
+- shell commands for package inspection, loaded-system listing, symbol description, governed eval, history, and reload
+
+Remaining:
+
+- deeper symbolic navigation such as definition/caller discovery
+- richer runtime incident and debugger-style inspection services
 
 ### Stage 6. Artifact and workflow bridge
 

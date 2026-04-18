@@ -13,11 +13,16 @@
 
 (defun tool-session-events (session &key tail)
   (let* ((tail-count (normalize-tail-count tail))
-         (events (agent-session-events session))
-         (start (max 0 (- (length events) tail-count))))
+         (event-view (session-events-view session :tail tail-count)))
     (list :tool :session/events
-          :event-count (length events)
-          :events (subseq events start)
+          :event-count (getf event-view :event-count)
+          :event-summary (let ((environment (session-bound-environment session)))
+                           (if environment
+                               (environment-event-summary environment)
+                               (list :event-count (getf event-view :event-count)
+                                     :recent-kinds (mapcar #'event-kind (getf event-view :events)))))
+          :events (getf event-view :events)
+          :environment-backed-p (getf event-view :environment-backed-p)
           :sandbox-profile :in-process)))
 
 (register-tool :session/summary
@@ -34,6 +39,9 @@
 (defun tool-session-operator-status (session &key)
   (list :tool :session/operator-status
         :status (session-operator-status session)
+        :event-summary (let ((environment (session-bound-environment session)))
+                         (and environment
+                              (environment-event-summary environment)))
         :sandbox-profile :in-process))
 
 (register-tool :session/operator-status
@@ -43,9 +51,11 @@
 
 
 (defun tool-session-replay-groups (session &key)
-  (list :tool :session/replay-groups
-        :groups (session-validator-replay-groups session)
-        :sandbox-profile :in-process))
+  (let ((environment (session-bound-environment session)))
+    (list :tool :session/replay-groups
+          :groups (session-validator-replay-groups session)
+          :environment-backed-p (not (null environment))
+          :sandbox-profile :in-process)))
 
 (register-tool :session/replay-groups
                "Return validator replay groups for the current session."
@@ -53,9 +63,11 @@
                #'tool-session-replay-groups)
 
 (defun tool-session-image-reconciliations (session &key)
-  (list :tool :session/image-reconciliations
-        :reconciliations (session-image-reconciliation-summary session)
-        :sandbox-profile :in-process))
+  (let ((environment (session-bound-environment session)))
+    (list :tool :session/image-reconciliations
+          :reconciliations (session-image-reconciliation-summary session)
+          :environment-backed-p (not (null environment))
+          :sandbox-profile :in-process)))
 
 (register-tool :session/image-reconciliations
                "Return image-only reconciliation records for the current session."

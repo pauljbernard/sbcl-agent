@@ -202,6 +202,40 @@
   (find replay-id (work-item-validator-tasks work-item)
         :key #'validator-task-record-replay-id :test #'string=))
 
+(defun work-item-bound-thread (session work-item)
+  (let* ((thread-id (getf (work-item-mutation-intent work-item) :thread-id))
+         (thread (and thread-id
+                      (find-thread session thread-id))))
+    (or thread
+        (ignore-errors (current-thread session)))))
+
+(defun work-item-bound-turn (session work-item)
+  (let* ((turn-id (getf (work-item-mutation-intent work-item) :turn-id))
+         (turn (and turn-id
+                    (find-turn session turn-id))))
+    turn))
+
+(defun create-work-item-artifact (session work-item kind title summary &key metadata)
+  (let ((thread (work-item-bound-thread session work-item)))
+    (if thread
+        (create-artifact session
+                         thread
+                         (work-item-bound-turn session work-item)
+                         nil
+                         kind
+                         nil
+                         :title title
+                         :summary summary
+                         :work-item-id (work-item-id work-item)
+                         :metadata metadata)
+        (create-environment-artifact session
+                                     kind
+                                     nil
+                                     :title title
+                                     :summary summary
+                                     :work-item-id (work-item-id work-item)
+                                     :metadata metadata))))
+
 (defun normalize-validator-status (status)
   (case status
     ((:passed :failed :partial) status)
@@ -212,6 +246,7 @@
 
 (defun execute-validator-task-record (session work-item validator-task-id &key (status :passed) evidence)
   (let ((record (find-validator-task-record work-item validator-task-id))
+        (final-closure-decision (work-item-final-closure-decision work-item))
         (normalized-status (normalize-validator-status status)))
     (unless record
       (error "Unknown validator task ~A for work-item ~A" validator-task-id (work-item-id work-item)))
@@ -236,7 +271,8 @@
     (set-work-item-next-action session work-item
                                (if (work-item-pending-validations work-item)
                                    (list :type :complete-pending-validations
-                                         :pending (work-item-pending-validations work-item))
+                                         :pending (work-item-pending-validations work-item)
+                                         :final-closure-decision final-closure-decision)
                                    nil))
     (set-work-item-resume-payload session work-item
                                   (if (work-item-pending-validations work-item)
@@ -245,9 +281,13 @@
                                             :pending (work-item-pending-validations work-item)
                                             :validator-actions (work-item-validator-actions work-item)
                                             :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))
-                                            :rollback-point (work-item-rollback-point work-item))
+                                            :rollback-point (work-item-rollback-point work-item)
+                                            :final-closure-decision final-closure-decision)
                                       nil))
     (reconcile-validation-results work-item)
+    (finalize-work-item-cold-validation session
+                                        work-item
+                                        :final-closure-decision final-closure-decision)
     (append-work-item-workflow-entry session work-item
                                      :validate
                                      :validator-task-executed
@@ -255,6 +295,22 @@
                                            :validation-result (case (validator-task-record-kind record)
                                                                 (:live (validation-result-summary (work-item-live-validation-result work-item)))
                                                                 (:cold (validation-result-summary (work-item-cold-validation-result work-item))))))
+    (create-work-item-artifact session
+                               work-item
+                               :validation
+                               (format nil "~(~A~) validation ~A"
+                                       (validator-task-record-kind record)
+                                       normalized-status)
+                               "Validator result recorded."
+                               :metadata (list :validator-task-id (validator-task-record-id record)
+                                               :validator-kind (validator-task-record-kind record)
+                                               :status normalized-status
+                                               :checkpoint-id (validator-task-record-checkpoint-id record)
+                                               :replay-id (validator-task-record-replay-id record)
+                                               :evidence (or evidence
+                                                             (case (validator-task-record-kind record)
+                                                               (:live (validation-result-summary (work-item-live-validation-result work-item)))
+                                                               (:cold (validation-result-summary (work-item-cold-validation-result work-item)))))))
     record))
 
 (defun execute-validator-replay-set (session work-item replay-id &key (status :passed) statuses)
@@ -306,6 +362,15 @@
                                      (list :summary summary
                                            :replay-id (and transaction (mutation-transaction-replay-id transaction)))
                                      :status :committed)
+    (create-work-item-artifact session
+                               work-item
+                               :reconciliation
+                               "Image-only reconciliation"
+                               "Image-only work reconciled back to source."
+                               :metadata (list :summary summary
+                                               :status :attached-to-source
+                                               :replay-id (and transaction
+                                                               (mutation-transaction-replay-id transaction))))
     (let ((record (work-item-workflow-record session work-item)))
       (when record
         (close-workflow-record session
@@ -534,6 +599,84 @@
       (update-workflow-record-resume-payload record resume-payload :session session)))
   resume-payload)
 
+(defun work-item-final-closure-decision (work-item)
+  (or (getf (work-item-resume-payload work-item) :final-closure-decision)
+      (getf (work-item-next-action work-item) :final-closure-decision)))
+
+(defun finalize-work-item-cold-validation (session work-item &key final-closure-decision)
+  (let ((final-closure-decision (or final-closure-decision
+                                    (work-item-final-closure-decision work-item)))
+        (record (work-item-workflow-record session work-item))
+        (transaction (current-work-item-transaction work-item))
+        (cold (work-item-cold-validation-result work-item)))
+    (when (and final-closure-decision
+               (null (work-item-pending-validations work-item))
+               cold)
+      (if (validation-result-passed-p cold)
+          (progn
+            (when transaction
+              (setf (mutation-transaction-state transaction) :committed
+                    (mutation-transaction-rollback-status transaction) :not-needed
+                    (mutation-transaction-rollback-detail transaction)
+                    (list :reason :cold-validation-passed
+                          :checkpoint-id (latest-work-item-checkpoint-id work-item))))
+            (setf (work-item-status work-item) :committed
+                  (work-item-closure-decision work-item) final-closure-decision
+                  (work-item-updated-at work-item) (get-universal-time))
+            (set-work-item-next-action session work-item nil)
+            (set-work-item-resume-payload session work-item nil)
+            (append-work-item-workflow-entry session
+                                             work-item
+                                             :validate
+                                             :cold-validation-committed
+                                             (list :closure-decision final-closure-decision
+                                                   :checkpoint-id (latest-work-item-checkpoint-id work-item))
+                                             :status :committed)
+            (when record
+              (close-workflow-record session
+                                     record
+                                     (list :work-item-status :committed
+                                           :closure-decision final-closure-decision
+                                           :rollback-point (work-item-rollback-point work-item)
+                                           :reconciliation (reconciliation-record-view
+                                                            (work-item-reconciliation-result work-item)))
+                                     :status :committed
+                                     :evidence (work-item-summary work-item))))
+          (progn
+            (when transaction
+              (setf (mutation-transaction-rollback-status transaction) :required
+                    (mutation-transaction-rollback-detail transaction)
+                    (list :reason :cold-validation-failed
+                          :checkpoint-id (latest-work-item-checkpoint-id work-item))))
+            (setf (work-item-status work-item) :quarantined
+                  (work-item-closure-decision work-item) :cold-validation-failed
+                  (work-item-updated-at work-item) (get-universal-time))
+            (set-work-item-next-action session work-item
+                                       (list :type :operator-review
+                                             :suggested-step :reconcile-or-rollback
+                                             :final-closure-decision final-closure-decision))
+            (set-work-item-resume-payload session work-item
+                                          (list :resume-command :review-cold-validation
+                                                :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                :final-closure-decision final-closure-decision
+                                                :replay-id (and transaction
+                                                                (mutation-transaction-replay-id transaction))
+                                                :operator-options '(:resume :rollback)))
+            (append-work-item-workflow-entry session
+                                             work-item
+                                             :validate
+                                             :cold-validation-failed
+                                             (list :closure-decision final-closure-decision
+                                                   :checkpoint-id (latest-work-item-checkpoint-id work-item))
+                                             :status :quarantined)
+            (when record
+              (setf (workflow-record-status record) :quarantined
+                    (workflow-record-waiting-on record) :operator-review
+                    (workflow-record-quarantine-reason record)
+                    "Cold validation failed after governed runtime mutation."
+                    (workflow-record-updated-at record) (get-universal-time))))))
+    work-item))
+
 (defun work-item-wait-report (session work-item)
   (let* ((record (work-item-workflow-record session work-item))
          (pending (refresh-work-item-pending-validations session work-item))
@@ -541,6 +684,10 @@
          (reason (cond
                    ((eq waiting-on :approval) :approval-required)
                    ((eq waiting-on :operator-review) :operator-review-required)
+                   ((eq (work-item-status work-item) :awaiting-cold-validation)
+                    :cold-validation-required)
+                   ((equal pending '(:cold))
+                    :cold-validation-required)
                    ((null pending) :ready)
                    (t :pending-validation))))
     (list :work-item-id (work-item-id work-item)
@@ -835,6 +982,23 @@
                                          :cold (validation-result-summary (work-item-cold-validation-result work-item))
                                          :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item)))
                                    :status :validating)
+  (append-session-event session
+                        :validation-completed
+                        (list :work-item-id (work-item-id work-item)
+                              :live (validation-result-summary (work-item-live-validation-result work-item))
+                              :cold (validation-result-summary (work-item-cold-validation-result work-item)))
+                        :family :workflow
+                        :entity-id (work-item-id work-item)
+                        :metadata (list :workflow-record-id (work-item-workflow-record-ref work-item)
+                                        :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item)))
+                        :work-item-id (work-item-id work-item))
+  (append-session-event session
+                        :reconciliation-created
+                        (reconciliation-record-view (work-item-reconciliation-result work-item))
+                        :family :workflow
+                        :entity-id (work-item-id work-item)
+                        :metadata (list :workflow-record-id (work-item-workflow-record-ref work-item))
+                        :work-item-id (work-item-id work-item))
   work-item)
 
 (defun create-work-item (session goal &key mutation-intent transaction-scope workflow-record-ref)
@@ -890,9 +1054,18 @@
                             work-item)
       (setf (agent-session-work-items session) work-items
             (agent-session-work-items-tail session) tail))
+    (let ((environment (session-bound-environment session)))
+      (when environment
+        (environment-append-work-item environment session work-item)))
     (append-work-item-workflow-entry session work-item :inspect :work-item-created (work-item-summary work-item) :status :open)
     (refresh-work-item-pending-validations session work-item)
-    (append-session-event session :work-item-created (work-item-summary work-item))
+    (append-session-event session
+                          :work-item-created
+                          (work-item-summary work-item)
+                          :family :workflow
+                          :entity-id (work-item-id work-item)
+                          :metadata (list :workflow-record-id (work-item-workflow-record-ref work-item))
+                          :work-item-id (work-item-id work-item))
     work-item))
 
 (defun create-work-item-for-task (session task &key mutation-intent)
@@ -1093,6 +1266,7 @@
                                 :planned))
                   (:checkpointed :checkpointed)
                   (:mutating :mutating)
+                  (:awaiting-cold-validation :committed)
                   (:committed :committed)
                   (:rolled-back :rolled-back)
                   (:failed :failed)
@@ -1101,12 +1275,17 @@
                 (case status
                   (:rolled-back :rolled-back)
                   (:failed :required)
+                  (:awaiting-cold-validation :captured)
                   (:committed :not-needed)
                   (:quarantined :required)
                   (t (mutation-transaction-rollback-status transaction)))
                 (mutation-transaction-rollback-detail transaction)
                 (case status
                   (:failed (list :reason error :recommended-action :rollback-or-quarantine))
+                  (:awaiting-cold-validation (list :reason :warm-image-validation-only
+                                                   :recommended-action :run-cold-validation
+                                                   :operation-id (operation-id operation)
+                                                   :turn-id (operation-turn-id operation)))
                   (:rolled-back (list :reason :cancelled :restored-p nil))
                   (:quarantined (list :reason error :recommended-action :operator-review))
                   (:committed (list :reason :commit-succeeded
@@ -1168,6 +1347,9 @@
                                      (:planned (list :type :checkpoint :suggested-step :checkpoint))
                                      (:checkpointed (list :type :mutate :suggested-step :resume-turn))
                                      (:mutating (list :type :observe-runtime :suggested-step :await-runtime-effects))
+                                     (:awaiting-cold-validation (list :type :complete-pending-validations
+                                                                      :suggested-step :run-cold-validation
+                                                                      :final-closure-decision closure-decision))
                                      (:committed nil)
                                      (:failed (list :type :review-failure :suggested-step :quarantine-or-rollback))
                                      (:rolled-back nil)
@@ -1187,6 +1369,14 @@
                                                          :checkpoint-id (latest-work-item-checkpoint-id work-item)
                                                          :replay-id (mutation-transaction-replay-id transaction)
                                                          :operation-id (operation-id operation)))
+                                        (:awaiting-cold-validation (list :resume-command :complete-validations
+                                                                         :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                                         :pending (work-item-pending-validations work-item)
+                                                                         :validator-actions (work-item-validator-actions work-item)
+                                                                         :replay-id (mutation-transaction-replay-id transaction)
+                                                                         :operation-id (operation-id operation)
+                                                                         :rollback-point (work-item-rollback-point work-item)
+                                                                         :final-closure-decision closure-decision))
                                         (:committed nil)
                                         (:rolled-back nil)
                                         (:failed (list :resume-command :quarantine-or-rollback
@@ -1214,6 +1404,7 @@
                                          :status (case status
                                                    (:planned :planned)
                                                    (:mutating :in-progress)
+                                                   (:awaiting-cold-validation :awaiting-cold-validation)
                                                    (:committed :ready-to-close)
                                                    (:failed :requires-review)
                                                    (:rolled-back :rolled-back)

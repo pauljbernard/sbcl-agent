@@ -66,6 +66,20 @@ Starts the shell with interactive streaming enabled by default for `(ask ...)`. 
 
 Runs an external command through the CLI surface.
 
+### `./bin/sbcl-agent rgp <subcommand>`
+
+Runs the RGP governed-runtime bridge.
+
+Important subcommands:
+
+- `bind`: connect an RGP request and agent-session to a durable `sbcl-agent` environment
+- `show`: inspect the current RGP binding and governed runtime summary
+- `export`: emit a JSON snapshot with binding, environment, thread, turn, approvals, and artifacts
+- `artifacts`: list importable runtime artifacts for RGP
+- `approvals`: list pending governed approval checkpoints
+- `approve`: approve a governed checkpoint in the external runtime
+- `resume`: resume a governed work-item in the external runtime
+
 ### `./bin/run-tests`
 
 Runs the test suite.
@@ -77,6 +91,8 @@ Runs the test suite with coverage collection.
 ## Interactive Shell Basics
 
 The shell is Common Lisp. Recognized forms are treated as shell commands. Everything else is evaluated as normal Lisp in the `SBCL-AGENT-USER` package.
+
+Shell entry is now environment-first in presentation. When `chat` starts, the shell prints the active environment id, active thread and runtime, blocked governed work count, and open incident count before it prints the compatibility session id. That keeps the operator oriented around the environment as the primary world object while preserving the legacy session handle.
 
 Example:
 
@@ -136,14 +152,62 @@ The runtime records:
 
 Useful commands:
 
+- `(environment/status)`
+- `(runtime/find-definition "symbol")`
+- `(runtime/callers "symbol")`
+- `(runtime/methods "generic-function")`
+- `(runtime/source-image-divergence "symbol")`
 - `(turn/status)`
 - `(turn/status "turn-id")`
 - `(turn/resume)`
 - `(turn/resume "turn-id")`
+- `(incident/list)`
+- `(incident/show "incident-id")`
+- `(review/mutation)`
+- `(review/mutation "turn-id")`
 
-`turn/status` now reports the current turn state with message, operation, and artifact counts plus the active assistant message and approval summary when relevant.
+`turn/status` now reports the current turn state with message, operation, artifact, and incident counts plus the active assistant message and approval summary when relevant.
+
+`environment/status` is the default orientation surface. It answers, in one command, which environment, thread, and runtime are active, what work is blocked, how many incidents are open, and whether approvals, cold validations, or operator review are currently outstanding.
+
+That orientation is now environment-first in a stricter sense: the command derives active thread and turn context from persisted Environment conversation state, so it remains accurate immediately after environment load without depending on a fresh compatibility-session resync.
+
+`environment/load` now also renders as an environment-first operation in the shell. The result output shows the loaded environment id, compatibility session id, and operator posture summary so a restored environment is legible before the next command is issued.
 
 If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied. A resumed turn may also trigger a provider follow-up run so the turn can finish with a fresh assistant message instead of stopping at raw action execution.
+
+If a governed runtime action fails, the system now records a durable incident linked to the turn, operation, and any bound work-item. Use `(incident/list)` to find recent failures and `(incident/show "incident-id")` to inspect the condition text plus the linked thread, turn, operation, work-item, and workflow context when those links exist. `incident/show` also includes compact recovery and wait guidance, so the operator can see whether a linked turn is resumable, whether the runtime was interrupted, and what next action the bound work-item is waiting on.
+
+`incident/show` now behaves more like a recovery workspace than a plain failure record. In addition to the linked failure graph, it exposes runtime context such as the active package, recent runtime history, checkpoint and observation counts, and a structured recovery plan. When an incident has actionable follow-through, the system also records a recovery-plan artifact so the remediation path becomes durable evidence rather than an implicit suggestion.
+
+`review/mutation` is the mutation-closure surface. It consolidates the turn, mutation operations, artifacts, work-item governance, wait reason, evidence, and incident linkage into one view so the operator can see what changed and what closes the loop next without jumping across multiple commands.
+
+The runtime navigation commands deepen the symbolic side of the environment without introducing editor-centric metaphors. `runtime/find-definition` searches workspace source for defining forms and relates them to the live image, `runtime/callers` finds source-level caller sites, `runtime/methods` exposes generic-function methods in the image, and `runtime/source-image-divergence` makes source-only, runtime-only, and potentially drifted symbols explicit.
+
+Artifact evidence is now less path-dependent. Validation, reconciliation, incident, runtime, and recovery-plan artifacts all contribute to the session and environment evidence summaries, so environment-level inspection is no longer limited to one aggregate artifact count. This makes non-conversational validation and reconciliation work visible in the same governed evidence stream as turn-bound actions.
+
+Provider-facing summaries now follow the same rule. When a provider request is built from an Environment snapshot, the request summaries prefer the Environment-owned runtime, thread, plan, artifact, and policy view instead of quietly re-reading those values from a possibly drifted live session object.
+
+Top-level status commands also surface incident pressure directly:
+
+- `(describe-session)` includes incident totals and open-incident counts alongside operator status.
+- `(environment/show)` includes environment-level incident counts and the current operator incident posture.
+- `(environment/events :tail 20)` shows recent projected environment events with environment-scoped metadata.
+
+Validation and reconciliation outcomes now also generate conversational artifacts when they are tied to a thread-bound work-item. That means replayed validator results and image-only reconciliation steps show up in the same artifact stream as patches, runtime reloads, and incidents.
+
+## Governed External Runtime Flow
+
+The RGP bridge makes `sbcl-agent` usable as a stateful governed runtime rather than only as a model-backed assistant shell.
+
+Typical flow:
+
+1. RGP binds a request and agent session to an Environment with `./bin/sbcl-agent rgp bind`.
+2. RGP inspects governed runtime state with `show`, `export`, `approvals`, or `artifacts`.
+3. When a runtime work-item blocks on approval, RGP uses `approve` or `resume`.
+4. `sbcl-agent` preserves Environment, thread, turn, operation, artifact, and work-item state locally while RGP reconciles the governance view externally.
+
+This matters because RGP needs sessionful runtime semantics. It is not only asking for a response. It is governing a durable external runtime that can accumulate local execution state, approvals, incidents, and artifacts across turns.
 
 ## `ask` Versus `say`
 
@@ -220,6 +284,8 @@ A conversation turn can reach an awaiting-approval state when an operation needs
 1. inspect the turn with `(turn/status)`
 2. grant the needed approval
 3. resume with `(turn/resume)`
+
+If the work is governed mutation rather than a simple approval pause, use `(review/mutation)` before or after the resume step to inspect closure state, evidence, and any remaining cold-validation or operator-review obligations.
 
 Patch turns, mutating runtime eval turns, and write-class tool turns such as `git-write` now bind more directly into workflow governance. When those governed actions appear, the turn can create a work-item, record a checkpoint, and carry approval state as part of the workflow evidence rather than only as transcript text.
 
@@ -314,6 +380,12 @@ Commands:
 
 The session layer now carries both the older runtime state and the newer thread-and-turn state. Persistence is therefore useful both for shell continuity and for recovering conversational context.
 
+On load, the runtime now normalizes stale in-flight execution:
+
+- persisted operations that were still `:running` are marked `:interrupted`
+- turns that were still `:running` at save time are marked `:interrupted`
+- turn recovery summaries expose interrupted-operation counts separately from resumable approval-gated operations
+
 ## Provider Modes
 
 ### Mock provider
@@ -352,6 +424,8 @@ You can also place the key in `openai-api-key.key` at the repository root.
 ## Operational Caveats
 
 - A successful warm-image interaction is not the same thing as a durable source-backed fix.
+- Governed runtime mutations can now stop in `:awaiting-cold-validation` even after the warm image reports success.
+- `why-waiting` and session wait summaries distinguish generic pending validation from colder validation that is still required for durable closure.
 - Conversation state, runtime state, and workflow state are related but not interchangeable.
 - Use approvals deliberately. The architecture is designed to make mutating operations visible, not implicit.
 - Treat image-only outcomes as provisional until they are reconciled back to source truth and workflow evidence.

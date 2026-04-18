@@ -54,12 +54,13 @@
 
 (defun build-openai-user-prompt (request)
   (format nil
-          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against the structured conversation context and :recent-transcript when available."
+          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against the structured conversation context, environment refs, and :recent-transcript when available."
           (provider-request-prompt request)
           (provider-request-operator-mode request)
           (provider-request-stream-p request)
           (provider-request-thread-context request)
           (provider-request-turn-context request)
+          (provider-request-environment-context request)
           (provider-request-runtime-summary request)
           (provider-request-workspace-summary request)
           (provider-request-policy-summary request)

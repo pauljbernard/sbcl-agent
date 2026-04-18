@@ -31,6 +31,9 @@ Implemented now:
 - shell commands for thread management and conversation turns
 - turn status and resume handling
 - turn orchestration with approval-aware flow
+- incident recording for failed governed runtime actions
+- environment-aware summaries and projected environment events that preserve thread-runtime migration compatibility
+- environment-first rehydration of transcript/events, conversation records, workflow records, incident state, staged actions, tasks/workers, capability grants, and plan state from persisted Environment domains
 
 Still legacy-shaped:
 
@@ -102,11 +105,22 @@ Remaining:
 
 ### Phase 4. Governed runtime operations
 
-Status: planned
+Status: materially implemented, still expandable
 
 Target:
 
 - expose runtime inspection and mutation as explicit, capability-gated operations rather than incidental shell behavior
+
+Delivered now:
+
+- governed runtime package switching
+- governed runtime eval with safe and mutating policy modes
+- governed runtime file reload
+- runtime history inspection
+
+Remaining:
+
+- deeper runtime inspection and symbolic navigation services
 
 ### Phase 5. Artifact and workflow bridge
 
@@ -136,6 +150,13 @@ Target:
 
 Commands such as `describe-session`, `session/save`, and `session/load` remain valid. Internally they should increasingly act as wrappers over a more compositional runtime state model.
 
+The persistence layer is now already moving in that direction:
+
+- Environment is the durable object
+- the compatibility session is reconstructed from Environment state at load time
+- the serialized compatibility payload has been reduced to an identity-oriented shim instead of a duplicate session snapshot
+- even legacy session header fields are reconstructed from Environment-owned runtime and conversation state rather than persisted inside the compatibility payload
+
 ### Direct Lisp evaluation
 
 Unrecognized forms must continue to evaluate as normal Lisp. This is a hard compatibility requirement, not an optional convenience.
@@ -150,6 +171,11 @@ Recommended rules:
 2. Synthesize conversation state when older persistence lacks explicit threads.
 3. Preserve legacy transcript or event material when exact mapping is not possible.
 4. Write back only after successful normalization into the newer model.
+
+Current implementation note:
+
+- environment persistence now derives `cwd`, `package`, `current-thread-id`, plan state, grant state, pending actions, tasks/workers, incidents, conversation records, workflow records, transcript, and event history from Environment-owned domains during load
+- this means compatibility-session persistence is no longer the main truth path and should be treated as an adapter layer
 
 ## Risks
 
@@ -184,3 +210,8 @@ The migration is complete when `sbcl-agent` supports:
 - conversation mode for persistent thread-based interaction
 
 on one shared SBCL runtime, with workflow records still governing mutating engineering activity.
+
+The migration should also end with one conceptual inversion fully in place:
+
+- Environment is primary durable truth
+- session compatibility is derived from Environment, not the other way around

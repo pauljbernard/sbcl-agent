@@ -99,6 +99,126 @@
   checkpoints
   provenance)
 
+(defun work-item-long-horizon-plan (work-item)
+  (getf (work-item-mutation-intent work-item) :long-horizon-plan))
+
+(defun work-item-operator-steering-history (work-item)
+  (copy-list (or (getf (work-item-mutation-intent work-item) :operator-steering-history) '())))
+
+(defun set-work-item-long-horizon-plan (work-item long-horizon-plan)
+  (setf (getf (work-item-mutation-intent work-item) :long-horizon-plan) long-horizon-plan
+        (work-item-updated-at work-item) (get-universal-time))
+  long-horizon-plan)
+
+(defun append-work-item-operator-steering-history (work-item directive)
+  (setf (getf (work-item-mutation-intent work-item) :operator-steering-history)
+        (append (work-item-operator-steering-history work-item)
+                (list directive))
+        (work-item-updated-at work-item) (get-universal-time))
+  directive)
+
+(defun work-item-plan-health (work-item)
+  (cond
+    ((member (work-item-status work-item)
+             '(:awaiting-approval :awaiting-cold-validation :quarantined)
+             :test #'eq)
+     :waiting)
+    ((member (work-item-status work-item)
+             '(:failed :rolled-back)
+             :test #'eq)
+     :interrupted)
+    ((work-item-resume-payload work-item)
+     :resumable)
+    (t
+     :active)))
+
+(defun work-item-plan-current-phase (work-item)
+  (cond
+    ((eq (work-item-plan-health work-item) :resumable) :resolve-blockers)
+    (t
+     (case (work-item-status work-item)
+       ((:awaiting-approval :quarantined :failed :rolled-back) :resolve-blockers)
+       (:planned :plan)
+       ((:checkpointed :mutating) :mutate)
+       ((:awaiting-cold-validation :committed) :validate)
+       (t (or (first (getf (work-item-long-horizon-plan work-item) :planning-phases))
+              :inspect))))))
+
+(defun work-item-plan-revision-reason (work-item)
+  (cond
+    ((member (work-item-status work-item) '(:quarantined :failed :rolled-back) :test #'eq)
+     :incident-recovery)
+    ((member (work-item-status work-item) '(:awaiting-cold-validation :committed) :test #'eq)
+     :validation-pending)
+    ((eq (work-item-plan-health work-item) :resumable)
+     :blocked-awaiting-resume)
+    ((member (work-item-status work-item) '(:checkpointed :mutating) :test #'eq)
+     :partial-progress)
+    (t
+     :steady-state)))
+
+(defun work-item-plan-phase-index (phases phase)
+  (position phase phases :test #'eq))
+
+(defun work-item-remaining-planning-phases (work-item)
+  (let* ((phases (copy-list (or (getf (work-item-long-horizon-plan work-item) :planning-phases) '())))
+         (current-phase (work-item-plan-current-phase work-item))
+         (index (work-item-plan-phase-index phases current-phase)))
+    (cond
+      (index
+       (subseq phases index))
+      ((null phases)
+       (list current-phase))
+      (t
+       (append (list current-phase)
+               phases)))))
+
+(defun work-item-completed-phase-count (work-item)
+  (let* ((phases (or (getf (work-item-long-horizon-plan work-item) :planning-phases) '()))
+         (current-phase (work-item-plan-current-phase work-item))
+         (index (work-item-plan-phase-index phases current-phase)))
+    (or index 0)))
+
+(defun work-item-plan-steering (work-item)
+  (let* ((resume-payload (work-item-resume-payload work-item))
+         (next-action (work-item-next-action work-item))
+         (plan (work-item-long-horizon-plan work-item))
+         (remaining-phases (work-item-remaining-planning-phases work-item))
+         (completed-phase-count (work-item-completed-phase-count work-item))
+         (revision-reason (work-item-plan-revision-reason work-item))
+         (original-phases (copy-list (or (getf plan :planning-phases) '())))
+         (latest-operator-steering (car (last (work-item-operator-steering-history work-item)))))
+    (when (or plan latest-operator-steering)
+      (list :current-phase (work-item-plan-current-phase work-item)
+            :next-step (or (getf next-action :suggested-step)
+                           (getf next-action :type)
+                           (getf resume-payload :resume-command))
+            :resume-anchor (or (getf resume-payload :resume-command)
+                               (getf next-action :type))
+            :phase-count (or (getf plan :phase-count) 0)
+            :planning-phases original-phases
+            :remaining-phases remaining-phases
+            :completed-phase-count completed-phase-count
+            :decomposition-ready-p (> (or (getf plan :phase-count) 0) 1)
+            :compacted-p (or (not (equal remaining-phases original-phases))
+                             (not (eq revision-reason :steady-state)))
+            :revision-reason revision-reason
+            :operator-directed-phase (and latest-operator-steering
+                                          (getf latest-operator-steering :phase))
+            :operator-directed-next-step (and latest-operator-steering
+                                              (getf latest-operator-steering :next-step))
+            :operator-steering-count (length (work-item-operator-steering-history work-item))
+            :review-required-p (eq (getf next-action :type) :serial-review-merge)
+            :plan-health (work-item-plan-health work-item)))))
+
+(defun enrich-work-item-control-payload (work-item payload)
+  (append (copy-list (or payload '()))
+          (let ((plan (work-item-long-horizon-plan work-item)))
+            (when plan
+              (list :long-horizon-plan plan
+                    :plan-health (work-item-plan-health work-item)
+                    :plan-steering (work-item-plan-steering work-item))))))
+
 (defun make-work-item-id ()
   (format nil "work-~D-~D" (get-universal-time) (random 1000000)))
 
@@ -512,6 +632,10 @@
         :source-snapshot (work-item-source-snapshot work-item)
         :image-snapshot-ref (work-item-image-snapshot-ref work-item)
         :mutation-intent (work-item-mutation-intent work-item)
+        :long-horizon-plan (work-item-long-horizon-plan work-item)
+        :plan-health (work-item-plan-health work-item)
+        :plan-steering (work-item-plan-steering work-item)
+        :operator-steering-history (work-item-operator-steering-history work-item)
         :runtime-observation-count (length (work-item-runtime-observations work-item))
         :live-validation-result (validation-result-summary (work-item-live-validation-result work-item))
         :cold-validation-result (validation-result-summary (work-item-cold-validation-result work-item))
@@ -584,20 +708,22 @@
     pending))
 
 (defun set-work-item-next-action (session work-item next-action)
-  (setf (work-item-next-action work-item) next-action
+  (setf (work-item-next-action work-item) (and next-action
+                                               (enrich-work-item-control-payload work-item next-action))
         (work-item-updated-at work-item) (get-universal-time))
   (let ((record (work-item-workflow-record session work-item)))
     (when record
-      (update-workflow-record-next-action record next-action :session session)))
-  next-action)
+      (update-workflow-record-next-action record (work-item-next-action work-item) :session session)))
+  (work-item-next-action work-item))
 
 (defun set-work-item-resume-payload (session work-item resume-payload)
-  (setf (work-item-resume-payload work-item) resume-payload
+  (setf (work-item-resume-payload work-item) (and resume-payload
+                                                  (enrich-work-item-control-payload work-item resume-payload))
         (work-item-updated-at work-item) (get-universal-time))
   (let ((record (work-item-workflow-record session work-item)))
     (when record
-      (update-workflow-record-resume-payload record resume-payload :session session)))
-  resume-payload)
+      (update-workflow-record-resume-payload record (work-item-resume-payload work-item) :session session)))
+  (work-item-resume-payload work-item))
 
 (defun work-item-final-closure-decision (work-item)
   (or (getf (work-item-resume-payload work-item) :final-closure-decision)
@@ -807,6 +933,40 @@
                                         :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))))
     (refresh-work-item-taint-state work-item)
     (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun steer-work-item-plan (session work-item &key phase next-step note)
+  (let* ((directive (list :phase phase
+                          :next-step next-step
+                          :note note
+                          :timestamp (get-universal-time)))
+         (record (work-item-workflow-record session work-item)))
+    (append-work-item-operator-steering-history work-item directive)
+    (append-work-item-operator-intervention session
+                                           work-item
+                                           :plan-steered
+                                           directive
+                                           :status (work-item-status work-item))
+    (when record
+      (append-workflow-record-entry session
+                                    record
+                                    :plan
+                                    :operator-plan-steered
+                                    directive
+                                    :status (workflow-record-status record)))
+    (set-work-item-next-action session work-item
+                               (append (list :type :operator-steered
+                                             :phase phase
+                                             :suggested-step next-step)
+                                       (when note
+                                         (list :note note))))
+    (set-work-item-resume-payload session work-item
+                                  (append (list :resume-command :operator-steered
+                                                :phase phase
+                                                :next-step next-step
+                                                :checkpoint-id (latest-work-item-checkpoint-id work-item))
+                                          (when note
+                                            (list :note note))))
     work-item))
 
 (defun find-work-item-transaction (work-item transaction-id)
@@ -1074,7 +1234,11 @@
                     :mutation-intent (or mutation-intent
                                          (list :task-id (task-id task)
                                                :command-kind (task-kind task)
-                                               :payload (task-payload task)))
+                                               :payload (task-payload task)
+                                               :orchestration-group-id (task-orchestration-group-id task)
+                                               :ownership-scope (task-ownership-scope task)
+                                               :merge-policy (task-merge-policy task)
+                                               :shared-context (task-shared-context task)))
                     :transaction-scope :task))
 
 (defun append-work-item-runtime-observation (session work-item kind payload)

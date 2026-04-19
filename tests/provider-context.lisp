@@ -93,6 +93,24 @@
                   "provider request should expose linked environment context")
     (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request) :thread-refs))
                  "provider request environment context should expose compact thread refs")
+    (assert-true (listp (getf (sbcl-agent::provider-request-retrieval-dossier request) :intent))
+                 "provider request should expose a retrieved dossier")
+    (assert-true (typep (sbcl-agent::provider-request-cognition-bundle request)
+                        'sbcl-agent::cognition-bundle)
+                 "provider request should expose a canonical cognition bundle")
+    (assert-true (listp (sbcl-agent::cognition-bundle-execution-strategy
+                         (sbcl-agent::provider-request-cognition-bundle request)))
+                 "provider request cognition bundle should expose execution strategy")
+    (assert-true (listp (sbcl-agent::cognition-bundle-validation-strategy
+                         (sbcl-agent::provider-request-cognition-bundle request)))
+                 "provider request cognition bundle should expose validation strategy")
+    (assert-true (listp (sbcl-agent::cognition-bundle-validation-plan
+                         (sbcl-agent::provider-request-cognition-bundle request)))
+                 "provider request cognition bundle should expose validation plan")
+    (assert-true (listp (getf (sbcl-agent::provider-request-reasoning-brief request) :facts))
+                 "provider request should expose an environment-grounded reasoning brief")
+    (assert-true (listp (getf (sbcl-agent::provider-request-planning-brief request) :ordered-steps))
+                 "provider request should expose an environment-grounded planning brief")
     (assert-true (listp (sbcl-agent::provider-request-session-summary request))
                  "provider request should preserve the compact session summary")))
 
@@ -132,6 +150,47 @@
                    :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER" :open-incident-count 1)
                    :workspace-summary '(:cwd "/tmp/project" :artifact-count 2 :incident-count 1)
                    :policy-summary '(:approved-policies (:safe-read) :open-incident-count 1)
+                   :retrieval-dossier '(:intent (:category :runtime-inspection)
+                                       :ranking (:enabled-p t :strategy :keyword-overlap)
+                                       :plan (:expansion-posture :compact-first)
+                                       :runtime-context (:summary (:domain :runtime)))
+                   :cognition-bundle (sbcl-agent::make-cognition-bundle
+                                      :retrieval-dossier '(:intent (:category :runtime-inspection))
+                                      :reasoning-brief '(:reasoning-mode :environment-grounded
+                                                        :facts ()
+                                                        :uncertainties ()
+                                                        :blockers ()
+                                                        :validation-obligations ()
+                                                        :evidence-actions ())
+                                      :planning-brief '(:planning-mode :environment-grounded
+                                                      :ordered-steps ((:phase :inspect)))
+                                      :execution-strategy '(:mode :inspection-first
+                                                            :next-step :plan)
+                                      :validation-strategy '(:mode :opportunistic
+                                                             :next-step :no-additional-validation-required)
+                                      :validation-plan '(:mode :opportunistic
+                                                         :next-step :no-additional-validation-required
+                                                         :priority :low
+                                                         :work-item-count 0
+                                                         :entries ())
+                                      :outcome-brief '(:outcome-mode :expectation-vs-observation
+                                                       :recommended-next-step :conclude))
+                   :reasoning-brief '(:reasoning-mode :environment-grounded
+                                      :facts ((:kind :environment-authority :statement "Environment env-1 is authoritative."))
+                                      :uncertainties ()
+                                      :blockers ()
+                                      :validation-obligations ()
+                                      :evidence-actions ())
+                   :planning-brief '(:planning-mode :environment-grounded
+                                     :primary-goal (:statement "describe the current state")
+                                     :ordered-steps ((:phase :inspect :statement "Inspect first."))
+                                     :constraints ()
+                                     :success-criteria ((:kind :grounding :statement "Stay grounded.")))
+                   :outcome-brief '(:outcome-mode :expectation-vs-observation
+                                    :expected-phases (:mutate)
+                                    :observed-summary (:observed-consequence-count 1)
+                                    :mismatches ()
+                                    :recommended-next-step :conclude)
                    :operator-mode :conversation
                    :stream-p t))
          (prompt (sbcl-agent::build-openai-user-prompt request))
@@ -144,8 +203,40 @@
                  "build-openai-user-prompt should render environment context")
     (assert-true (search "Runtime summary: (:CWD \"/tmp/project\"" prompt)
                  "build-openai-user-prompt should render runtime summary")
+    (assert-true (search "Retrieved environment dossier: (:INTENT (:CATEGORY :RUNTIME-INSPECTION)" prompt)
+                 "build-openai-user-prompt should render the retrieval dossier")
+    (assert-true (search "Canonical cognition bundle:" prompt)
+                 "build-openai-user-prompt should render the canonical cognition bundle")
+    (assert-true (search ":EXECUTION-STRATEGY" prompt)
+                 "build-openai-user-prompt should render cognition execution strategy detail")
+    (assert-true (search "Reasoning brief: (:REASONING-MODE :ENVIRONMENT-GROUNDED" prompt)
+                 "build-openai-user-prompt should render the reasoning brief")
+    (assert-true (search "Planning brief: (:PLANNING-MODE :ENVIRONMENT-GROUNDED" prompt)
+                 "build-openai-user-prompt should render the planning brief")
+    (assert-true (search "Outcome brief: (:OUTCOME-MODE :EXPECTATION-VS-OBSERVATION" prompt)
+                 "build-openai-user-prompt should render the outcome brief when present")
+    (assert-true (search "Treat dossier ranking metadata as advisory prioritization" prompt)
+                 "build-openai-user-prompt should explain that ranking metadata is advisory")
+    (assert-true (search "Treat the canonical cognition bundle as the default reasoning loop" prompt)
+                 "build-openai-user-prompt should instruct the provider to follow the canonical cognition loop")
+    (assert-true (search "When the cognition bundle carries a retrieval focus plan, prioritize those domains first" prompt)
+                 "build-openai-user-prompt should instruct the provider to prioritize retrieval focus when present")
+    (assert-true (search "When the cognition bundle carries a validation plan, treat it as the concrete validation agenda" prompt)
+                 "build-openai-user-prompt should instruct the provider to follow the validation plan when present")
+    (assert-true (search "When the cognition bundle carries an action agenda, treat it as the ordered list of next steps" prompt)
+                 "build-openai-user-prompt should instruct the provider to follow the derived action agenda when present")
+    (assert-true (search "Reuse similar prior successes when they fit the current evidence" prompt)
+                 "build-openai-user-prompt should instruct the provider to reuse prior successful outcomes")
+    (assert-true (search "Use the reasoning brief to distinguish environment-backed facts" prompt)
+                 "build-openai-user-prompt should instruct the provider to reason from facts and uncertainties")
+    (assert-true (search "Use the planning brief as the default execution outline" prompt)
+                 "build-openai-user-prompt should instruct the provider to follow the environment-grounded plan by default")
     (assert-true (search ":OPEN-INCIDENT-COUNT 1" prompt)
                  "build-openai-user-prompt should render incident posture in summaries")
+    (assert-true (search "Governance directives: The environment is not currently mutation-clean." prompt)
+                 "build-openai-user-prompt should render conservative governance directives when incidents are open")
+    (assert-true (search "Do not propose new governed mutation actions" prompt)
+                 "build-openai-user-prompt should tell the provider to avoid new governed mutations under active governance burden")
     (assert-equal :conversation
                   (getf (sbcl-agent::assistant-response-metadata mock-response) :operator-mode)
                   "mock provider responses should preserve operator mode metadata")
@@ -155,6 +246,33 @@
     (assert-equal "env-1"
                   (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :environment) :environment-id)
                   "mock provider responses should preserve environment context metadata")))
+
+(defun provider-rendering-governance-ready-test ()
+  (let* ((request (sbcl-agent::make-provider-request
+                   :prompt "inspect and suggest next step"
+                   :session-summary '(:recent-transcript ())
+                   :thread-context '(:id "thread-1")
+                   :turn-context '(:id "turn-1" :status :running)
+                   :environment-context '(:environment-id "env-1")
+                   :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER" :open-incident-count 0)
+                   :workspace-summary '(:cwd "/tmp/project" :artifact-count 0 :incident-count 0)
+                   :policy-summary '(:approved-policies (:safe-read))
+                   :retrieval-dossier '(:intent (:category :code-change))
+                   :reasoning-brief '(:reasoning-mode :environment-grounded
+                                      :facts ()
+                                      :uncertainties ()
+                                      :blockers ()
+                                      :validation-obligations ()
+                                      :evidence-actions ())
+                   :planning-brief '(:planning-mode :environment-grounded
+                                     :ordered-steps ((:phase :inspect :statement "Inspect first.")))
+                   :operator-mode :conversation
+                   :stream-p nil))
+         (prompt (sbcl-agent::build-openai-user-prompt request)))
+    (assert-true (search "Governance directives: The environment appears mutation-ready." prompt)
+                 "build-openai-user-prompt should render mutation-ready governance guidance when the environment is clean")
+    (assert-true (search "If you propose a governed mutation, keep it evidence-backed, minimal, and aligned with the planning brief." prompt)
+                 "build-openai-user-prompt should render mutation-ready proposal guidance")))
 
 (defun provider-request-single-environment-snapshot-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-environment-snapshot/"))
@@ -204,7 +322,11 @@
            (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :bundle-test)))
            (assistant-message (sbcl-agent::create-message session thread :assistant "bundle response"))
            (ignore (sbcl-agent::complete-turn session thread turn assistant-message :status :completed))
-           (bundle (sbcl-agent::build-provider-context-bundle session :thread thread :turn turn))
+           (bundle (sbcl-agent::build-provider-context-bundle session
+                                                              :thread thread
+                                                              :turn turn
+                                                              :prompt "bundle check"
+                                                              :operator-mode :repl-bridge))
            (request (sbcl-agent::make-provider-request-from-session "bundle check" session :thread thread :turn turn)))
       (declare (ignore ignore))
       (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
@@ -227,7 +349,24 @@
                     "provider request workspace summary should come from the provider context bundle")
       (assert-equal (sbcl-agent::provider-context-bundle-policy-summary bundle)
                     (sbcl-agent::provider-request-policy-summary request)
-                    "provider request policy summary should come from the provider context bundle"))))
+                    "provider request policy summary should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-retrieval-dossier bundle)
+                    (sbcl-agent::provider-request-retrieval-dossier request)
+                    "provider request retrieval dossier should come from the provider context bundle")
+      (assert-equal (sbcl-agent::cognition-bundle-summary
+                     (sbcl-agent::provider-context-bundle-cognition-bundle bundle))
+                    (sbcl-agent::cognition-bundle-summary
+                     (sbcl-agent::provider-request-cognition-bundle request))
+                    "provider request cognition bundle should preserve the bundle cognition summary")
+      (assert-equal (sbcl-agent::provider-context-bundle-reasoning-brief bundle)
+                    (sbcl-agent::provider-request-reasoning-brief request)
+                    "provider request reasoning brief should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-planning-brief bundle)
+                    (sbcl-agent::provider-request-planning-brief request)
+                    "provider request planning brief should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-outcome-brief bundle)
+                    (sbcl-agent::provider-request-outcome-brief request)
+                    "provider request outcome brief should come from the provider context bundle"))))
 
 (defun provider-request-snapshot-conversion-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-snapshot/"))
@@ -236,7 +375,9 @@
                        :session session)))
     (sbcl-agent::bind-session-to-environment session environment)
     (sbcl-agent::create-work-item session "Request snapshot conversion" :transaction-scope :test)
-    (let* ((bundle (sbcl-agent::build-provider-context-bundle session))
+    (let* ((bundle (sbcl-agent::build-provider-context-bundle session
+                                                              :prompt "snapshot conversion"
+                                                              :operator-mode :repl-bridge))
            (snapshot (sbcl-agent::provider-context-bundle->request-snapshot bundle))
            (request (sbcl-agent::make-provider-request-from-session "snapshot conversion" session)))
       (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
@@ -250,7 +391,24 @@
                     "provider request should consume the request snapshot runtime summary")
       (assert-equal (sbcl-agent::provider-request-snapshot-policy-summary snapshot)
                     (sbcl-agent::provider-request-policy-summary request)
-                    "provider request should consume the request snapshot policy summary"))))
+                    "provider request should consume the request snapshot policy summary")
+      (assert-equal (sbcl-agent::provider-request-snapshot-retrieval-dossier snapshot)
+                    (sbcl-agent::provider-request-retrieval-dossier request)
+                    "provider request should consume the request snapshot retrieval dossier")
+      (assert-equal (sbcl-agent::cognition-bundle-summary
+                     (sbcl-agent::provider-request-snapshot-cognition-bundle snapshot))
+                    (sbcl-agent::cognition-bundle-summary
+                     (sbcl-agent::provider-request-cognition-bundle request))
+                    "provider request should consume the request snapshot cognition bundle")
+      (assert-equal (sbcl-agent::provider-request-snapshot-reasoning-brief snapshot)
+                    (sbcl-agent::provider-request-reasoning-brief request)
+                    "provider request should consume the request snapshot reasoning brief")
+      (assert-equal (sbcl-agent::provider-request-snapshot-planning-brief snapshot)
+                    (sbcl-agent::provider-request-planning-brief request)
+                    "provider request should consume the request snapshot planning brief")
+      (assert-equal (sbcl-agent::provider-request-snapshot-outcome-brief snapshot)
+                    (sbcl-agent::provider-request-outcome-brief request)
+                    "provider request should consume the request snapshot outcome brief"))))
 
 (defun provider-summaries-prefer-environment-snapshot-domains-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-snapshot-domains/"))

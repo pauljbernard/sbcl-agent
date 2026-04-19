@@ -36,19 +36,21 @@ Basic verification from the repository root:
 ```bash
 ./bin/sbcl-agent doctor
 ./bin/run-tests
+./bin/run-evals
 ```
 
 ## Runtime Configuration
 
 Environment variables:
 
-- `TUTOR_CODEX_PROVIDER`: provider override; if unset, the runtime chooses `openai-compatible` when an API key is available and otherwise falls back to `mock`
+- `TUTOR_CODEX_PROVIDER`: provider override; if unset, the runtime chooses `openai-compatible` when an OpenAI-style key is available, `anthropic` when only an Anthropic key is available, and otherwise falls back to `mock`
 - `TUTOR_CODEX_MODEL`: primary model name, defaults to `gpt-5`
 - `TUTOR_CODEX_FAST_MODEL`: low-latency model name used for lighter asks, defaults to `gpt-4.1-mini`
-- `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
-- `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
+- `TUTOR_CODEX_API_BASE`: base URL for OpenAI-compatible and local-compatible providers
+- `OPENAI_API_KEY`: API key for the OpenAI-compatible provider family
+- `ANTHROPIC_API_KEY`: API key for the Anthropic provider family
 
-If `OPENAI_API_KEY` is unset, the runtime falls back to `openai-api-key.key` in the current working directory.
+If `OPENAI_API_KEY` is unset, the runtime falls back to `openai-api-key.key` in the current working directory. If `ANTHROPIC_API_KEY` is unset, it falls back to `anthropic-api-key.key` in the current working directory.
 
 ## Top-Level CLI Commands
 
@@ -74,6 +76,19 @@ Starts the shell with interactive streaming enabled by default for `(ask ...)`. 
 
 Runs an external command through the CLI surface.
 
+### `./bin/sbcl-agent provider <subcommand>`
+
+Runs the non-shell provider control surface as JSON service envelopes.
+
+Important subcommands:
+
+- `show`: list configured provider profiles, the active profile, and routing policy
+- `route`: inspect the last recorded provider-route decision
+- `preview --prompt "..."`: preview which profile would handle a prompt and why, without mutating the recorded last route
+- `routing --mode auto|manual`: switch provider routing policy
+- `configure --profile ... --provider ... --model ...`: add or update a provider profile
+- `use --profile ...`: activate a configured profile
+
 ### `./bin/sbcl-agent rgp <subcommand>`
 
 Runs the RGP governed-runtime bridge.
@@ -95,6 +110,10 @@ Runs the test suite.
 ### `./bin/run-coverage`
 
 Runs the test suite with coverage collection.
+
+### `./bin/run-evals`
+
+Runs the current evaluation suite used to check retrieval, routing, and broader agent behavior against repository scenarios.
 
 ## Interactive Shell Basics
 
@@ -200,6 +219,29 @@ Useful commands:
 That orientation is now environment-first in a stricter sense: the command derives active thread and turn context from persisted Environment conversation state, so it remains accurate immediately after environment load without depending on a fresh compatibility-session resync.
 
 `environment/load` now also renders as an environment-first operation in the shell. The result output shows the loaded environment id, compatibility session id, and operator posture summary so a restored environment is legible before the next command is issued.
+
+Provider orientation is also now environment-backed. Use:
+
+- `(provider/show)`
+- `(provider/list)`
+- `(provider/use "profile")`
+- `(provider/configure "profile" :provider "name" :model "name" ...)`
+- `(provider/routing :auto)`
+- `(provider/routing :manual)`
+- `(provider/route)`
+
+These commands let the operator inspect and steer the same provider-profile and routing model that the future UX should consume through the non-shell CLI or service boundary.
+
+The non-shell equivalents are:
+
+- `./bin/sbcl-agent provider show`
+- `./bin/sbcl-agent provider route`
+- `./bin/sbcl-agent provider preview --prompt "..."`
+- `./bin/sbcl-agent provider routing --mode auto|manual`
+- `./bin/sbcl-agent provider configure --profile ... --provider ... --model ...`
+- `./bin/sbcl-agent provider use --profile ...`
+
+Those commands exist so provider control is not trapped behind shell-only forms when future UX and service clients need the same behavior.
 
 If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied. A resumed turn may also trigger a provider follow-up run so the turn can finish with a fresh assistant message instead of stopping at raw action execution.
 
@@ -437,16 +479,79 @@ export OPENAI_API_KEY=...
 
 You can also place the key in `openai-api-key.key` at the repository root.
 
+### Other supported provider families
+
+The current runtime also supports:
+
+- Anthropic
+- Google and Gemini-compatible profiles
+- Meta-compatible profiles
+- LM Studio and other local-compatible profiles
+
+In practice, those are usually managed through provider profiles rather than only through process-wide environment variables.
+
+Typical Anthropic configuration:
+
+```bash
+export TUTOR_CODEX_PROVIDER=anthropic
+export TUTOR_CODEX_MODEL=claude-sonnet-4-20250514
+export ANTHROPIC_API_KEY=...
+./bin/sbcl-agent chat
+```
+
+For local and OpenAI-compatible transports, `TUTOR_CODEX_API_BASE` points the runtime at the target endpoint. That includes OpenAI-style gateways, LM Studio, and other local-compatible deployments.
+
+### Provider profiles and routing
+
+The provider layer is now environment-native rather than only process-configured.
+
+You can:
+
+- configure multiple named profiles
+- mark one profile active
+- let the runtime auto-route across profiles
+- force manual routing
+- preview a route for a prompt before execution
+
+The router now uses more than prompt text alone. It can factor in:
+
+- prompt shape such as deep review, quick-turn, local-development, or code-execution intent
+- governance posture such as incidents, blocked work, or pending validation
+- cognition context such as mutation likelihood, validation strategy, and execution strategy
+- provider-profile metadata such as latency, review bias, execution bias, and locality
+
+That means provider selection is part of the governed runtime, not only startup configuration.
+
+The provider profile layer is also how the presentation tier should interact with model choice. A UX can expose profile creation, route preview, active-profile switching, and routing policy toggles without embedding shell-specific command strings.
+
+### Retrieval and cognition in the default loop
+
+The current agent path does not rely only on recent transcript plus a generic prompt summary anymore.
+
+Before provider invocation, the runtime can now assemble:
+
+- a retrieval intent
+- a retrieval plan
+- an environment dossier
+- a cognition bundle
+- reasoning and planning briefs
+- prior-outcome reuse and self-improvement context
+- execution and validation strategy
+
+Those structures shape both provider routing and turn execution. They are part of the current behavior, not only future design notes.
+
 ## Recommended First Operator Flow
 
 1. Run `./bin/sbcl-agent doctor`.
 2. Run `./bin/run-tests`.
-3. Start `./bin/sbcl-agent chat`.
-4. Evaluate a simple Lisp form such as `(+ 100 203)`.
-5. Create a thread with `(thread/new :title "first session")`.
-6. Run `(say "Summarize the current architecture." :stream t)`.
-7. Inspect the result with `(turn/status)` and `(thread/show)`.
-8. Grant only the capabilities you actually need before stateful operations.
+3. Run `./bin/run-evals`.
+4. Start `./bin/sbcl-agent chat`.
+5. Evaluate a simple Lisp form such as `(+ 100 203)`.
+6. Inspect provider state with `(provider/show)` or `./bin/sbcl-agent provider show`.
+7. Create a thread with `(thread/new :title "first session")`.
+8. Run `(say "Summarize the current architecture." :stream t)`.
+9. Inspect the result with `(turn/status)` and `(thread/show)`.
+10. Grant only the capabilities you actually need before stateful operations.
 
 ## Operational Caveats
 

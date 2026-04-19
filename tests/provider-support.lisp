@@ -39,6 +39,23 @@
                    :payload '((:write "tmp/generated.txt" "hello from patch"))))
    :metadata '(:provider :patch-action-test)))
 
+(defclass weak-grounding-patch-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider weak-grounding-patch-provider))
+  "weak-grounding-patch-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider weak-grounding-patch-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider weak-grounding-patch-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a patch even though the request was historical recall."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :patch
+                   :payload '((:write "tmp/weak-grounding.txt" "weak grounding patch"))))
+   :metadata '(:provider :weak-grounding-patch-test)))
+
 (defclass journal-date-time-provider (sbcl-agent::provider) ())
 
 (defmethod sbcl-agent::provider-name ((provider journal-date-time-provider))
@@ -153,6 +170,8 @@
 (defmethod sbcl-agent::send-request ((provider followup-patch-provider) request)
   (declare (ignore provider))
   (let* ((turn-context (sbcl-agent::provider-request-turn-context request))
+         (retrieval-dossier (sbcl-agent::provider-request-retrieval-dossier request))
+         (outcome-brief (sbcl-agent::provider-request-outcome-brief request))
          (operations (getf turn-context :operations))
          (completed-patch (find "assistant-patch"
                                 operations
@@ -160,13 +179,78 @@
                                 :test #'string=)))
     (if (and completed-patch
              (eq (getf completed-patch :status) :completed))
-        (sbcl-agent::make-assistant-response
-         :message "Patch applied successfully. Follow-up summary recorded."
-         :actions '()
-         :metadata '(:provider :followup-patch-test :phase :followup))
+        (progn
+          (unless (eq (getf retrieval-dossier :phase) :post-mutation)
+            (error "followup-patch-provider expected a post-mutation retrieval dossier"))
+          (unless (eq (getf outcome-brief :outcome-mode) :expectation-vs-observation)
+            (error "followup-patch-provider expected an outcome brief for closed-loop reasoning"))
+          (sbcl-agent::make-assistant-response
+           :message "Patch applied successfully. Follow-up summary recorded."
+           :actions '()
+           :metadata (list :provider :followup-patch-test
+                           :phase :followup
+                           :retrieval-phase (getf retrieval-dossier :phase)
+                           :outcome-next-step (getf outcome-brief :recommended-next-step)
+                           :observed-consequences-count
+                           (length (or (getf retrieval-dossier :observed-consequences) '())))))
         (sbcl-agent::make-assistant-response
          :message "Prepared a patch that requires approval before follow-up."
          :actions (list (sbcl-agent::make-assistant-action
                          :type :patch
                          :payload '((:write "tmp/followup-generated.txt" "hello from followup patch"))))
          :metadata '(:provider :followup-patch-test :phase :initial)))))
+
+(defclass followup-validation-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider followup-validation-provider))
+  "followup-validation-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider followup-validation-provider))
+  '(:chat :structured-response :action-proposals :turn-followup))
+
+(defmethod sbcl-agent::send-request ((provider followup-validation-provider) request)
+  (declare (ignore provider))
+  (let* ((turn-context (sbcl-agent::provider-request-turn-context request))
+         (retrieval-dossier (sbcl-agent::provider-request-retrieval-dossier request))
+         (outcome-brief (sbcl-agent::provider-request-outcome-brief request))
+         (operations (getf turn-context :operations))
+         (completed-eval (find "assistant-eval"
+                               operations
+                               :key (lambda (entry) (getf entry :name))
+                               :test #'string=)))
+    (if (and completed-eval
+             (eq (getf completed-eval :status) :completed))
+        (sbcl-agent::make-assistant-response
+         :message "Runtime mutation completed. Proposing a follow-up patch before validation."
+         :actions (list (sbcl-agent::make-assistant-action
+                         :type :patch
+                         :payload '((:write "tmp/followup-validation-generated.txt"
+                                            "should defer until validation"))))
+         :metadata (list :provider :followup-validation-test
+                         :phase :followup
+                         :retrieval-phase (getf retrieval-dossier :phase)
+                         :outcome-next-step (and outcome-brief
+                                                 (getf outcome-brief :recommended-next-step))))
+        (sbcl-agent::make-assistant-response
+         :message "Prepared a mutating eval that requires approval before follow-up."
+         :actions (list (sbcl-agent::make-assistant-action
+                         :type :eval
+                         :payload '(:form "(progn (defparameter *followup-validation-state* nil) (setf *followup-validation-state* :mutated))"
+                                   :mutating t)))
+         :metadata '(:provider :followup-validation-test :phase :initial)))))
+
+(defclass slow-test-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider slow-test-provider))
+  "slow-test-provider")
+
+(defmethod sbcl-agent::provider-capabilities ((provider slow-test-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider slow-test-provider) request)
+  (declare (ignore provider))
+  (sleep 0.2)
+  (sbcl-agent::make-assistant-response
+   :message (format nil "Completed ~A" (sbcl-agent::provider-request-prompt request))
+   :actions '()
+   :metadata '(:provider :slow-test-provider)))

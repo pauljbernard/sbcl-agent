@@ -30,11 +30,18 @@
                 (getf action-report :staged-actions))
         :key #'assistant-action-type))
 
+(defun action-report-assessment (action-report action)
+  (find action
+        (getf action-report :action-assessments)
+        :key (lambda (entry) (getf entry :action))
+        :test #'eq))
+
 (defun record-assistant-action-operations (session thread turn action-report &key work-item)
   (let ((records '()))
     (dolist (entry (getf action-report :immediate-results))
       (let* ((action (getf entry :action))
              (result (getf entry :result))
+             (assessment (action-report-assessment action-report action))
          (operation (start-operation session
                                          thread
                                          turn
@@ -44,6 +51,7 @@
                                          :policy-decision (assistant-action-policy-decision action :allowed)
                                          :metadata (list :assistant-action-type (assistant-action-type action)
                                                          :assistant-action action
+                                                         :action-assessment assessment
                                                          :work-item-id (and work-item (work-item-id work-item))
                                                          :source :say))))
         (complete-operation session
@@ -56,6 +64,7 @@
         (push operation records)))
     (dolist (action (getf action-report :staged-actions))
       (let* ((disposition (staged-assistant-action-disposition action))
+             (assessment (action-report-assessment action-report action))
          (operation (start-operation session
                                          thread
                                          turn
@@ -65,6 +74,7 @@
                                          :policy-decision (assistant-action-policy-decision action disposition)
                                          :metadata (list :assistant-action-type (assistant-action-type action)
                                                          :assistant-action action
+                                                         :action-assessment assessment
                                                          :work-item-id (and work-item (work-item-id work-item))
                                                          :source :say))))
         (complete-operation session
@@ -76,19 +86,54 @@
                                   :action-type (assistant-action-type action))
                             :status (staged-assistant-action-status action)
                             :metadata (list :execution (if (eq disposition :approval-required)
-                                                           :awaiting-approval
+                                                            :awaiting-approval
                                                            :staged)))
+        (push operation records)))
+    (dolist (action (getf action-report :deferred-actions))
+      (let* ((disposition (deferred-assistant-action-disposition action))
+             (assessment (action-report-assessment action-report action))
+             (operation (start-operation session
+                                         thread
+                                         turn
+                                         :assistant-action
+                                         (action-operation-name action)
+                                         (assistant-action-payload action)
+                                         :policy-decision (assistant-action-policy-decision action disposition)
+                                         :metadata (list :assistant-action-type (assistant-action-type action)
+                                                         :assistant-action action
+                                                         :action-assessment assessment
+                                                         :work-item-id (and work-item (work-item-id work-item))
+                                                         :source :say))))
+        (complete-operation session
+                            thread
+                            turn
+                            operation
+                            (list :deferred-p t
+                                  :reason (or (getf assessment :reason)
+                                              "Governed mutation deferred because blockers, incidents, or pending validation remain active.")
+                                  :action-type (assistant-action-type action))
+                            :status (deferred-assistant-action-status action)
+                            :metadata '(:execution :deferred))
         (push operation records)))
     (nreverse records)))
 
 (defun make-say-turn-result (thread user-message assistant-message turn response action-report
-                              &key streamed-p stream-event-count stream-events action-results)
+                              &key streamed-p stream-event-count stream-events action-results
+                                retrieval-summary reasoning-summary planning-summary
+                                outcome-summary cognition-summary action-agenda-summary)
   (append (list :response response
                 :staged-action-count (length (getf action-report :staged-actions))
+                :deferred-action-count (length (getf action-report :deferred-actions))
                 :immediate-action-count (length (getf action-report :immediate-actions))
                 :action-results action-results
                 :streamed-p streamed-p
-                :stream-event-count stream-event-count)
+                :stream-event-count stream-event-count
+                :retrieval-summary retrieval-summary
+                :reasoning-summary reasoning-summary
+                :planning-summary planning-summary
+                :outcome-summary outcome-summary
+                :cognition-summary cognition-summary
+                :action-agenda-summary action-agenda-summary)
           (when stream-events
             (list :stream-events stream-events))
           (conversation-turn-summary thread user-message assistant-message turn)))
@@ -106,12 +151,238 @@
                   (string-upcase (string suffix)))
           :keyword))
 
+(defun provider-request-retrieval-summary (request)
+  (let* ((dossier (provider-request-retrieval-dossier request))
+         (intent (and dossier (getf dossier :intent)))
+         (plan (and dossier (getf dossier :plan))))
+    (when dossier
+      (list :category (getf intent :category)
+            :domains (getf intent :domains)
+            :expansion-posture (getf plan :expansion-posture)
+            :gap-count (length (or (getf dossier :gaps) '()))))))
+
+(defun provider-request-reasoning-summary (request)
+  (let ((brief (provider-request-reasoning-brief request)))
+    (when brief
+      (list :reasoning-mode (getf brief :reasoning-mode)
+            :fact-count (length (or (getf brief :facts) '()))
+            :uncertainty-count (length (or (getf brief :uncertainties) '()))
+            :blocker-count (length (or (getf brief :blockers) '()))
+            :validation-obligation-count (length (or (getf brief :validation-obligations) '()))
+            :evidence-action-count (length (or (getf brief :evidence-actions) '()))))))
+
+(defun provider-request-planning-summary (request)
+  (let ((brief (provider-request-planning-brief request)))
+    (when brief
+      (list :planning-mode (getf brief :planning-mode)
+            :step-count (length (or (getf brief :ordered-steps) '()))
+            :constraint-count (length (or (getf brief :constraints) '()))
+            :success-criteria-count (length (or (getf brief :success-criteria) '()))))))
+
+(defun provider-request-outcome-summary (request)
+  (let ((brief (provider-request-outcome-brief request)))
+    (when brief
+      (list :outcome-mode (getf brief :outcome-mode)
+            :expected-phase-count (length (or (getf brief :expected-phases) '()))
+            :mismatch-count (length (or (getf brief :mismatches) '()))
+            :recommended-next-step (getf brief :recommended-next-step)))))
+
+(defun provider-request-cognition-summary (request)
+  (let ((bundle (provider-request-cognition-bundle request)))
+    (cognition-bundle-summary bundle)))
+
+(defun provider-request-action-agenda-summary (request)
+  (let* ((bundle (provider-request-cognition-bundle request))
+         (agenda (and bundle (cognition-bundle-action-agenda bundle))))
+    (when agenda
+      (list :step-count (getf agenda :step-count)
+            :primary-step (getf agenda :primary-step)))))
+
+(defun record-turn-memory-entry (session thread turn request prompt assistant-message)
+  (let ((bundle (provider-request-cognition-bundle request)))
+    (when bundle
+      (remember-turn-outcome-memory session
+                                    thread
+                                    turn
+                                    prompt
+                                    bundle
+                                    assistant-message))))
+
+(defun build-turn-provider-request (session prompt thread turn operator-mode stream-p
+                                    &key retrieval-dossier)
+  (make-provider-request-from-session prompt
+                                     session
+                                     :thread thread
+                                     :turn turn
+                                     :retrieval-dossier retrieval-dossier
+                                     :operator-mode operator-mode
+                                     :stream-p stream-p))
+
+(defun record-turn-retrieval-dossier (session thread turn request source
+                                      &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                      :pre-prompt)))
+  (let ((dossier (provider-request-retrieval-dossier request))
+        (summary (provider-request-retrieval-summary request)))
+    (when dossier
+      (append-session-event session
+                            :retrieval-dossier
+                            dossier
+                            :family :retrieval
+                            :entity-id (turn-id turn)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :phase phase
+                                            :retrieval-summary summary))
+      (emit-conversation-progress (conversation-progress-phase source :retrieval)
+                                  (list :thread-id (thread-id thread)
+                                        :turn-id (turn-id turn)
+                                        :phase phase
+                                        :retrieval-summary summary)))))
+
+(defun record-turn-reasoning-brief (session thread turn request source
+                                    &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                    :pre-prompt)))
+  (let ((brief (provider-request-reasoning-brief request))
+        (summary (provider-request-reasoning-summary request)))
+    (when brief
+      (append-session-event session
+                            :reasoning-brief
+                            brief
+                            :family :retrieval
+                            :entity-id (turn-id turn)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :phase phase
+                                            :reasoning-summary summary))
+      (emit-conversation-progress (conversation-progress-phase source :reasoning)
+                                  (list :thread-id (thread-id thread)
+                                        :turn-id (turn-id turn)
+                                        :phase phase
+                                        :reasoning-summary summary)))))
+
+(defun record-turn-planning-brief (session thread turn request source
+                                   &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                   :pre-prompt)))
+  (let ((brief (provider-request-planning-brief request))
+        (summary (provider-request-planning-summary request)))
+    (when brief
+      (append-session-event session
+                            :planning-brief
+                            brief
+                            :family :retrieval
+                            :entity-id (turn-id turn)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :phase phase
+                                            :planning-summary summary))
+      (emit-conversation-progress (conversation-progress-phase source :planning)
+                                  (list :thread-id (thread-id thread)
+                                        :turn-id (turn-id turn)
+                                        :phase phase
+                                        :planning-summary summary)))))
+
+(defun record-turn-outcome-brief (session thread turn request source
+                                  &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                  :pre-prompt)))
+  (let ((brief (provider-request-outcome-brief request))
+        (summary (provider-request-outcome-summary request)))
+    (when brief
+      (append-session-event session
+                            :outcome-brief
+                            brief
+                            :family :retrieval
+                            :entity-id (turn-id turn)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :phase phase
+                                            :outcome-summary summary))
+      (emit-conversation-progress (conversation-progress-phase source :outcome)
+                                  (list :thread-id (thread-id thread)
+                                        :turn-id (turn-id turn)
+                                        :phase phase
+                                        :outcome-summary summary)))))
+
+(defun record-turn-cognition-bundle (session thread turn request source
+                                     &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                     :pre-prompt)))
+  (let ((bundle (provider-request-cognition-bundle request))
+        (summary (provider-request-cognition-summary request)))
+    (when bundle
+      (append-session-event session
+                            :cognition-bundle
+                            (list :retrieval-dossier (cognition-bundle-retrieval-dossier bundle)
+                                  :retrieval-focus-plan (cognition-bundle-retrieval-focus-plan bundle)
+                                  :prior-outcome-brief (cognition-bundle-prior-outcome-brief bundle)
+                                  :reasoning-brief (cognition-bundle-reasoning-brief bundle)
+                                  :planning-brief (cognition-bundle-planning-brief bundle)
+                                  :execution-strategy (cognition-bundle-execution-strategy bundle)
+                                  :validation-strategy (cognition-bundle-validation-strategy bundle)
+                                  :validation-plan (cognition-bundle-validation-plan bundle)
+                                  :action-agenda (cognition-bundle-action-agenda bundle)
+                                  :outcome-brief (cognition-bundle-outcome-brief bundle))
+                            :family :retrieval
+                            :entity-id (turn-id turn)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :phase phase
+                                            :cognition-summary summary))
+      (emit-conversation-progress (conversation-progress-phase source :cognition)
+                                  (list :thread-id (thread-id thread)
+                                        :turn-id (turn-id turn)
+                                        :phase phase
+                                        :cognition-summary summary)))))
+
+(defun materially-mutating-action-result-p (entry)
+  (let* ((action (getf entry :action))
+         (policy-id (and action (assistant-action-policy-id action))))
+    (and action
+         (case (assistant-action-type action)
+           (:patch t)
+           (:eval (mutating-eval-action-p action))
+           (:tool (member policy-id '(:workspace-write :git-write :process-run :runtime-reload)
+                          :test #'eq))
+           (otherwise nil)))))
+
+(defun action-results-post-mutation-p (results)
+  (find-if #'materially-mutating-action-result-p results))
+
+(defun build-post-mutation-provider-request (session prompt thread turn operator-mode action-results)
+  (let* ((dossier (service-response-data
+                   (query-post-mutation-retrieval-dossier-service session
+                                                                  prompt
+                                                                  action-results
+                                                                  :operator-mode operator-mode)))
+         (reasoning-brief (build-reasoning-brief (provider-session-summary session)
+                                                 (provider-environment-context session)
+                                                 dossier))
+         (planning-brief (build-planning-brief prompt reasoning-brief dossier))
+         (outcome-brief (build-outcome-brief planning-brief reasoning-brief dossier)))
+    (make-provider-request-from-session prompt
+                                        session
+                                        :thread thread
+                                        :turn turn
+                                        :retrieval-dossier dossier
+                                        :outcome-brief outcome-brief
+                                        :operator-mode operator-mode
+                                        :stream-p nil)))
+
 (defun run-conversation-turn-streaming (provider session thread prompt
                                          &key (source :say) (operator-mode :conversation))
   (let* ((user-message (create-message session thread :user prompt
                                        :metadata (list :source source)))
          (turn (start-turn session thread user-message
                            :metadata (list :source source :streamed-p t)))
+         (request (build-turn-provider-request session prompt thread turn operator-mode t))
          (operation (start-operation session
                                      thread
                                      turn
@@ -119,11 +390,23 @@
                                      (provider-name provider)
                                      (list :prompt prompt :streamed-p t)
                                      :policy-decision (say-provider-operation-policy-decision)
-                                     :metadata (list :source source)))
+                                     :metadata (list :source source
+                                                     :retrieval-summary
+                                                     (provider-request-retrieval-summary request)
+                                                     :cognition-summary
+                                                     (provider-request-cognition-summary request)
+                                                     :reasoning-summary
+                                                     (provider-request-reasoning-summary request)
+                                                     :planning-summary
+                                                     (provider-request-planning-summary request))))
          (run-id (format nil "provider-run-~A" (operation-id operation)))
          (events '()))
-    (let* ((response (stream-prompt provider
-                                    prompt
+    (record-turn-retrieval-dossier session thread turn request source)
+    (record-turn-reasoning-brief session thread turn request source)
+    (record-turn-planning-brief session thread turn request source)
+    (record-turn-cognition-bundle session thread turn request source)
+    (let* ((response (stream-provider-request provider
+                                    request
                                     (lambda (event)
                                       (setf (provider-event-run-id event) run-id
                                             (provider-event-operation-id event) (operation-id operation)
@@ -142,21 +425,30 @@
                                                                                 :thread-id (thread-id thread)
                                                                                 :turn-id (turn-id turn)
                                                                                 :run-id run-id
-                                                                                :operation-id (operation-id operation))))
-                                    session
-                                    :thread thread
-                                    :turn turn
-                                    :operator-mode operator-mode))
-           (action-report (process-response-actions response session))
-           (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
+                                                                                :operation-id (operation-id operation))))))
+           (action-report (process-response-actions response
+                                                   session
+                                                   :cognition-bundle
+                                                   (provider-request-cognition-bundle request)
+                                                   :reasoning-brief
+                                                   (provider-request-reasoning-brief request)
+                                                   :retrieval-dossier
+                                                   (provider-request-retrieval-dossier request)))
+           (work-item (ensure-turn-mutation-work-item session
+                                                     thread
+                                                     turn
+                                                     action-report
+                                                     prompt
+                                                     :cognition-bundle (provider-request-cognition-bundle request)))
            (immediate-results (getf action-report :immediate-results))
            (completed-operation (complete-operation session
                                                    thread
                                                    turn
                                                    operation
                                                    (list :message (assistant-response-message response)
-                                                         :stream-event-count (length events)
-                                                         :staged-action-count (length (getf action-report :staged-actions)))
+                                                        :stream-event-count (length events)
+                                                        :staged-action-count (length (getf action-report :staged-actions))
+                                                        :deferred-action-count (length (getf action-report :deferred-actions)))
                                                    :metadata (list :model-response-p t)))
            (action-operations (record-assistant-action-operations session
                                                                   thread
@@ -178,11 +470,23 @@
                                                           :action-operation-ids (mapcar #'operation-id action-operations)))))
       (append-transcript-entry session :assistant (assistant-response->string response))
       (append-session-event session :assistant-response response)
+      (record-turn-memory-entry session
+                                thread
+                                completed-turn
+                                request
+                                prompt
+                                (assistant-response->string response))
       (emit-conversation-progress (conversation-progress-phase source :response)
                                   (list :message (assistant-response-message response)
                                         :staged-action-count (length (getf action-report :staged-actions))
+                                        :deferred-action-count (length (getf action-report :deferred-actions))
                                         :immediate-action-count (length (getf action-report :immediate-actions))
                                         :stream-event-count (length events)
+                                        :retrieval-summary (provider-request-retrieval-summary request)
+                                        :cognition-summary (provider-request-cognition-summary request)
+                                        :action-agenda-summary (provider-request-action-agenda-summary request)
+                                        :reasoning-summary (provider-request-reasoning-summary request)
+                                        :planning-summary (provider-request-planning-summary request)
                                         :thread-id (thread-id thread)
                                         :turn-id (turn-id completed-turn)))
       (make-say-turn-result thread
@@ -194,7 +498,13 @@
                             :streamed-p t
                             :stream-event-count (length events)
                             :stream-events events
-                            :action-results immediate-results))))
+                            :action-results immediate-results
+                            :retrieval-summary (provider-request-retrieval-summary request)
+                            :cognition-summary (provider-request-cognition-summary request)
+                            :action-agenda-summary (provider-request-action-agenda-summary request)
+                            :reasoning-summary (provider-request-reasoning-summary request)
+                            :planning-summary (provider-request-planning-summary request)
+                            :outcome-summary (provider-request-outcome-summary request)))))
 
 (defun run-conversation-turn-sync (provider session thread prompt
                                     &key (source :say) (operator-mode :conversation))
@@ -202,6 +512,7 @@
                                        :metadata (list :source source)))
          (turn (start-turn session thread user-message
                            :metadata (list :source source :streamed-p nil)))
+         (request (build-turn-provider-request session prompt thread turn operator-mode nil))
          (operation (start-operation session
                                      thread
                                      turn
@@ -209,15 +520,35 @@
                                      (provider-name provider)
                                      (list :prompt prompt :streamed-p nil)
                                      :policy-decision (say-provider-operation-policy-decision)
-                                     :metadata (list :source source)))
-         (response (send-prompt provider
-                                prompt
-                                session
-                                :thread thread
-                                :turn turn
-                                :operator-mode operator-mode))
-         (action-report (process-response-actions response session))
-         (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
+                                     :metadata (list :source source
+                                                     :retrieval-summary
+                                                     (provider-request-retrieval-summary request)
+                                                     :cognition-summary
+                                                     (provider-request-cognition-summary request)
+                                                     :reasoning-summary
+                                                     (provider-request-reasoning-summary request)
+                                                     :planning-summary
+                                                     (provider-request-planning-summary request))))
+         (response (progn
+                     (record-turn-retrieval-dossier session thread turn request source)
+                     (record-turn-reasoning-brief session thread turn request source)
+                     (record-turn-planning-brief session thread turn request source)
+                     (record-turn-cognition-bundle session thread turn request source)
+                     (send-provider-request provider request)))
+         (action-report (process-response-actions response
+                                                 session
+                                                 :cognition-bundle
+                                                 (provider-request-cognition-bundle request)
+                                                 :reasoning-brief
+                                                 (provider-request-reasoning-brief request)
+                                                 :retrieval-dossier
+                                                 (provider-request-retrieval-dossier request)))
+         (work-item (ensure-turn-mutation-work-item session
+                                                   thread
+                                                   turn
+                                                   action-report
+                                                   prompt
+                                                   :cognition-bundle (provider-request-cognition-bundle request)))
          (immediate-results (getf action-report :immediate-results))
          (completed-operation (complete-operation session
                                                  thread
@@ -225,7 +556,8 @@
                                                  operation
                                                  (list :message (assistant-response-message response)
                                                        :stream-event-count 0
-                                                       :staged-action-count (length (getf action-report :staged-actions)))
+                                                       :staged-action-count (length (getf action-report :staged-actions))
+                                                       :deferred-action-count (length (getf action-report :deferred-actions)))
                                                  :metadata (list :model-response-p t)))
          (action-operations (record-assistant-action-operations session
                                                                 thread
@@ -245,11 +577,23 @@
                                                         :action-operation-ids (mapcar #'operation-id action-operations)))))
     (append-transcript-entry session :assistant (assistant-response->string response))
     (append-session-event session :assistant-response response)
+    (record-turn-memory-entry session
+                              thread
+                              completed-turn
+                              request
+                              prompt
+                              (assistant-response->string response))
     (emit-conversation-progress (conversation-progress-phase source :response)
                                 (list :message (assistant-response-message response)
                                       :staged-action-count (length (getf action-report :staged-actions))
+                                      :deferred-action-count (length (getf action-report :deferred-actions))
                                       :immediate-action-count (length (getf action-report :immediate-actions))
                                       :stream-event-count 0
+                                      :retrieval-summary (provider-request-retrieval-summary request)
+                                      :cognition-summary (provider-request-cognition-summary request)
+                                      :action-agenda-summary (provider-request-action-agenda-summary request)
+                                      :reasoning-summary (provider-request-reasoning-summary request)
+                                      :planning-summary (provider-request-planning-summary request)
                                       :thread-id (thread-id thread)
                                       :turn-id (turn-id completed-turn)))
     (make-say-turn-result thread
@@ -260,7 +604,13 @@
                           action-report
                           :streamed-p nil
                           :stream-event-count 0
-                          :action-results immediate-results)))
+                          :action-results immediate-results
+                          :retrieval-summary (provider-request-retrieval-summary request)
+                          :cognition-summary (provider-request-cognition-summary request)
+                          :action-agenda-summary (provider-request-action-agenda-summary request)
+                          :reasoning-summary (provider-request-reasoning-summary request)
+                          :planning-summary (provider-request-planning-summary request)
+                          :outcome-summary (provider-request-outcome-summary request))))
 
 (defun run-conversation-turn (provider session prompt
                               &key stream-p (source :say) (operator-mode :conversation))
@@ -296,6 +646,7 @@
 
 (defun continue-conversation-turn (provider session thread turn
                                     &key (source (or (getf (turn-metadata turn) :source) :say))
+                                      action-results
                                       (operator-mode :conversation))
   (let* ((user-message (find-message session (turn-user-message-id turn)))
          (prompt (and user-message (message-content user-message))))
@@ -305,7 +656,16 @@
                                 turn
                                 :metadata (list :followup-source source
                                                 :followup-operator-mode operator-mode))
-    (let* ((operation (start-operation session
+    (let* ((post-mutation-p (action-results-post-mutation-p action-results))
+           (request (if post-mutation-p
+                        (build-post-mutation-provider-request session
+                                                             prompt
+                                                             thread
+                                                             turn
+                                                             operator-mode
+                                                             action-results)
+                        (build-turn-provider-request session prompt thread turn operator-mode nil)))
+           (operation (start-operation session
                                        thread
                                        turn
                                        :provider-run
@@ -313,15 +673,73 @@
                                        (list :prompt prompt :followup-p t)
                                        :policy-decision (say-provider-operation-policy-decision)
                                        :metadata (list :source source
-                                                       :followup-p t)))
-           (response (send-prompt provider
-                                  prompt
-                                  session
-                                  :thread thread
-                                  :turn turn
-                                  :operator-mode operator-mode))
-           (action-report (process-response-actions response session))
-           (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
+                                                       :followup-p t
+                                                       :retrieval-summary
+                                                       (provider-request-retrieval-summary request)
+                                                       :cognition-summary
+                                                       (provider-request-cognition-summary request)
+                                                       :reasoning-summary
+                                                       (provider-request-reasoning-summary request)
+                                                       :planning-summary
+                                                       (provider-request-planning-summary request)
+                                                       :outcome-summary
+                                                       (provider-request-outcome-summary request))))
+           (response (progn
+                       (record-turn-retrieval-dossier session
+                                                      thread
+                                                      turn
+                                                      request
+                                                      source
+                                                      :phase (if post-mutation-p
+                                                                 :post-mutation
+                                                                 :pre-prompt))
+                       (record-turn-reasoning-brief session
+                                                    thread
+                                                    turn
+                                                    request
+                                                    source
+                                                    :phase (if post-mutation-p
+                                                               :post-mutation
+                                                               :pre-prompt))
+                       (record-turn-planning-brief session
+                                                   thread
+                                                   turn
+                                                   request
+                                                   source
+                                                   :phase (if post-mutation-p
+                                                              :post-mutation
+                                                              :pre-prompt))
+                       (record-turn-cognition-bundle session
+                                                     thread
+                                                     turn
+                                                     request
+                                                     source
+                                                     :phase (if post-mutation-p
+                                                                :post-mutation
+                                                                :pre-prompt))
+                       (record-turn-outcome-brief session
+                                                  thread
+                                                  turn
+                                                  request
+                                                  source
+                                                  :phase (if post-mutation-p
+                                                             :post-mutation
+                                                             :pre-prompt))
+                       (send-provider-request provider request)))
+           (action-report (process-response-actions response
+                                                   session
+                                                   :cognition-bundle
+                                                   (provider-request-cognition-bundle request)
+                                                   :reasoning-brief
+                                                   (provider-request-reasoning-brief request)
+                                                   :retrieval-dossier
+                                                   (provider-request-retrieval-dossier request)))
+           (work-item (ensure-turn-mutation-work-item session
+                                                     thread
+                                                     turn
+                                                     action-report
+                                                     prompt
+                                                     :cognition-bundle (provider-request-cognition-bundle request)))
            (immediate-results (getf action-report :immediate-results))
            (completed-operation (complete-operation session
                                                    thread
@@ -330,6 +748,7 @@
                                                    (list :message (assistant-response-message response)
                                                          :stream-event-count 0
                                                          :staged-action-count (length (getf action-report :staged-actions))
+                                                         :deferred-action-count (length (getf action-report :deferred-actions))
                                                          :followup-p t)
                                                    :metadata (list :model-response-p t
                                                                    :followup-p t)))
@@ -355,6 +774,12 @@
                                                           :followup-action-operation-ids (mapcar #'operation-id action-operations)))))
       (append-transcript-entry session :assistant (assistant-response->string response))
       (append-session-event session :assistant-response response)
+      (record-turn-memory-entry session
+                                thread
+                                completed-turn
+                                request
+                                prompt
+                                (assistant-response->string response))
       (mark-turn-followup-completed session
                                     turn
                                     :metadata (list :followup-operation-id (operation-id completed-operation)
@@ -364,15 +789,28 @@
                                         :staged-action-count (length (getf action-report :staged-actions))
                                         :immediate-action-count (length (getf action-report :immediate-actions))
                                         :stream-event-count 0
+                                        :retrieval-summary (provider-request-retrieval-summary request)
+                                        :cognition-summary (provider-request-cognition-summary request)
+                                        :action-agenda-summary (provider-request-action-agenda-summary request)
+                                        :reasoning-summary (provider-request-reasoning-summary request)
+                                        :planning-summary (provider-request-planning-summary request)
+                                        :outcome-summary (provider-request-outcome-summary request)
                                         :thread-id (thread-id thread)
                                         :turn-id (turn-id completed-turn)
                                         :followup-p t))
       (list :response response
             :staged-action-count (length (getf action-report :staged-actions))
+            :deferred-action-count (length (getf action-report :deferred-actions))
             :immediate-action-count (length (getf action-report :immediate-actions))
             :action-results immediate-results
             :streamed-p nil
             :stream-event-count 0
+            :retrieval-summary (provider-request-retrieval-summary request)
+            :cognition-summary (provider-request-cognition-summary request)
+            :action-agenda-summary (provider-request-action-agenda-summary request)
+            :reasoning-summary (provider-request-reasoning-summary request)
+            :planning-summary (provider-request-planning-summary request)
+            :outcome-summary (provider-request-outcome-summary request)
             :followup-p t
             :thread (thread-record-summary thread)
             :turn (turn-record-summary completed-turn)
@@ -462,5 +900,6 @@
                                                    thread
                                                    turn
                                                    :source source
+                                                   :action-results results
                                                    :operator-mode operator-mode)))
       (resume-turn-operation-results turn operations results :followup followup))))

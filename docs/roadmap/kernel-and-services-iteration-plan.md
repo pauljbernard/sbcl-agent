@@ -360,3 +360,26 @@ Cumulative completion after iteration:
 ## Immediate Next Step
 
 Execution tracker complete. Future work should extend the public service surface, but the kernel-to-service-to-UX boundary is now explicit and governed.
+
+## Post-Tracker Follow-Through
+
+The core kernel-and-services program above is complete.
+
+Subsequent work is now in a different category:
+
+- cross-repository integration cleanup between `sbcl-agent` and `sbcl-agent-ux`
+- live-adapter contract hardening
+- UX verification and expectation updates as service-backed surfaces continue replacing older shell-first assumptions
+- metadata, documentation, and presentation-tier consistency work
+
+That follow-through should be tracked separately from the core architectural program so the implementation record stays honest:
+
+- kernel/service extraction program: complete
+- current cross-repository cleanup and UX hardening pass: in progress
+- current estimated completion for that follow-through pass: 99%
+
+Open decisions intentionally held outside this tracker:
+
+- whether to repoint the published documentation URL in `sbcl-agent-ux`
+
+Remaining work is now primarily decision closure and release hygiene rather than architectural cleanup.

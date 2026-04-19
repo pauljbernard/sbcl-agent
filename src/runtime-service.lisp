@@ -24,6 +24,51 @@
                                                                 :session session
                                                                 :runtime-id (default-runtime-id))))
 
+(defun query-runtime-describe-symbol-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :describe-symbol
+                               (tool-runtime-describe-symbol session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-describe-symbol-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-find-definition-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :find-definition
+                               (tool-runtime-find-definition session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-find-definition-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-callers-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :callers
+                               (tool-runtime-callers session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-callers-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-methods-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :methods
+                               (tool-runtime-methods session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-methods-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-source-image-divergence-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :source-image-divergence
+                               (tool-runtime-source-image-divergence session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-source-image-divergence-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
 (defun query-runtime-history-service (session &key tail)
   (make-service-query-response :runtime
                                :history

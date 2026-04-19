@@ -17,6 +17,7 @@
        (make-command :kind :assistant-action :form form :arguments (list form)))
       ((or (null operator)
            (not (member operator '("ask" "say" "plan" "tool" "help" "approve" "patch" "execute-actions"
+                                   "provider/show" "provider/list" "provider/use" "provider/configure" "provider/routing" "provider/route"
                                    "thread/new" "thread/list" "thread/use" "thread/show" "turn/status" "turn/resume" "incident/list" "incident/show"
                                    "environment/status" "review/mutation"
                                    "integration/rgp-bind" "integration/rgp-show" "integration/rgp-export" "integration/rgp-artifacts" "integration/rgp-approvals" "integration/rgp-approve" "integration/rgp-resume"
@@ -25,7 +26,7 @@
                                    "session/save" "session/load" "session/reset" "describe-session"
                                    "enqueue-task" "list-tasks" "describe-task" "cancel-task"
                                    "run-next-task" "start-worker" "stop-worker"
-                                   "list-workers" "describe-worker" "monitor-task" "list-work-items" "describe-work-item" "list-workflow-records" "describe-workflow-record" "request-work-item-approval" "quarantine-work-item" "resume-work-item" "why-waiting" "list-replay-groups" "list-image-reconciliations" "replay-validator-task" "replay-validator-set" "reconcile-image-only-source")
+                                   "list-workers" "describe-worker" "monitor-task" "list-work-items" "describe-work-item" "describe-work-item-plan" "list-workflow-records" "describe-workflow-record" "request-work-item-approval" "quarantine-work-item" "resume-work-item" "steer-work-item-plan" "why-waiting" "list-replay-groups" "list-image-reconciliations" "replay-validator-task" "replay-validator-set" "reconcile-image-only-source")
                         :test #'string=)))
        (make-command :kind :eval :form form :arguments (list form)))
       ((string= operator "ask")
@@ -44,6 +45,18 @@
        (make-command :kind :patch :form form :arguments (rest form)))
       ((string= operator "execute-actions")
        (make-command :kind :execute-actions :form form :arguments (rest form)))
+      ((string= operator "provider/show")
+       (make-command :kind :provider-show :form form :arguments (rest form)))
+      ((string= operator "provider/list")
+       (make-command :kind :provider-list :form form :arguments (rest form)))
+      ((string= operator "provider/use")
+       (make-command :kind :provider-use :form form :arguments (rest form)))
+      ((string= operator "provider/configure")
+       (make-command :kind :provider-configure :form form :arguments (rest form)))
+      ((string= operator "provider/routing")
+       (make-command :kind :provider-routing :form form :arguments (rest form)))
+      ((string= operator "provider/route")
+       (make-command :kind :provider-route :form form :arguments (rest form)))
       ((string= operator "thread/new")
        (make-command :kind :thread-new :form form :arguments (rest form)))
       ((string= operator "thread/list")
@@ -140,6 +153,8 @@
        (make-command :kind :list-work-items :form form :arguments (rest form)))
       ((string= operator "describe-work-item")
        (make-command :kind :describe-work-item :form form :arguments (rest form)))
+      ((string= operator "describe-work-item-plan")
+       (make-command :kind :describe-work-item-plan :form form :arguments (rest form)))
       ((string= operator "list-workflow-records")
        (make-command :kind :list-workflow-records :form form :arguments (rest form)))
       ((string= operator "describe-workflow-record")
@@ -150,6 +165,8 @@
        (make-command :kind :quarantine-work-item :form form :arguments (rest form)))
       ((string= operator "resume-work-item")
        (make-command :kind :resume-work-item :form form :arguments (rest form)))
+      ((string= operator "steer-work-item-plan")
+       (make-command :kind :steer-work-item-plan :form form :arguments (rest form)))
       ((string= operator "why-waiting")
        (make-command :kind :why-waiting :form form :arguments (rest form)))
       ((string= operator "list-replay-groups")

@@ -58,10 +58,18 @@
       :approval-required
       :staged))
 
+(defun deferred-assistant-action-disposition (action)
+  (declare (ignore action))
+  :deferred)
+
 (defun staged-assistant-action-status (action)
   (if (assistant-action-requires-approval-p action)
       :awaiting-approval
       :staged))
+
+(defun deferred-assistant-action-status (action)
+  (declare (ignore action))
+  :blocked)
 
 (defun action-operation-name (action)
   (case (assistant-action-type action)
@@ -73,11 +81,45 @@
 (defun turn-bound-work-item-id (turn)
   (getf (turn-metadata turn) :work-item-id))
 
-(defun ensure-turn-mutation-work-item (session thread turn action-report prompt)
+(defun cognition-bundle-long-horizon-plan (cognition-bundle)
+  (when cognition-bundle
+    (let* ((planning-steps (or (getf (cognition-bundle-planning-brief cognition-bundle) :ordered-steps) '()))
+           (planning-phases (remove nil (mapcar (lambda (step) (getf step :phase))
+                                                planning-steps))))
+      (list :execution-mode (getf (cognition-bundle-execution-strategy cognition-bundle) :mode)
+            :validation-mode (getf (cognition-bundle-validation-strategy cognition-bundle) :mode)
+            :agenda-step-count (getf (cognition-bundle-action-agenda cognition-bundle) :step-count)
+            :agenda-primary-step (getf (cognition-bundle-action-agenda cognition-bundle) :primary-step)
+            :validation-work-item-count (getf (cognition-bundle-validation-plan cognition-bundle) :work-item-count)
+            :reuse-recommendation (getf (cognition-bundle-prior-outcome-brief cognition-bundle) :reuse-recommendation)
+            :planning-phases planning-phases
+            :phase-count (length planning-phases)
+            :decomposition-recipe (list :phase-count (length planning-phases)
+                                        :phases planning-phases
+                                        :agenda-primary-step (getf (cognition-bundle-action-agenda cognition-bundle) :primary-step))
+            :plan-health :active))))
+
+(defun stamp-turn-mutation-work-item-plan (session turn work-item cognition-bundle)
+  (let ((plan (cognition-bundle-long-horizon-plan cognition-bundle)))
+    (when (and work-item plan)
+      (set-work-item-long-horizon-plan work-item plan)
+      (when (work-item-next-action work-item)
+        (set-work-item-next-action session work-item (copy-list (work-item-next-action work-item))))
+      (when (work-item-resume-payload work-item)
+        (set-work-item-resume-payload session work-item (copy-list (work-item-resume-payload work-item))))
+      (setf (turn-metadata turn)
+            (append (turn-metadata turn)
+                    (list :long-horizon-plan plan))))
+    work-item))
+
+(defun ensure-turn-mutation-work-item (session thread turn action-report prompt &key cognition-bundle)
   (let ((existing-id (turn-bound-work-item-id turn)))
     (cond
       (existing-id
-       (find-work-item session existing-id))
+       (stamp-turn-mutation-work-item-plan session
+                                           turn
+                                           (find-work-item session existing-id)
+                                           cognition-bundle))
       ((not (governed-actions-present-p action-report))
        nil)
       (t
@@ -113,7 +155,7 @@
                                            work-item
                                            policy-id
                                            :reason "Governed conversation turn requires explicit approval before mutation."))))
-         work-item)))))
+         (stamp-turn-mutation-work-item-plan session turn work-item cognition-bundle))))))
 
 (defun apply-resumed-mutation-result (session thread turn operation result)
   (let ((policy-id (getf (operation-policy-decision operation) :policy-id)))

@@ -46,12 +46,15 @@ The codebase is real and usable today. It currently provides:
 
 - an SBCL-native CLI and interactive Common Lisp shell
 - direct Lisp evaluation in the same runtime that hosts the agent
-- mock and OpenAI-compatible providers
+- multi-vendor provider support across mock, OpenAI-compatible, Anthropic, Google/Gemini-compatible, Meta-compatible, and LM Studio/local OpenAI-compatible endpoints
+- provider profiles, provider routing, provider-route preview, and provider-aware model selection
 - canonical provider-event normalization and streaming
 - a concrete `Environment` object with save/load, summaries, and projected environment events
 - durable `thread`, `message`, `turn`, `operation`, and `artifact` records
 - a shared turn runner for both `ask` and `say`
 - approval-aware turn orchestration and resumed-turn follow-up
+- pre-prompt environment retrieval, cognition bundles, validation planning, and prior-outcome reuse in the default agent loop
+- a public service boundary plus JSON CLI surfaces that future UX clients can call without scraping shell output
 - structured tools for files, docs, runtime, processes, git, and patches
 - persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
 
@@ -89,12 +92,14 @@ The current runtime already provides:
 
 - an SBCL-native CLI and interactive Common Lisp shell
 - direct Lisp evaluation in the same environment that hosts the agent
-- a provider boundary with mock and OpenAI-compatible backends
+- a provider boundary with mock, OpenAI-compatible, Anthropic, Google/Gemini-compatible, Meta-compatible, and LM Studio/local-compatible backends
+- provider profiles, routing policies, ranked candidate selection, and prompt-aware route preview
 - streamed responses through a canonical provider-event layer
 - conversation primitives: threads, messages, turns, operations, and artifacts
 - a shared turn runtime for both `ask` and `say`, with conversation treated as one native interaction medium rather than the whole system
 - persisted session state with thread-aware shell workflows
 - staged assistant actions, approval-gated turn resume, provider follow-up after resume, and explicit capability grants
+- environment-native retrieval dossiers, reasoning/planning briefs, durable prior-outcome reuse, and validation/execution strategy shaping
 - structured tools for files, docs, session visibility, processes, git, and patches
 - queued tasks and background workers
 - governed work-items, workflow records, validator replay groups, image-only outcomes, and reconciliation records
@@ -120,45 +125,21 @@ The project is developed and tested against SBCL. Other Common Lisp implementati
 
 ## Repository Layout
 
-```text
-sbcl-agent/
-├── sbcl-agent.asd
-├── README.md
-├── bin/
-│   ├── run-coverage
-│   ├── run-tests
-│   ├── sandbox-runner
-│   └── sbcl-agent
-├── docs/
-│   ├── architecture.md
-│   ├── conversation-architecture.md
-│   ├── implementation-plan.md
-│   ├── migration-plan-thread-runtime.md
-│   ├── streaming-event-model.md
-│   └── user-guide.md
-├── src/
-│   ├── commands.lisp
-│   ├── config.lisp
-│   ├── conversation.lisp
-│   ├── events.lisp
-│   ├── main.lisp
-│   ├── patch.lisp
-│   ├── policy.lisp
-│   ├── provider-mock.lisp
-│   ├── provider-openai.lisp
-│   ├── provider-protocol.lisp
-│   ├── sandbox.lisp
-│   ├── session.lisp
-│   ├── shell.lisp
-│   ├── tasks.lisp
-│   ├── tools-*.lisp
-│   ├── turn-orchestrator.lisp
-│   ├── work-items.lisp
-│   └── workflow.lisp
-└── tests/
-    ├── package.lisp
-    └── smoke.lisp
-```
+The runtime is still serially loaded through `sbcl-agent.asd`, but responsibility is clearer than a flat file listing suggests:
+
+- environment kernel: environment domain files, workflow/work-items, incidents, runtime state
+- provider boundary: protocol, transport, request snapshot, provider adapters
+- service boundary: `*-service.lisp` files plus `service-core.lisp`
+- operator shell: command normalization, shell dispatch, REPL, CLI
+- tests: smoke coverage plus focused provider/service/support suites
+
+Representative files:
+
+- environment kernel: `src/environment-core.lisp`, `src/environment-sync.lisp`, `src/environment-summary.lisp`, `src/environment-compatibility.lisp`, `src/mutation-engine.lisp`, `src/work-items.lisp`, `src/workflow.lisp`
+- provider boundary: `src/request-snapshot.lisp`, `src/provider-protocol.lisp`, `src/provider-transport.lisp`, `src/provider-transport-curl.lisp`, `src/provider-openai.lisp`
+- service boundary: `src/environment-service.lisp`, `src/conversation-service.lisp`, `src/runtime-service.lisp`, `src/execution-service.lisp`, `src/session-service.lisp`, `src/rgp-service.lisp`, `src/mutation-review-service.lisp`, `src/task-service.lisp`, `src/worker-service.lisp`, `src/workflow-ops-service.lisp`
+- operator shell and entrypoints: `src/shell.lisp`, `src/repl.lisp`, `src/main.lisp`, `bin/sbcl-agent`
+- tests: `tests/smoke.lisp`, `tests/provider-context.lisp`, `tests/service-contracts.lisp`, `tests/test-runner.lisp`
 
 ## Quick Start
 
@@ -169,6 +150,7 @@ From the repository root:
 ./bin/sbcl-agent chat
 ./bin/sbcl-agent chat -i
 ./bin/run-tests
+./bin/run-evals
 ```
 
 To start the conversational layer that sits on top of the REPL layer:
@@ -185,9 +167,11 @@ Top-level CLI commands:
 - `./bin/sbcl-agent doctor`
 - `./bin/sbcl-agent chat`
 - `./bin/sbcl-agent chat -i`
+- `./bin/sbcl-agent provider <subcommand> ...`
 - `./bin/sbcl-agent exec <cmd...>`
 - `./bin/sbcl-agent rgp <subcommand> ...`
 - `./bin/run-tests`
+- `./bin/run-evals`
 - `./bin/run-coverage`
 - `./bin/install-docs-deps`
 - `./bin/build-docs`
@@ -245,13 +229,38 @@ The shell exposes the same bridge through `integration/rgp-*` commands, so local
 
 Environment variables:
 
-- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime chooses `openai-compatible` if an API key is available and otherwise falls back to `mock`
+- `TUTOR_CODEX_PROVIDER`: provider backend override; when unset, the runtime chooses `openai-compatible` if an OpenAI-style key is available, `anthropic` if only an Anthropic key is available, and otherwise falls back to `mock`
 - `TUTOR_CODEX_MODEL`: primary model name, defaults to `gpt-5`
 - `TUTOR_CODEX_FAST_MODEL`: low-latency model name for ordinary asks, defaults to `gpt-4.1-mini`
-- `TUTOR_CODEX_API_BASE`: base URL for the OpenAI-compatible provider
-- `OPENAI_API_KEY`: API key for the OpenAI-compatible provider
+- `TUTOR_CODEX_API_BASE`: base URL for OpenAI-compatible, local, or other compatible transports
+- `OPENAI_API_KEY`: API key for the OpenAI-compatible provider family
+- `ANTHROPIC_API_KEY`: API key for the Anthropic provider family
 
-If `OPENAI_API_KEY` is unset, `sbcl-agent` falls back to `openai-api-key.key` in the current working directory and trims trailing whitespace.
+If `OPENAI_API_KEY` is unset, `sbcl-agent` falls back to `openai-api-key.key` in the current working directory and trims trailing whitespace. If `ANTHROPIC_API_KEY` is unset, it falls back to `anthropic-api-key.key` in the current working directory.
+
+## Provider Control Surface
+
+The provider layer is no longer just a startup configuration choice. It now has a first-class runtime control surface.
+
+Inside `chat`, use:
+
+- `(provider/show)`
+- `(provider/list)`
+- `(provider/use "profile")`
+- `(provider/configure "profile" :provider "name" :model "name" ...)`
+- `(provider/routing [:auto|:manual])`
+- `(provider/route)`
+
+Outside the shell, use the JSON CLI:
+
+- `./bin/sbcl-agent provider show`
+- `./bin/sbcl-agent provider route`
+- `./bin/sbcl-agent provider preview --prompt "..."`
+- `./bin/sbcl-agent provider routing --mode auto|manual`
+- `./bin/sbcl-agent provider configure --profile ... --provider ... --model ...`
+- `./bin/sbcl-agent provider use --profile ...`
+
+Those commands expose the same service-backed provider profile, routing, and route-preview surfaces that a future `sbcl-agent-ux` client should call directly.
 
 ## Doctor Command
 

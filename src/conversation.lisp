@@ -239,6 +239,15 @@
     ((find :failed operations :key #'operation-status) :failed)
     (t :completed)))
 
+(defun operation-action-assessment-summary (operation)
+  (let ((assessment (getf (operation-metadata operation) :action-assessment)))
+    (when (listp assessment)
+      (list :grounding-score (getf assessment :grounding-score)
+            :weakly-grounded-p (getf assessment :weakly-grounded-p)
+            :reason (getf assessment :reason)
+            :matched-top-labels (copy-list (or (getf assessment :matched-top-labels) '()))
+            :relevant-domains (copy-list (or (getf assessment :relevant-domains) '()))))))
+
 (defun operation-record-summary (operation)
   (list :id (operation-id operation)
         :thread-id (operation-thread-id operation)
@@ -251,7 +260,30 @@
         :output (operation-output operation)
         :started-at (operation-started-at operation)
         :completed-at (operation-completed-at operation)
+        :action-assessment (operation-action-assessment-summary operation)
         :metadata (operation-metadata operation)))
+
+(defun turn-action-assessment-summary (operations)
+  (let* ((assessed-operations (remove-if-not (lambda (operation)
+                                               (getf operation :action-assessment))
+                                             operations))
+         (weakly-grounded-operations (remove-if-not (lambda (operation)
+                                                      (getf (getf operation :action-assessment)
+                                                            :weakly-grounded-p))
+                                                    assessed-operations))
+         (deferred-weakly-grounded-operations
+           (remove-if-not (lambda (operation)
+                            (and (eq (getf operation :status) :blocked)
+                                 (eq (getf (getf operation :policy-decision) :decision)
+                                     :deferred)))
+                          weakly-grounded-operations)))
+    (list :assessed-operation-count (length assessed-operations)
+          :weakly-grounded-operation-count (length weakly-grounded-operations)
+          :deferred-weakly-grounded-operation-count
+          (length deferred-weakly-grounded-operations)
+          :weakly-grounded-operation-ids
+          (mapcar (lambda (operation) (getf operation :id))
+                  weakly-grounded-operations))))
 
 (defun artifact-record-summary (artifact)
   (list :id (artifact-id artifact)
@@ -791,7 +823,8 @@
                          (find-work-item session work-item-id)))
          (workflow-record (and work-item
                                (work-item-workflow-record session work-item)))
-         (recovery-summary (turn-recovery-summary session turn operation-records)))
+         (recovery-summary (turn-recovery-summary session turn operation-records))
+         (action-assessment-summary (turn-action-assessment-summary operations)))
     (append (turn-record-summary turn)
             (list :thread (and thread (thread-record-summary thread))
                   :user-message (and user-message (message-record-summary user-message))
@@ -817,10 +850,18 @@
                                                                                     '(:runtime-state :runtime-eval :runtime-reload)
                                                                                     :test #'eq))
                                                                           artifacts)
+                                        :assessed-operation-count
+                                        (getf action-assessment-summary :assessed-operation-count)
+                                        :weakly-grounded-operation-count
+                                        (getf action-assessment-summary :weakly-grounded-operation-count)
+                                        :deferred-weakly-grounded-operation-count
+                                        (getf action-assessment-summary
+                                              :deferred-weakly-grounded-operation-count)
                                         :work-item-id work-item-id
                                         :work-item-status (and work-item (work-item-status work-item))
                                         :workflow-record-status (and workflow-record
                                                                      (workflow-record-status workflow-record)))
+                  :action-assessment-summary action-assessment-summary
                   :operations operations
                   :incidents incidents
                   :artifacts artifacts
@@ -882,7 +923,9 @@
                                                   (workflow-record-summary workflow-record))
                             :wait wait-report
                             :next-action (and wait-report (getf wait-report :next-action))
-                            :resume-payload (and wait-report (getf wait-report :resume-payload)))
+                            :resume-payload (and wait-report (getf wait-report :resume-payload))
+                            :action-assessment-summary
+                            (getf detail :action-assessment-summary))
           :evidence (list :checkpoint-count (if work-item
                                                 (length (work-item-checkpoints work-item))
                                                 0)

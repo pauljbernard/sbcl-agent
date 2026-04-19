@@ -1,7 +1,7 @@
 (asdf:defsystem "sbcl-agent"
-  :description "An SBCL-native CLI foundation for a Codex-like terminal assistant."
-  :author "OpenAI Codex"
-  :license "MIT"
+  :description "An environment based agentic first development enviornment"
+  :author "Paul Bernard"
+  :license "Software/source: PolyForm Noncommercial 1.0.0; docs/non-software: CC BY-NC 4.0"
   :version "0.1.0"
   :serial t
   :depends-on ()
@@ -11,6 +11,16 @@
                (:file "src/provider-protocol")
                (:file "src/provider-transport")
                (:file "src/provider-transport-curl")
+               (:file "src/retrieval-intent")
+               (:file "src/retrieval-plan")
+               (:file "src/retrieval-ranking")
+               (:file "src/retrieval-dossier")
+               (:file "src/retrieval-service")
+               (:file "src/reasoning-brief")
+               (:file "src/planning-brief")
+               (:file "src/outcome-brief")
+               (:file "src/prior-outcome-reuse")
+               (:file "src/cognition-bundle")
                (:file "src/request-snapshot")
                (:file "src/provider-mock")
                (:file "src/provider-openai")
@@ -50,19 +60,26 @@
                (:file "src/runtime-service")
                (:file "src/workflow-service")
                (:file "src/approval-service")
+               (:file "src/session-service")
                (:file "src/work-item-service")
                (:file "src/incident-service")
+               (:file "src/task-service")
+               (:file "src/worker-service")
+               (:file "src/workflow-ops-service")
+               (:file "src/rgp-service")
+               (:file "src/mutation-review-service")
                (:file "src/event-service")
-               (:file "src/shell")
+               (:file "src/execution-service")
                (:file "src/turn-orchestrator")
+               (:file "src/shell")
                (:file "src/repl")
                (:file "src/main"))
   :in-order-to ((asdf:test-op (asdf:test-op "sbcl-agent/tests"))))
 
 (asdf:defsystem "sbcl-agent/tests"
   :description "Base test suite for sbcl-agent."
-  :author "OpenAI Codex"
-  :license "MIT"
+  :author "Paul Bernard"
+  :license "Software/source: PolyForm Noncommercial 1.0.0; docs/non-software: CC BY-NC 4.0"
   :depends-on ("sbcl-agent")
   :serial t
   :components ((:file "tests/package")
@@ -70,6 +87,8 @@
                (:file "tests/provider-support")
                (:file "tests/smoke")
                (:file "tests/provider-context")
+               (:file "tests/retrieval")
+               (:file "tests/evals")
                (:file "tests/service-contracts")
                (:file "tests/test-runner")
                (:file "tests/performance"))

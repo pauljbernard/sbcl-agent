@@ -88,13 +88,62 @@ The first public service families should likely be:
 - environment service
 - conversation service
 - runtime service
+- retrieval service
 - workflow service
-- artifact service
-- incident service
-- task service
 - approval service
+- work-item service
+- incident service
+- mutation-review service
+- RGP service
+- event service
 
 Each service family should expose read operations and governed commands separately.
+
+The current implementation now includes concrete service modules for:
+
+- execution of ask/say, staged assistant actions, pending action replay, direct tool calls, and direct patch application
+- environment summary, status, events, save, and load
+- conversation thread list/create/use/detail and turn detail
+- runtime summary, inspection reads, history, package switch, eval, and reload
+- retrieval dossier assembly over existing service-native read surfaces
+- workflow record list/detail
+- approval grants and work-item approval requests
+- work-item list/detail
+- incident list/detail
+- mutation review
+- RGP bind/show/export/artifacts/approvals/approve/resume
+- event-stream queries for UX-facing observation
+
+The provider configuration and routing surface is now also exposed through stable service contracts:
+
+- `query-environment-provider-service`
+- `query-environment-provider-preview-service`
+- `command-environment-provider-configure-service`
+- `command-environment-provider-use-service`
+- `command-environment-provider-routing-service`
+- `query-environment-provider-route-service`
+
+That matters for the future UX because provider selection is no longer just a shell concern. The service boundary now exposes:
+
+- configured provider profiles
+- active provider profile
+- routing policy mode
+- supported routing modes
+- last routing decision
+- prompt-aware route preview without mutating last-route state
+- ranked provider candidates with routing reasons
+
+That is important for the presentation tier because a UX should be able to let an engineer inspect and steer provider choice in real time without depending on shell-only command strings or hidden session internals.
+
+That execution family matters because it is now the shared mutation and interaction entry surface for:
+
+- shell `ask` and `say`
+- pasted assistant actions
+- direct `tool` invocations
+- direct `patch` invocations
+- pending-action execution and resumed turn actions
+
+That removes one of the most important shell-first assumptions from the older design: the shell is no longer the only place where interaction and mutation semantics are assembled.
 
 ## Query And Command Split
 
@@ -153,6 +202,24 @@ That means:
 4. shell renders service results
 
 That migration is the proof that the service layer is real.
+
+The shell is now substantially migrated to this boundary. Its current role is:
+
+1. normalize forms into commands
+2. call service entry points for the majority of operator-visible actions
+3. preserve shell-facing payload shapes where compatibility still matters
+4. render results without owning the underlying service/domain semantics
+
+After the latest cleanup, the shell still owns a few things, but they are primarily adapter concerns:
+
+1. form parsing and shell-specific validation messages
+2. stream rendering and timing output
+3. orientation/help rendering
+4. REPL-specific direct Lisp evaluation
+
+Those are acceptable shell-specific responsibilities. Governed execution semantics no longer need to live there.
+
+Some CLI entry surfaces still need the same treatment, but the shell itself is no longer the primary privileged execution path it used to be.
 
 ## Definition Of Success
 

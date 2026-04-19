@@ -1,19 +1,56 @@
 (in-package #:sbcl-agent)
 
 (defclass openai-compatible-provider (provider)
-  ((model :initarg :model :reader openai-provider-model)
+  ((provider-id :initarg :provider-id :initform "openai-compatible" :reader openai-provider-id)
+   (model :initarg :model :reader openai-provider-model)
    (fast-model :initarg :fast-model :reader openai-provider-fast-model)
    (api-base :initarg :api-base :reader openai-provider-api-base)
    (api-key :initarg :api-key :reader openai-provider-api-key)))
+
+(defclass anthropic-provider (provider)
+  ((model :initarg :model :reader anthropic-provider-model)
+   (fast-model :initarg :fast-model :reader anthropic-provider-fast-model)
+   (api-base :initarg :api-base :reader anthropic-provider-api-base)
+   (api-key :initarg :api-key :reader anthropic-provider-api-key)))
 
 (defparameter +stream-actions-marker+ "<<<SBCL-ACTIONS>>>")
 (defparameter +stream-actions-end-marker+ "<<<END-SBCL-ACTIONS>>>")
 
 (defmethod provider-name ((provider openai-compatible-provider))
-  "openai-compatible")
+  (openai-provider-id provider))
 
 (defmethod provider-capabilities ((provider openai-compatible-provider))
   '(:chat :structured-response :action-proposals :network :streaming))
+
+(defmethod provider-name ((provider anthropic-provider))
+  "anthropic")
+
+(defmethod provider-capabilities ((provider anthropic-provider))
+  '(:chat :structured-response :action-proposals :network))
+
+(defun governance-blocker-kind-p (entry)
+  (member (getf entry :kind)
+          '(:blocked :quarantined :awaiting-cold-validation)
+          :test #'eq))
+
+(defun governance-conservative-posture-p (request)
+  (let ((reasoning-brief (provider-request-reasoning-brief request)))
+    (or (> (or (getf (provider-request-runtime-summary request) :open-incident-count) 0)
+           0)
+        (find-if #'governance-blocker-kind-p
+                 (getf reasoning-brief :blockers))
+        (getf reasoning-brief :validation-obligations))))
+
+(defun build-openai-governance-directives (request)
+  (let ((reasoning-brief (provider-request-reasoning-brief request)))
+    (if (governance-conservative-posture-p request)
+        (format nil
+                "Governance directives: The environment is not currently mutation-clean. Do not propose new governed mutation actions unless the user explicitly asks to override that posture. Prefer read-only inspection, incident review, approval follow-through, validation, reconciliation, or a concrete explanation of what remains blocked. Open incident count: ~D. Hard blockers: ~S. Pending validation obligations: ~S."
+                (or (getf (provider-request-runtime-summary request) :open-incident-count) 0)
+                (remove-if-not #'governance-blocker-kind-p
+                               (or (getf reasoning-brief :blockers) '()))
+                (or (getf reasoning-brief :validation-obligations) '()))
+        "Governance directives: The environment appears mutation-ready. If you propose a governed mutation, keep it evidence-backed, minimal, and aligned with the planning brief.")))
 
 (defun build-openai-system-prompt ()
   (concatenate
@@ -49,7 +86,7 @@
 
 (defun build-openai-user-prompt (request)
   (format nil
-          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Session summary: ~S~%~%Interpret references like 'the code you suggested' against the structured conversation context, environment refs, and :recent-transcript when available."
+          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
           (provider-request-prompt request)
           (provider-request-operator-mode request)
           (provider-request-stream-p request)
@@ -59,7 +96,13 @@
           (provider-request-runtime-summary request)
           (provider-request-workspace-summary request)
           (provider-request-policy-summary request)
-          (provider-request-session-summary request)))
+          (provider-request-retrieval-dossier request)
+          (provider-request-cognition-bundle request)
+          (provider-request-reasoning-brief request)
+          (provider-request-planning-brief request)
+          (provider-request-outcome-brief request)
+          (provider-request-session-summary request)
+          (build-openai-governance-directives request)))
 
 (defun deep-request-p (prompt)
   (some (lambda (needle)
@@ -74,6 +117,12 @@
       (or (openai-provider-fast-model provider)
           (openai-provider-model provider))))
 
+(defun anthropic-request-model (provider request)
+  (if (deep-request-p (provider-request-prompt request))
+      (anthropic-provider-model provider)
+      (or (anthropic-provider-fast-model provider)
+          (anthropic-provider-model provider))))
+
 (defun build-openai-request-body (provider request &key (stream nil) (stream-protocol nil))
   (emit-json
    (list :model (openai-request-model provider request)
@@ -85,6 +134,15 @@
                     (list :role "user"
                           :content (build-openai-user-prompt request)))
          :stream stream)))
+
+(defun build-anthropic-request-body (provider request)
+  (emit-json
+   (list :model (anthropic-request-model provider request)
+         :max_tokens 4096
+         :system (build-openai-system-prompt)
+         :messages (list
+                    (list :role "user"
+                          :content (build-openai-user-prompt request))))))
 
 (defun extract-openai-message-content (response-object)
   (let* ((choices (json-object-value response-object "choices"))
@@ -177,20 +235,76 @@
      :metadata (append metadata (list :provider :openai-compatible
                                       :model model)))))
 
+(defun extract-anthropic-message-content (response-object)
+  (let ((content (json-object-value response-object "content")))
+    (or (and content
+             (apply #'concatenate 'string
+                    (remove nil
+                            (mapcar (lambda (entry)
+                                      (and (string= (or (json-object-value entry "type") "") "text")
+                                           (or (json-object-value entry "text") "")))
+                                    content))))
+        (let ((error-object (json-object-value response-object "error")))
+          (if error-object
+              (error "Anthropic API error: ~A" (or (json-object-value error-object "message")
+                                                   error-object))
+              (error "Could not find assistant content in Anthropic response"))))))
+
+(defun decode-anthropic-content-response (content model)
+  (make-assistant-response
+   :message content
+   :actions '()
+   :metadata (list :provider :anthropic
+                   :model model)))
+
+(defun openai-compatible-provider-headers (provider)
+  (append (list "Content-Type: application/json")
+          (if (openai-provider-api-key provider)
+              (list (format nil "Authorization: Bearer ~A"
+                            (openai-provider-api-key provider)))
+              '())))
+
 (defmethod send-request ((provider openai-compatible-provider) request)
-  (unless (openai-provider-api-key provider)
-    (error "OPENAI_API_KEY is required for the openai-compatible provider"))
+  (unless (or (openai-provider-api-key provider)
+              (member (provider-name provider)
+                      '("lm-studio" "lmstudio" "local-openai-compatible")
+                      :test #'string=))
+    (error "API key is required for provider ~A" (provider-name provider)))
   (let* ((url (format nil "~A/chat/completions"
                       (string-right-trim "/" (openai-provider-api-base provider))))
          (body (build-openai-request-body provider request))
-         (raw-response (curl-json-request url (openai-provider-api-key provider) body))
+         (raw-response (curl-json-request-with-headers
+                        url
+                        (openai-compatible-provider-headers provider)
+                        body
+                        :label (format nil "~A request" (provider-name provider))))
          (outer-object (parse-json raw-response))
          (content (extract-openai-message-content outer-object)))
     (decode-openai-content-response content (openai-provider-model provider))))
 
+(defmethod send-request ((provider anthropic-provider) request)
+  (unless (anthropic-provider-api-key provider)
+    (error "ANTHROPIC_API_KEY is required for the anthropic provider"))
+  (let* ((url (format nil "~A/v1/messages"
+                      (string-right-trim "/" (anthropic-provider-api-base provider))))
+         (body (build-anthropic-request-body provider request))
+         (raw-response (curl-json-request-with-headers
+                        url
+                        (list "content-type: application/json"
+                              (format nil "x-api-key: ~A" (anthropic-provider-api-key provider))
+                              "anthropic-version: 2023-06-01")
+                        body
+                        :label "Anthropic request"))
+         (outer-object (parse-json raw-response))
+         (content (extract-anthropic-message-content outer-object)))
+    (decode-anthropic-content-response content (anthropic-provider-model provider))))
+
 (defmethod stream-request ((provider openai-compatible-provider) request event-handler)
-  (unless (openai-provider-api-key provider)
-    (error "OPENAI_API_KEY is required for the openai-compatible provider"))
+  (unless (or (openai-provider-api-key provider)
+              (member (provider-name provider)
+                      '("lm-studio" "lmstudio" "local-openai-compatible")
+                      :test #'string=))
+    (error "API key is required for provider ~A" (provider-name provider)))
   (let* ((url (format nil "~A/chat/completions"
                       (string-right-trim "/" (openai-provider-api-base provider))))
          (body (build-openai-request-body provider request :stream t :stream-protocol t))
@@ -205,37 +319,38 @@
                           :body-bytes (length body)
                           :prompt-bytes (length (provider-request-prompt request)))
     (emit-provider-event event-handler :message-start nil)
-    (stream-openai-json-request url
-                                (openai-provider-api-key provider)
-                                body
-                                (lambda (line)
-                                  (when (and (not (string= line ""))
-                                             (openai-stream-data-line-p line)
-                                             (not (openai-stream-done-p line)))
-                                    (let* ((chunk-object (parse-openai-stream-json-line line))
-                                           (delta (extract-openai-stream-delta chunk-object)))
-                                      (when delta
-                                        (unless first-delta-at
-                                          (setf first-delta-at (get-internal-real-time))
-                                          (emit-provider-timing :first-delta
-                                                                :started-at started-at
-                                                                :first-delta-at first-delta-at
-                                                                :elapsed-seconds (/ (- first-delta-at started-at)
-                                                                                    internal-time-units-per-second)
-                                                                :delta-bytes (length delta)))
-                                        (if actions-section-p
-                                            (setf action-buffer (concatenate 'string action-buffer delta))
-                                            (multiple-value-bind (emit-text remainder found-marker)
-                                                (parse-stream-visible-fragment (concatenate 'string pending-visible delta))
-                                              (when (> (length emit-text) 0)
-                                                (setf visible-buffer (concatenate 'string visible-buffer emit-text))
-                                                (emit-provider-event event-handler :message-delta emit-text))
-                                              (if found-marker
-                                                  (progn
-                                                    (setf actions-section-p t
-                                                          pending-visible ""
-                                                          action-buffer remainder))
-                                                  (setf pending-visible remainder)))))))))
+    (stream-json-request-with-headers url
+                                      (openai-compatible-provider-headers provider)
+                                      body
+                                      (lambda (line)
+                                        (when (and (not (string= line ""))
+                                                   (openai-stream-data-line-p line)
+                                                   (not (openai-stream-done-p line)))
+                                          (let* ((chunk-object (parse-openai-stream-json-line line))
+                                                 (delta (extract-openai-stream-delta chunk-object)))
+                                            (when delta
+                                              (unless first-delta-at
+                                                (setf first-delta-at (get-internal-real-time))
+                                                (emit-provider-timing :first-delta
+                                                                      :started-at started-at
+                                                                      :first-delta-at first-delta-at
+                                                                      :elapsed-seconds (/ (- first-delta-at started-at)
+                                                                                          internal-time-units-per-second)
+                                                                      :delta-bytes (length delta)))
+                                              (if actions-section-p
+                                                  (setf action-buffer (concatenate 'string action-buffer delta))
+                                                  (multiple-value-bind (emit-text remainder found-marker)
+                                                      (parse-stream-visible-fragment (concatenate 'string pending-visible delta))
+                                                    (when (> (length emit-text) 0)
+                                                      (setf visible-buffer (concatenate 'string visible-buffer emit-text))
+                                                      (emit-provider-event event-handler :message-delta emit-text))
+                                                    (if found-marker
+                                                        (progn
+                                                          (setf actions-section-p t
+                                                                pending-visible ""
+                                                                action-buffer remainder))
+                                                        (setf pending-visible remainder))))))))
+                                      :label (format nil "~A streaming request" (provider-name provider)))
     (when (and (not actions-section-p) (> (length pending-visible) 0))
       (setf visible-buffer (concatenate 'string visible-buffer pending-visible))
       (emit-provider-event event-handler :message-delta pending-visible)

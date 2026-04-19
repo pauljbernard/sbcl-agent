@@ -104,6 +104,47 @@
      (sbcl-agent::parse-chat-arguments '("--unknown")))
    "Unknown chat option"
    "parse-chat-arguments should reject unknown options")
+  (let ((options (sbcl-agent::parse-provider-arguments
+                  '("configure" "--environment" "/tmp/provider.json" "--profile" "local-fast"
+                    "--provider" "lm-studio" "--model" "qwen-coder"
+                    "--fast-model" "qwen-coder-mini" "--api-base" "http://localhost:1234/v1"
+                    "--intents" "quick-turn,local-development,code-execution"
+                    "--working-directory" "/tmp"))))
+    (assert-equal "configure" (sbcl-agent::provider-options-subcommand options)
+                  "parse-provider-arguments should capture the provider subcommand")
+    (assert-equal "/tmp/provider.json" (sbcl-agent::provider-options-environment-path options)
+                  "parse-provider-arguments should capture the environment path")
+    (assert-equal "local-fast" (sbcl-agent::provider-options-profile-name options)
+                  "parse-provider-arguments should capture the profile name")
+    (assert-equal "lm-studio" (sbcl-agent::provider-options-provider options)
+                  "parse-provider-arguments should capture the provider")
+    (assert-equal "qwen-coder" (sbcl-agent::provider-options-model options)
+                  "parse-provider-arguments should capture the model")
+    (assert-equal "qwen-coder-mini" (sbcl-agent::provider-options-fast-model options)
+                  "parse-provider-arguments should capture the fast model")
+    (assert-equal "http://localhost:1234/v1" (sbcl-agent::provider-options-api-base options)
+                  "parse-provider-arguments should capture the api base")
+    (assert-true (equal '(:QUICK-TURN :LOCAL-DEVELOPMENT :CODE-EXECUTION)
+                        (sbcl-agent::provider-options-intents options))
+                  "parse-provider-arguments should parse comma-delimited intents")
+    (assert-equal "/tmp" (sbcl-agent::provider-options-working-directory options)
+                  "parse-provider-arguments should capture the working directory"))
+  (let ((options (sbcl-agent::parse-provider-arguments '("preview" "--prompt" "Use the local model"))))
+    (assert-equal "Use the local model" (sbcl-agent::provider-options-prompt options)
+                  "parse-provider-arguments should capture provider preview prompts"))
+  (let ((options (sbcl-agent::parse-provider-arguments '("routing" "--mode" "manual"))))
+    (assert-equal :manual (sbcl-agent::provider-options-mode options)
+                  "parse-provider-arguments should parse provider routing mode"))
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-provider-arguments '()))
+   "provider requires a subcommand"
+   "parse-provider-arguments should reject missing subcommands")
+  (assert-signals-error
+   (lambda ()
+     (sbcl-agent::parse-provider-arguments '("show" "--unknown")))
+   "Unknown provider option"
+   "parse-provider-arguments should reject unknown options")
   (let* ((config (sbcl-agent::make-config :provider "mock"
                                           :model "gpt-5"
                                           :working-directory "/tmp/"))
@@ -114,7 +155,10 @@
       (assert-equal "/tmp/" (sbcl-agent::agent-session-cwd created-session)
                     "session-for-chat-config should create a session rooted at the config working directory")
       (assert-true (typep sbcl-agent::*current-environment* 'sbcl-agent::environment)
-                   "session-for-chat-config should also establish a current environment")))
+                   "session-for-chat-config should also establish a current environment")
+      (assert-equal "default"
+                    (sbcl-agent::environment-active-provider-profile-name sbcl-agent::*current-environment*)
+                    "session-for-chat-config should seed the default provider profile")))
   (let* ((config (sbcl-agent::make-config :provider "mock"
                                           :model "gpt-5"
                                           :working-directory "/tmp/"))
@@ -167,11 +211,14 @@
     (assert-true (search "Runtime: SBCL" stdout)
                  "doctor-command should print runtime information")
     (assert-true (search "Environment id:" stdout)
-                 "doctor-command should print environment information"))
+                 "doctor-command should print environment information")
+    (assert-true (search "Active provider profile:" stdout)
+                 "doctor-command should print provider profile information"))
   (let ((config (sbcl-agent::make-config :provider "mock"
                                          :model "gpt-5"
                                          :working-directory "/tmp/"))
         (original-doctor (symbol-function 'sbcl-agent::doctor-command))
+        (original-provider (symbol-function 'sbcl-agent::provider-command))
         (original-exec (symbol-function 'sbcl-agent::exec-command))
         (original-start-shell (symbol-function 'sbcl-agent::start-shell))
         (original-load-config (symbol-function 'sbcl-agent::load-config))
@@ -183,6 +230,12 @@
                  (lambda (cfg)
                    (declare (ignore cfg))
                    17))
+           (setf (symbol-function 'sbcl-agent::provider-command)
+                 (lambda (cfg arguments)
+                   (declare (ignore cfg))
+                   (assert-equal '("show") arguments
+                                 "dispatch-command should route provider arguments through")
+                   19))
            (setf (symbol-function 'sbcl-agent::exec-command)
                  (lambda (arguments)
                    (assert-equal '("echo" "hi") arguments
@@ -206,6 +259,9 @@
            (assert-equal 17
                          (sbcl-agent::dispatch-command config '("doctor"))
                          "dispatch-command should route to doctor-command")
+           (assert-equal 19
+                         (sbcl-agent::dispatch-command config '("provider" "show"))
+                         "dispatch-command should route to provider-command")
            (assert-equal 23
                          (sbcl-agent::dispatch-command config '("exec" "echo" "hi"))
                          "dispatch-command should route to exec-command")
@@ -217,11 +273,103 @@
                          (sbcl-agent::main)
                          "main should return the status from dispatch-command"))
       (setf (symbol-function 'sbcl-agent::doctor-command) original-doctor)
+      (setf (symbol-function 'sbcl-agent::provider-command) original-provider)
       (setf (symbol-function 'sbcl-agent::exec-command) original-exec)
       (setf (symbol-function 'sbcl-agent::start-shell) original-start-shell)
       (setf (symbol-function 'sbcl-agent::load-config) original-load-config)
       (setf (symbol-function 'sbcl-agent::dispatch-command) original-dispatch)
       (setf (symbol-function 'uiop:command-line-arguments) original-cli))))
+
+(defun provider-cli-command-test ()
+  (let ((sbcl-agent::*current-environment* nil)
+        (sbcl-agent::*current-session* nil))
+    (let* ((environment-path "/tmp/provider-cli-environment.sexp")
+           (config (sbcl-agent::make-config :provider "mock"
+                                            :model "gpt-5"
+                                            :working-directory "/tmp/provider-cli/")))
+      (when (probe-file environment-path)
+        (delete-file environment-path))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("configure"
+                 "--environment" "/tmp/provider-cli-environment.sexp"
+                 "--profile" "local-fast"
+                 "--provider" "lm-studio"
+                 "--model" "qwen-coder"
+                 "--fast-model" "qwen-coder-mini"
+                 "--api-base" "http://localhost:1234/v1"
+                 "--intents" "quick-turn,local-development,code-execution"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "provider configure CLI command should return success")
+        (assert-true (search "\"operation\":\"provider_configure\"" stdout)
+                     "provider configure CLI command should emit the service operation")
+        (assert-true (search "\"active_profile_name\":\"default\"" stdout)
+                     "provider configure CLI command should emit the provider summary envelope"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("routing"
+                 "--environment" "/tmp/provider-cli-environment.sexp"
+                 "--mode" "manual"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "provider routing CLI command should return success")
+        (assert-true (search "\"operation\":\"provider_routing\"" stdout)
+                     "provider routing CLI command should emit the routing operation")
+        (assert-true (search "\"mode\":\"manual\"" stdout)
+                     "provider routing CLI command should expose the updated routing mode"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("show"
+                 "--environment" "/tmp/provider-cli-environment.sexp"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "provider show CLI command should return success")
+        (assert-true (search "\"operation\":\"provider\"" stdout)
+                     "provider show CLI command should emit the provider operation")
+        (assert-true (search "\"profile_count\":2" stdout)
+                     "provider show CLI command should expose the configured profiles"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("route"
+                 "--environment" "/tmp/provider-cli-environment.sexp"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "provider route CLI command should return success")
+        (assert-true (search "\"operation\":\"provider_route\"" stdout)
+                     "provider route CLI command should emit the provider-route operation"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("routing"
+                 "--environment" "/tmp/provider-cli-environment.sexp"
+                 "--mode" "auto"))))
+        (declare (ignore stdout stderr))
+        (assert-equal 0 status "provider routing CLI command should allow switching back to auto"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::provider-command
+               config
+               '("preview"
+                 "--environment" "/tmp/provider-cli-environment.sexp"
+                 "--prompt" "Use the local model and implement the fix"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "provider preview CLI command should return success")
+        (assert-true (search "\"operation\":\"provider_preview\"" stdout)
+                     "provider preview CLI command should emit the provider-preview operation")
+        (assert-true (search "\"selected_profile_name\":\"local-fast\"" stdout)
+                     "provider preview CLI command should expose the previewed selected profile")))))
 
 (defun openai-helper-coverage-test ()
   (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
@@ -732,24 +880,26 @@ fi
    (lambda ()
      (sbcl-agent::send-request
       (make-instance 'sbcl-agent::openai-compatible-provider
+                     :provider-id "openai-compatible"
                      :model "gpt-5"
                      :fast-model "gpt-4.1-mini"
                      :api-base "https://api.example.com/v1"
                      :api-key nil)
       (sbcl-agent::make-provider-request :prompt "x" :session-summary '())))
-   "OPENAI_API_KEY is required"
+   "API key is required for provider openai-compatible"
    "send-request should reject missing API keys")
   (assert-signals-error
    (lambda ()
      (sbcl-agent::stream-request
       (make-instance 'sbcl-agent::openai-compatible-provider
+                     :provider-id "openai-compatible"
                      :model "gpt-5"
                      :fast-model "gpt-4.1-mini"
                      :api-base "https://api.example.com/v1"
                      :api-key nil)
       (sbcl-agent::make-provider-request :prompt "x" :session-summary '())
       (lambda (event) (declare (ignore event)))))
-   "OPENAI_API_KEY is required"
+   "API key is required for provider openai-compatible"
    "stream-request should reject missing API keys")
   (with-fake-curl
     (lambda ()
@@ -1037,6 +1187,10 @@ fi
                        (sbcl-agent::print-shell-help)))))
     (assert-true (search "(say \"prompt\")" help-text)
                  "print-shell-help should mention SAY")
+    (assert-true (search "(provider/show)" help-text)
+                 "print-shell-help should mention provider commands")
+    (assert-true (search "(provider/routing [:mode])" help-text)
+                 "print-shell-help should mention provider routing controls")
     (assert-true (search "(integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\")" help-text)
                  "print-shell-help should mention the RGP binding command"))
   (let* ((session (sbcl-agent::make-default-session))
@@ -1151,6 +1305,11 @@ fi
      "execute-describe-work-item-command should validate work-item ids")
     (assert-signals-error
      (lambda ()
+       (sbcl-agent::execute-describe-work-item-plan-command '(7) session))
+     "DESCRIBE-WORK-ITEM-PLAN requires a string work-item id"
+     "execute-describe-work-item-plan-command should validate work-item ids")
+    (assert-signals-error
+     (lambda ()
        (sbcl-agent::execute-describe-workflow-record-command '(7) session))
      "DESCRIBE-WORKFLOW-RECORD requires a string workflow record id"
      "execute-describe-workflow-record-command should validate workflow ids")
@@ -1164,6 +1323,16 @@ fi
        (sbcl-agent::execute-quarantine-work-item-command '("x" 7) session))
      "requires a string reason"
      "execute-quarantine-work-item-command should validate reasons")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-steer-work-item-plan-command '("x" :phase "bad" :next-step :run-cold-validation) session))
+     "STEER-WORK-ITEM-PLAN requires a keyword :phase"
+     "execute-steer-work-item-plan-command should validate phases")
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::execute-steer-work-item-plan-command '("x" :phase :validate :next-step "bad") session))
+     "STEER-WORK-ITEM-PLAN requires a keyword :next-step"
+     "execute-steer-work-item-plan-command should validate next-step values")
     (assert-signals-error
      (lambda ()
        (sbcl-agent::execute-why-waiting-command '(7) session))
@@ -1234,7 +1403,7 @@ fi
                      :turn-status)))))
     (assert-true (search "turn> turn-1 status=COMPLETED messages=3 operations=2 artifacts=1 incidents=1" result)
                  "print-shell-result should render compact turn-status summaries")
-    (assert-true (search "turn-summary> runtime-ops=1 runtime-artifacts=1 incidents=1 work-item=work-1 work-status=COMMITTED workflow=COMMITTED" result)
+    (assert-true (search "turn-summary> runtime-ops=1 runtime-artifacts=1 incidents=1 weakly-grounded=0 deferred-weakly-grounded=0 work-item=work-1 work-status=COMMITTED workflow=COMMITTED" result)
                  "print-shell-result should render turn runtime/workflow summaries")
     (assert-true (search "recovery> resumable=1 interrupted=0 work-item=work-1" result)
                  "print-shell-result should render turn recovery summaries")
@@ -1613,6 +1782,38 @@ fi
                   (sbcl-agent::provider-name (sbcl-agent::make-provider config))
                   "make-provider should construct the openai-compatible provider")))
 
+(defun multi-vendor-provider-selection-test ()
+  (let ((anthropic (sbcl-agent::make-provider
+                    (sbcl-agent::make-config :provider "anthropic"
+                                             :model "claude-sonnet-4-20250514"
+                                             :api-base "https://api.anthropic.com"
+                                             :api-key "anthropic-key"
+                                             :api-key-present-p t
+                                             :working-directory "/tmp/"))))
+    (assert-equal "anthropic"
+                  (sbcl-agent::provider-name anthropic)
+                  "make-provider should construct the anthropic provider"))
+  (let ((gemini (sbcl-agent::make-provider
+                 (sbcl-agent::make-config :provider "gemini"
+                                          :model "gemini-2.5-pro"
+                                          :api-base "https://generativelanguage.googleapis.com/v1beta/openai"
+                                          :api-key "gemini-key"
+                                          :api-key-present-p t
+                                          :working-directory "/tmp/"))))
+    (assert-equal "gemini"
+                  (sbcl-agent::provider-name gemini)
+                  "make-provider should construct the Gemini-compatible provider"))
+  (let ((lm-studio (sbcl-agent::make-provider
+                    (sbcl-agent::make-config :provider "lm-studio"
+                                             :model "local-model"
+                                             :api-base "http://localhost:1234/v1"
+                                             :api-key "lm-studio"
+                                             :api-key-present-p t
+                                             :working-directory "/tmp/"))))
+    (assert-equal "lm-studio"
+                  (sbcl-agent::provider-name lm-studio)
+                  "make-provider should construct the LM Studio-compatible provider")))
+
 (defun config-key-file-fallback-test ()
   (let* ((root (make-temporary-directory "/tmp/sbcl-agent-config-XXXXXX"))
          (ignore (ensure-directories-exist root))
@@ -1656,6 +1857,26 @@ fi
                     (sbcl-agent::config-provider config)
                     "legacy key filename should still activate the OpenAI-compatible provider"))))
 
+(defun config-anthropic-key-file-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-anthropic-provider-XXXXXX"))
+         (ignore (ensure-directories-exist root))
+         (key-path (merge-pathnames #P"anthropic-api-key.key" root)))
+    (declare (ignore ignore))
+    (with-open-file (stream key-path :direction :output :if-exists :supersede :if-does-not-exist :create)
+      (write-line "anthropic-file-key" stream))
+    (let ((config (sbcl-agent::load-config :working-directory (namestring root))))
+      (assert-equal "anthropic-file-key"
+                    (sbcl-agent::config-api-key config)
+                    "load-config should honor anthropic-api-key.key when present")
+      (assert-equal "anthropic"
+                    (sbcl-agent::config-provider config)
+                    "anthropic key filename should activate the anthropic provider")
+      (assert-equal "https://api.anthropic.com"
+                    (sbcl-agent::config-api-base config)
+                    "anthropic key filename should apply the Anthropic default API base")
+      (assert-true (typep (sbcl-agent::make-provider config) 'sbcl-agent::anthropic-provider)
+                   "make-provider should construct the Anthropic provider from anthropic-api-key.key"))))
+
 (defun config-with-overrides-test ()
   (let* ((base (sbcl-agent::make-config :provider "mock"
                                         :model "gpt-5"
@@ -1663,11 +1884,13 @@ fi
                                         :api-base nil
                                         :api-key nil
                                         :api-key-present-p nil
+                                        :retrieval-ranking-mode :auto
                                         :working-directory "/tmp/base/"))
          (updated (sbcl-agent::config-with-overrides base
                                                      :provider "openai-compatible"
                                                      :model "gpt-5.1"
                                                      :api-base "https://example.test/v1"
+                                                     :retrieval-ranking-mode :off
                                                      :working-directory "/tmp/override")))
     (assert-equal "openai-compatible"
                   (sbcl-agent::config-provider updated)
@@ -1681,6 +1904,9 @@ fi
     (assert-equal "https://example.test/v1"
                   (sbcl-agent::config-api-base updated)
                   "config-with-overrides should replace the api base when requested")
+    (assert-equal :off
+                  (sbcl-agent::config-retrieval-ranking-mode updated)
+                  "config-with-overrides should replace retrieval ranking mode when requested")
     (assert-true (search "/tmp/override/" (sbcl-agent::config-working-directory updated))
                  "config-with-overrides should normalize the working directory")))
 
@@ -1703,13 +1929,40 @@ fi
                                         :api-base nil
                                         :api-key nil
                                         :api-key-present-p nil
+                                        :retrieval-ranking-mode :auto
                                         :working-directory nil))
          (updated (sbcl-agent::config-with-overrides base)))
     (assert-true (stringp (sbcl-agent::config-working-directory updated))
                  "config-with-overrides should fall back to the current directory when no working directory exists")
     (assert-equal "mock"
                   (sbcl-agent::config-provider updated)
-                  "config-with-overrides should preserve the existing provider by default")))
+                  "config-with-overrides should preserve the existing provider by default"))
+  (assert-equal :auto
+                (sbcl-agent::parse-retrieval-ranking-mode "bogus")
+                "invalid retrieval ranking config values should fall back to :auto")
+  (assert-equal :off
+                (sbcl-agent::parse-retrieval-ranking-mode "off")
+                "parse-retrieval-ranking-mode should accept off")
+  (assert-equal :on
+                (sbcl-agent::parse-retrieval-ranking-mode "enabled")
+                "parse-retrieval-ranking-mode should accept enabled"))
+
+(defun provider-defaults-coverage-test ()
+  (assert-equal "https://generativelanguage.googleapis.com/v1beta/openai"
+                (sbcl-agent::provider-default-api-base "gemini")
+                "provider-default-api-base should know the Gemini OpenAI-compatible endpoint")
+  (assert-equal "http://localhost:1234/v1"
+                (sbcl-agent::provider-default-api-base "lm-studio")
+                "provider-default-api-base should know the LM Studio endpoint")
+  (assert-equal "https://api.anthropic.com"
+                (sbcl-agent::provider-default-api-base "anthropic")
+                "provider-default-api-base should know the Anthropic endpoint")
+  (assert-true (equal '("anthropic-api-key.key")
+                      (sbcl-agent::provider-key-file-names "anthropic"))
+               "provider-key-file-names should return the Anthropic key file name")
+  (assert-true (equal '("gemini-api-key.key" "google-api-key.key")
+                      (sbcl-agent::provider-key-file-names "gemini"))
+               "provider-key-file-names should return the Gemini key file names"))
 
 (defun openai-request-model-selection-test ()
   (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
@@ -1761,6 +2014,15 @@ fi
 (defun command-normalization-test ()
   (let ((ask-command (sbcl-agent::normalize-form-command '(ask "inspect src/main.lisp")))
         (say-command (sbcl-agent::normalize-form-command '(say "inspect src/main.lisp")))
+        (provider-show-command (sbcl-agent::normalize-form-command '(provider/show)))
+        (provider-list-command (sbcl-agent::normalize-form-command '(provider/list)))
+        (provider-use-command (sbcl-agent::normalize-form-command '(provider/use "anthropic-review")))
+        (provider-routing-command (sbcl-agent::normalize-form-command '(provider/routing :manual)))
+        (provider-route-command (sbcl-agent::normalize-form-command '(provider/route)))
+        (provider-configure-command (sbcl-agent::normalize-form-command
+                                     '(provider/configure "anthropic-review"
+                                       :provider "anthropic"
+                                       :model "claude-3-7-sonnet")))
         (thread-new-command (sbcl-agent::normalize-form-command '(thread/new :title "Conversation")))
         (thread-list-command (sbcl-agent::normalize-form-command '(thread/list)))
         (thread-use-command (sbcl-agent::normalize-form-command '(thread/use "thread-1")))
@@ -1809,6 +2071,18 @@ fi
                   "ask form should normalize to :ask")
     (assert-equal :say (sbcl-agent::command-kind say-command)
                   "say form should normalize to :say")
+    (assert-equal :provider-show (sbcl-agent::command-kind provider-show-command)
+                  "provider/show form should normalize to :provider-show")
+    (assert-equal :provider-list (sbcl-agent::command-kind provider-list-command)
+                  "provider/list form should normalize to :provider-list")
+    (assert-equal :provider-use (sbcl-agent::command-kind provider-use-command)
+                  "provider/use form should normalize to :provider-use")
+    (assert-equal :provider-routing (sbcl-agent::command-kind provider-routing-command)
+                  "provider/routing form should normalize to :provider-routing")
+    (assert-equal :provider-route (sbcl-agent::command-kind provider-route-command)
+                  "provider/route form should normalize to :provider-route")
+    (assert-equal :provider-configure (sbcl-agent::command-kind provider-configure-command)
+                  "provider/configure form should normalize to :provider-configure")
     (assert-equal :thread-new (sbcl-agent::command-kind thread-new-command)
                   "thread/new form should normalize to :thread-new")
     (assert-equal :thread-list (sbcl-agent::command-kind thread-list-command)
@@ -1897,6 +2171,229 @@ fi
                   "approve form should normalize to :approve")
     (assert-equal :patch (sbcl-agent::command-kind patch-command)
                   "patch form should normalize to :patch")))
+
+(defun provider-profile-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/provider-profiles/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-profiles/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::ensure-environment-provider-profile
+     :environment environment
+     :config (sbcl-agent::make-config :provider "mock"
+                                      :model "gpt-5"
+                                      :working-directory "/tmp/provider-profiles/")
+     :profile-name "default")
+    (multiple-value-bind (configure-result configure-kind configure-session configure-provider)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          '(provider/configure "anthropic-review"
+            :provider "anthropic"
+            :model "claude-3-7-sonnet"
+            :fast-model "claude-3-5-haiku"
+            :api-base "https://api.anthropic.com"
+            :intents '(:architecture-review :deep-reasoning)
+            :latency-tier :balanced
+            :review-bias :deep
+            :execution-bias :balanced
+            :locality :network))
+         provider
+         session)
+      (assert-equal :provider-configure configure-kind
+                    "provider/configure should dispatch correctly")
+      (assert-true (eq configure-session session)
+                   "provider/configure should preserve the session")
+      (assert-equal "mock" (sbcl-agent::provider-name configure-provider)
+                    "provider/configure should not switch the runtime provider")
+      (assert-equal 2 (getf configure-result :profile-count)
+                    "provider/configure should add a provider profile"))
+    (multiple-value-bind (use-result use-kind use-session switched-provider)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(provider/use "anthropic-review"))
+         provider
+         session)
+      (assert-equal :provider-use use-kind
+                    "provider/use should dispatch correctly")
+      (assert-true (eq use-session session)
+                   "provider/use should preserve the session")
+      (assert-equal "anthropic" (sbcl-agent::provider-name switched-provider)
+                    "provider/use should switch the runtime provider")
+      (assert-equal "anthropic-review" (getf use-result :active-profile-name)
+                    "provider/use should activate the requested profile")
+      (assert-equal "claude-3-7-sonnet" (getf (getf use-result :active-profile) :model)
+                    "provider/use should expose the active model")
+      (assert-true (member :architecture-review
+                           (getf (getf use-result :active-profile) :intents))
+                   "provider/use should expose provider profile intent metadata"))
+    (multiple-value-bind (list-result list-kind listed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(provider/list))
+         provider
+         session)
+      (declare (ignore listed-session))
+      (assert-equal :provider-list list-kind
+                    "provider/list should dispatch correctly")
+      (assert-equal 2 (getf list-result :profile-count)
+                    "provider/list should report all configured profiles"))
+    (multiple-value-bind (routing-result routing-kind routing-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(provider/routing :manual))
+         provider
+         session)
+      (declare (ignore routing-session))
+      (assert-equal :provider-routing routing-kind
+                    "provider/routing should dispatch correctly")
+      (assert-equal :manual (getf routing-result :routing-mode)
+                    "provider/routing should update the environment routing mode"))
+    (let* ((route (sbcl-agent::select-environment-provider-profile
+                   "Need a deep architecture review"
+                   :environment environment))
+           (route-summary (sbcl-agent::record-environment-provider-route route environment)))
+      (declare (ignore route-summary)))
+    (multiple-value-bind (route-result route-kind route-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(provider/route))
+         provider
+         session)
+      (declare (ignore route-session))
+      (assert-equal :provider-route route-kind
+                    "provider/route should dispatch correctly")
+      (assert-equal :manual (getf route-result :routing-mode)
+                    "provider/route should report the current routing mode")
+      (assert-equal "anthropic-review"
+                    (getf (getf route-result :last-route) :selected-profile-name)
+                    "provider/route should expose the last routing decision"))
+    (assert-equal "anthropic-review"
+                  (getf (getf (sbcl-agent::environment-status environment) :provider-profile)
+                        :active-profile-name)
+                  "environment/status should surface the active provider profile")))
+
+(defun provider-auto-routing-selection-test ()
+  (let* ((environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-routing/"))
+         (base (sbcl-agent::make-config :provider "mock"
+                                        :model "gpt-5"
+                                        :working-directory "/tmp/provider-routing/")))
+    (sbcl-agent::ensure-environment-provider-profile
+     :environment environment
+     :config base
+     :profile-name "default")
+    (sbcl-agent::command-environment-provider-configure-service
+     "anthropic-review"
+     '(:provider "anthropic"
+       :model "claude-3-7-sonnet"
+       :fast-model "claude-3-5-haiku"
+       :api-base "https://api.anthropic.com"
+       :intents (:architecture-review :deep-reasoning)
+       :review-bias :deep
+       :latency-tier :balanced
+       :locality :network)
+     environment)
+    (sbcl-agent::command-environment-provider-configure-service
+     "local-fast"
+     '(:provider "lm-studio"
+       :model "qwen-coder"
+       :fast-model "qwen-coder-mini"
+       :api-base "http://localhost:1234/v1"
+       :intents (:quick-turn :local-development :code-execution)
+       :latency-tier :fast
+       :execution-bias :high
+       :locality :local)
+     environment)
+    (let ((deep-route (sbcl-agent::select-environment-provider-profile
+                       "Need a deep architecture review of this subsystem"
+                       :environment environment))
+          (quick-route (sbcl-agent::select-environment-provider-profile
+                        "Give me a quick brief answer"
+                        :environment environment))
+          (local-route (sbcl-agent::select-environment-provider-profile
+                        "Use the local lm studio model for this"
+                        :environment environment))
+          (explicit-route (sbcl-agent::select-environment-provider-profile
+                           "Need a detailed review"
+                           :environment environment
+                           :options '(:provider-profile "default"))))
+      (assert-equal :deep-request (getf deep-route :reason)
+                    "provider routing should classify deep review prompts")
+      (assert-equal "anthropic-review"
+                    (getf (getf deep-route :selected-profile) :name)
+                    "provider routing should prefer the Anthropic profile for deep review prompts")
+      (assert-true (consp (getf deep-route :candidate-rankings))
+                   "provider routing should expose candidate rankings")
+      (assert-equal :quick-request (getf quick-route :reason)
+                    "provider routing should classify quick prompts")
+      (assert-equal "local-fast"
+                    (getf (getf quick-route :selected-profile) :name)
+                    "provider routing should prefer the local profile for quick prompts")
+      (assert-true (>= (getf (first (getf quick-route :candidate-rankings)) :score) 1)
+                   "provider routing candidate rankings should include scores")
+      (assert-equal :local-request (getf local-route :reason)
+                    "provider routing should classify local prompts")
+      (assert-equal "local-fast"
+                    (getf (getf local-route :selected-profile) :name)
+                    "provider routing should prefer the local profile for explicit local prompts")
+      (let ((execution-route (sbcl-agent::select-environment-provider-profile
+                              "Implement this patch and fix the code"
+                              :environment environment)))
+        (assert-equal :code-execution-request (getf execution-route :reason)
+                      "provider routing should classify code execution prompts")
+        (assert-equal "local-fast"
+                      (getf (getf execution-route :selected-profile) :name)
+                      "provider routing should prefer execution-biased profiles for code execution prompts"))
+      (assert-equal :requested-profile (getf explicit-route :reason)
+                    "provider routing should honor explicit provider profile overrides")
+      (assert-equal "default"
+                    (getf (getf explicit-route :selected-profile) :name)
+                    "provider routing should keep the explicitly requested profile"))))
+
+(defun provider-governance-routing-selection-test ()
+  (let* ((environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-governance-routing/"))
+         (base (sbcl-agent::make-config :provider "mock"
+                                        :model "gpt-5"
+                                        :working-directory "/tmp/provider-governance-routing/")))
+    (sbcl-agent::ensure-environment-provider-profile
+     :environment environment
+     :config base
+     :profile-name "default")
+    (sbcl-agent::command-environment-provider-configure-service
+     "deep-review"
+     '(:provider "anthropic"
+       :model "claude-3-7-sonnet"
+       :intents (:incident-review :validation-review :governance-review)
+       :review-bias :deep
+       :latency-tier :balanced
+       :locality :network)
+     environment)
+    (sbcl-agent::command-environment-provider-configure-service
+     "local-exec"
+     '(:provider "lm-studio"
+       :model "qwen-coder"
+       :intents (:code-execution :local-development)
+       :execution-bias :high
+       :latency-tier :fast
+       :locality :local)
+     environment)
+    (setf (sbcl-agent::environment-summaries environment)
+          '(:operator-status (:blocked-count 1
+                              :quarantined-count 0
+                              :incident-count 1
+                              :open-incident-count 1
+                              :blocked-work-items ((:why :pending-validation))
+                              :quarantined-work-items ())
+            :incident-summary (:count 1 :open-count 1 :recent ((:id "incident-1")))))
+    (let ((incident-route (sbcl-agent::select-environment-provider-profile
+                           "Implement the fix now"
+                           :environment environment)))
+      (assert-equal :validation-governance-request (getf incident-route :reason)
+                    "governance-heavy environments should bias code execution prompts toward review profiles")
+      (assert-equal "deep-review"
+                    (getf (getf incident-route :selected-profile) :name)
+                    "governance-heavy environments should prefer governance-review profiles over execution-fast profiles")
+      (assert-equal "deep-review"
+                    (getf (first (getf incident-route :candidate-rankings)) :profile-name)
+                    "governance routing should rank the governance-review profile first"))))
 
 (defun rgp-integration-snapshot-test ()
   (let* ((provider (make-test-provider))
@@ -2068,14 +2565,34 @@ fi
                       "say should persist one completed turn")
         (assert-equal 1 (length (sbcl-agent::agent-session-operations updated-session))
                       "say should persist one provider operation when no assistant actions exist")
-        (assert-equal :safe-read
-                      (getf (getf (sbcl-agent::operation-record-summary
-                                   (first (sbcl-agent::agent-session-operations updated-session)))
-                                  :policy-decision)
-                            :policy-id)
-                      "say provider operation should record a safe-read policy decision")
-        (assert-equal 11 (length (sbcl-agent::agent-session-events updated-session))
-                      "say should record turn and operation lifecycle events")))))
+	        (assert-equal :safe-read
+	                      (getf (getf (sbcl-agent::operation-record-summary
+	                                   (first (sbcl-agent::agent-session-operations updated-session)))
+	                                  :policy-decision)
+	                            :policy-id)
+	                      "say provider operation should record a safe-read policy decision")
+	        (assert-equal 16 (length (sbcl-agent::agent-session-events updated-session))
+	                      "say should record turn, retrieval, cognition, reasoning, planning, durable-memory, and operation lifecycle events")
+            (assert-true (find :retrieval-dossier
+                               (sbcl-agent::agent-session-events updated-session)
+                               :key #'sbcl-agent::event-kind)
+                         "say should record the pre-prompt retrieval dossier event")
+            (assert-true (find :cognition-bundle
+                               (sbcl-agent::agent-session-events updated-session)
+                               :key #'sbcl-agent::event-kind)
+                         "say should record the pre-prompt cognition bundle event")
+            (assert-true (find :reasoning-brief
+                               (sbcl-agent::agent-session-events updated-session)
+                               :key #'sbcl-agent::event-kind)
+                         "say should record the pre-prompt reasoning brief event")
+            (assert-true (find :planning-brief
+                               (sbcl-agent::agent-session-events updated-session)
+                               :key #'sbcl-agent::event-kind)
+                         "say should record the pre-prompt planning brief event")
+            (assert-true (find :memory-entry-recorded
+                               (sbcl-agent::agent-session-events updated-session)
+                               :key #'sbcl-agent::event-kind)
+                         "say should record the durable memory entry event")))))
 
 (defun say-mixed-action-operations-test ()
   (let ((provider (make-instance 'mixed-action-provider))
@@ -2147,6 +2664,177 @@ fi
         (assert-equal :workspace-write
                       (getf (sbcl-agent::operation-policy-decision patch-op) :policy-id)
                       "patch action should record workspace-write policy")))))
+
+(defun say-patch-action-deferred-by-incident-test ()
+  (let ((provider (make-instance 'patch-action-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (command (sbcl-agent::normalize-form-command '(say "prepare patch while incidents remain open"))))
+    (sbcl-agent::create-incident session
+                                 :test
+                                 "Open incident"
+                                 "An active incident should make governed mutation proposals conservative.")
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "deferred patch say should dispatch as :say")
+      (assert-equal :completed
+                    (getf (getf result :turn) :status)
+                    "deferred governed mutations should not leave the turn awaiting approval")
+      (assert-equal 1 (getf result :deferred-action-count)
+                    "active incidents should defer governed patch proposals")
+      (assert-equal 0 (getf result :staged-action-count)
+                    "deferred governed patch proposals should not be staged")
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "deferred governed patch proposals should not enter pending actions")
+      (assert-equal 0 (length (sbcl-agent::agent-session-work-items updated-session))
+                    "deferred governed patch proposals should not create governed work-items")
+      (let ((patch-op (find "assistant-patch"
+                            (sbcl-agent::agent-session-operations updated-session)
+                            :key #'sbcl-agent::operation-name
+                            :test #'string=))
+            (deferred-event (find :governed-mutations-deferred
+                                  (sbcl-agent::agent-session-events updated-session)
+                                  :key #'sbcl-agent::event-kind)))
+        (assert-true patch-op "deferred patch flow should still record an assistant patch operation")
+        (assert-equal :blocked
+                      (sbcl-agent::operation-status patch-op)
+                      "deferred patch action should be recorded as blocked")
+        (assert-equal :deferred
+                      (getf (sbcl-agent::operation-policy-decision patch-op) :decision)
+                      "deferred patch action should record deferred policy disposition")
+        (assert-true deferred-event
+                     "deferred governed patch proposals should emit a deferral event")))))
+
+(defun say-weakly-grounded-patch-deferred-test ()
+  (let ((provider (make-instance 'weak-grounding-patch-provider))
+        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (command (sbcl-agent::normalize-form-command '(say "What happened earlier with that prior incident?"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "weak-grounding patch say should dispatch as :say")
+      (assert-equal :completed
+                    (getf (getf result :turn) :status)
+                    "weakly grounded mutation proposals should not leave the turn awaiting approval")
+      (assert-equal 1 (getf result :deferred-action-count)
+                    "weakly grounded governed mutations should be deferred")
+      (assert-equal 0 (getf result :staged-action-count)
+                    "weakly grounded governed mutations should not be staged")
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "weakly grounded governed mutations should not enter pending actions")
+      (let ((patch-op (find "assistant-patch"
+                            (sbcl-agent::agent-session-operations updated-session)
+                            :key #'sbcl-agent::operation-name
+                            :test #'string=))
+            (weak-grounding-event (find :weakly-grounded-mutations-deferred
+                                        (sbcl-agent::agent-session-events updated-session)
+                                        :key #'sbcl-agent::event-kind))
+            (turn-status (sbcl-agent::turn-detail updated-session))
+            (mutation-review (sbcl-agent::mutation-review updated-session))
+            (turn-status-patch-op nil))
+        (setf turn-status-patch-op (find "assistant-patch"
+                                         (getf turn-status :operations)
+                                         :key (lambda (operation) (getf operation :name))
+                                         :test #'string=))
+        (assert-true patch-op "weakly grounded patch flow should still record an assistant patch operation")
+        (assert-equal :blocked
+                      (sbcl-agent::operation-status patch-op)
+                      "weakly grounded patch action should be recorded as blocked")
+        (assert-equal :deferred
+                      (getf (sbcl-agent::operation-policy-decision patch-op) :decision)
+                      "weakly grounded patch action should record deferred policy disposition")
+        (assert-true (getf (getf (sbcl-agent::operation-metadata patch-op) :action-assessment) :weakly-grounded-p)
+                     "weakly grounded patch action should preserve its assessment metadata")
+        (assert-true turn-status-patch-op
+                     "turn/status should expose the assistant patch operation")
+        (assert-true (getf (getf turn-status-patch-op :action-assessment)
+                           :weakly-grounded-p)
+                     "turn/status should project compact action assessment details")
+        (assert-equal 1
+                      (getf (getf turn-status :detail-summary) :weakly-grounded-operation-count)
+                      "turn/status should summarize weakly grounded operation counts")
+        (assert-equal 1
+                      (getf (getf turn-status :detail-summary)
+                            :deferred-weakly-grounded-operation-count)
+                      "turn/status should summarize deferred weakly grounded operation counts")
+        (assert-equal 1
+                      (getf (getf (getf mutation-review :governance) :action-assessment-summary)
+                            :weakly-grounded-operation-count)
+                      "mutation review should expose weakly grounded action counts")
+        (assert-equal 1
+                      (getf (getf (getf mutation-review :governance) :action-assessment-summary)
+                            :deferred-weakly-grounded-operation-count)
+                      "mutation review should expose deferred weakly grounded action counts")
+        (assert-true weak-grounding-event
+                     "weakly grounded mutation proposals should emit a dedicated deferral event")))))
+
+(defun strategy-governed-mutation-deferred-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (response (sbcl-agent::make-assistant-response
+                    :message "Propose a patch."
+                    :actions (list (sbcl-agent::make-assistant-action
+                                    :type :patch
+                                    :payload '((:write "tmp/strategy-deferred.txt" "hello"))))))
+         (retrieval-dossier '(:intent (:category :code-change
+                                       :domains (:workspace :workflow)
+                                       :mutation-likely-p t)
+                             :ranking (:top-candidates ((:label :workspace)))))
+         (reasoning-brief '(:reasoning-mode :environment-grounded
+                            :facts ()
+                            :uncertainties ((:kind :missing-context :statement "Need stronger evidence."))
+                            :blockers ()
+                            :validation-obligations ()
+                            :evidence-actions ((:kind :collect-missing-context))))
+         (cognition-bundle (sbcl-agent::make-cognition-bundle
+                            :retrieval-dossier retrieval-dossier
+                            :prior-outcome-brief '(:mode :historical-analogy
+                                                  :similar-successes ()
+                                                  :similar-failures ()
+                                                  :avoidance-guidance ()
+                                                  :reuse-recommendation :no-strong-prior-analogy)
+                            :reasoning-brief reasoning-brief
+                            :planning-brief '(:planning-mode :environment-grounded
+                                              :ordered-steps ((:phase :collect-evidence)
+                                                              (:phase :plan)
+                                                              (:phase :mutate)))
+                            :execution-strategy '(:mode :inspection-first
+                                                  :next-step :collect-evidence)
+                            :validation-strategy '(:mode :opportunistic
+                                                   :next-step :no-additional-validation-required)
+                            :action-agenda '(:step-count 2
+                                             :primary-step (:kind :collect-evidence
+                                                            :priority :high
+                                                            :statement "Collect additional evidence first.")
+                                             :steps ((:kind :collect-evidence
+                                                      :priority :high
+                                                      :statement "Collect additional evidence first.")
+                                                     (:kind :plan-mutation
+                                                      :priority :medium
+                                                      :statement "Then plan the mutation.")))
+                            :outcome-brief '(:outcome-mode :expectation-vs-observation
+                                             :recommended-next-step :collect-evidence)))
+         (action-report (sbcl-agent::process-response-actions response
+                                                              session
+                                                              :reasoning-brief reasoning-brief
+                                                              :retrieval-dossier retrieval-dossier
+                                                              :cognition-bundle cognition-bundle))
+         (strategy-event (find :strategy-governed-mutations-deferred
+                               (sbcl-agent::agent-session-events session)
+                               :key #'sbcl-agent::event-kind)))
+    (assert-equal 0
+                  (length (getf action-report :staged-actions))
+                  "execution strategy should prevent staging governed mutations while evidence collection is still required")
+    (assert-equal 1
+                  (length (getf action-report :deferred-actions))
+                  "execution strategy should defer governed mutations until evidence collection is complete")
+    (assert-true strategy-event
+                 "strategy-based deferral should emit a dedicated event")
+    (assert-equal :collect-evidence
+                  (getf (getf (sbcl-agent::event-payload strategy-event) :execution-strategy) :next-step)
+                  "strategy deferral event should preserve the governing execution next step")
+    (assert-equal :collect-evidence
+                  (getf (getf (getf (sbcl-agent::event-payload strategy-event) :action-agenda)
+                              :primary-step)
+                        :kind)
+                  "strategy deferral event should preserve the governing action agenda")))
 
 (defun say-mutating-eval-approval-test ()
   (let ((provider (make-instance 'mutating-eval-provider))
@@ -2800,6 +3488,61 @@ fi
                       "describe-work-item should expose transaction detail")
         (assert-equal 1 (length (getf detail-result :checkpoints))
                       "describe-work-item should expose checkpoint detail")))))
+
+(defun work-item-plan-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (multiple-value-bind (enqueue-result enqueue-kind updated-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+         provider
+         session)
+      (declare (ignore enqueue-kind))
+      (let ((work-item-id (getf enqueue-result :work-item-id)))
+        (multiple-value-bind (plan-result plan-kind plan-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-work-item-plan ,work-item-id))
+             provider
+             updated-session)
+          (declare (ignore plan-session))
+          (assert-equal :describe-work-item-plan plan-kind
+                        "describe-work-item-plan should dispatch correctly")
+          (assert-equal work-item-id
+                        (getf plan-result :id)
+                        "describe-work-item-plan should return the requested work-item")
+          (assert-true (listp (getf plan-result :plan-steering))
+                       "describe-work-item-plan should expose plan steering"))
+        (multiple-value-bind (steer-result steer-kind steer-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(steer-work-item-plan ,work-item-id :phase :validate :next-step :run-cold-validation :note "Validation first"))
+             provider
+             updated-session)
+          (declare (ignore steer-session))
+          (assert-equal :steer-work-item-plan steer-kind
+                        "steer-work-item-plan should dispatch correctly")
+          (assert-equal :operator-steered
+                        (getf (getf steer-result :next-action) :type)
+                        "steer-work-item-plan should produce an operator-directed next action")
+          (assert-equal :validate
+                        (getf (getf steer-result :plan-steering) :operator-directed-phase)
+                        "steer-work-item-plan should preserve the operator-directed phase")
+          (assert-equal :run-cold-validation
+                        (getf (getf steer-result :plan-steering) :operator-directed-next-step)
+                        "steer-work-item-plan should preserve the operator-directed next step")
+          (assert-true (> (getf (getf steer-result :plan-steering) :operator-steering-count) 0)
+                       "steer-work-item-plan should record operator steering history"))
+        (multiple-value-bind (followup-result followup-kind followup-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-work-item-plan ,work-item-id))
+             provider
+             updated-session)
+          (declare (ignore followup-session))
+          (assert-equal :describe-work-item-plan followup-kind
+                        "describe-work-item-plan should remain available after steering")
+          (assert-equal :validate
+                        (getf (getf followup-result :plan-steering) :operator-directed-phase)
+                        "describe-work-item-plan should expose the persisted operator-directed phase"))))))
 
 (defun work-item-validation-test ()
   (let* ((provider (make-test-provider))
@@ -5030,6 +5773,59 @@ fi
                        (sbcl-agent::agent-session-events session)
                        :key #'sbcl-agent::event-kind)
                  "follow-up continuation should emit an explicit follow-up completed event")))
+
+(defun turn-resume-validation-first-followup-test ()
+  (let* ((provider (make-instance 'followup-validation-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "mutate runtime then follow up"))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (declare (ignore resumed-session))
+      (assert-equal :turn-resume resume-kind
+                    "turn/resume should dispatch correctly for validation-first follow-up providers")
+      (assert-true (getf (getf resume-result :followup) :followup-p)
+                   "turn/resume should still produce structured follow-up results")
+      (assert-true (listp (getf (getf resume-result :followup) :action-agenda-summary))
+                   "turn/resume follow-up should expose an action agenda summary")
+      (assert-equal 1
+                    (getf (getf resume-result :followup) :deferred-action-count)
+                    "post-mutation follow-up should defer fresh governed mutations while validation remains the next step")
+      (assert-equal 0
+                    (getf (getf resume-result :followup) :staged-action-count)
+                    "post-mutation validation-first follow-up should not stage fresh governed mutations"))
+    (let* ((turn (sbcl-agent::most-recent-thread-turn session))
+           (detail (sbcl-agent::turn-detail session (sbcl-agent::turn-id turn)))
+           (followup-patch-op (find "assistant-patch"
+                                    (getf detail :operations)
+                                    :key (lambda (entry) (getf entry :name))
+                                    :test #'string=))
+           (strategy-event (find :strategy-governed-mutations-deferred
+                                 (sbcl-agent::agent-session-events session)
+                                 :key #'sbcl-agent::event-kind)))
+      (assert-equal :completed (getf detail :status)
+                    "validation-first follow-up should leave the turn completed")
+      (assert-true followup-patch-op
+                   "validation-first follow-up should still record the deferred follow-up patch operation")
+      (assert-equal :blocked (getf followup-patch-op :status)
+                    "validation-first follow-up should record the follow-up patch as blocked")
+      (assert-true strategy-event
+                   "validation-first follow-up should emit a strategy deferral event")
+      (assert-true (getf (sbcl-agent::event-payload strategy-event) :post-mutation-p)
+                   "strategy deferral event should identify post-mutation follow-up enforcement")
+      (assert-equal :validate
+                    (getf (getf (sbcl-agent::event-payload strategy-event) :outcome-brief)
+                          :recommended-next-step)
+                    "strategy deferral event should preserve the validating next step"))))
 
 (defun session-shell-commands-test ()
   (let* ((provider (make-test-provider))

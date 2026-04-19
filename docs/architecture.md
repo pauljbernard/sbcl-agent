@@ -21,7 +21,7 @@ The current codebase now sits between two phases:
 
 - the original shell-plus-streamed-ask runtime is still supported
 - the conversation-native runtime is partially implemented and now shapes the architecture
-- the next stage is shifting toward an Environment-first model in which runtime, conversation, artifacts, work-items, and agents live inside one larger persistent world
+- the next stage is shifting toward an Environment-first model in which runtime, conversation, artifacts, work-items, agents, retrieval, and service-backed UX surfaces live inside one larger persistent world
 
 That means the right description of the codebase is neither "prototype shell" nor "finished environment platform." It is an implemented transitional architecture with a clear direction of travel.
 
@@ -151,12 +151,26 @@ Top-level entrypoints in `bin/` dispatch into the Common Lisp runtime. The inter
 
 ### Provider boundary and streaming
 
-`src/provider-protocol.lisp` normalizes provider events into a canonical shape. The system currently supports:
+`src/provider-protocol.lisp` now primarily owns provider request/response protocol structures, while transport and request assembly have been split into:
+
+- `src/provider-transport.lisp`
+- `src/provider-transport-curl.lisp`
+- `src/request-snapshot.lisp`
+
+The system currently supports:
 
 - a mock provider in `src/provider-mock.lisp`
-- an OpenAI-compatible provider in `src/provider-openai.lisp`
+- an OpenAI-compatible provider family in `src/provider-openai.lisp`
+- Anthropic, Google/Gemini-compatible, Meta-compatible, and LM Studio/local-compatible model selection through the same provider boundary, config model, and provider-profile surface
 
 Streaming is now more event-aware than the original shell implementation, although the OpenAI path still carries some transitional behavior while the event model continues to harden.
+
+The provider boundary is also no longer just a startup transport choice. The current implementation now includes:
+
+- environment-backed provider profiles
+- runtime provider routing modes such as `:auto` and `:manual`
+- scored candidate ranking based on prompt shape, governance posture, and cognition context
+- shell and non-shell route inspection and route preview surfaces
 
 The canonical event envelope is also tightening across conversation, runtime, workflow, and incident paths. Session-originated events now stamp stable correlation metadata such as `environment-id`, `session-id`, `run-id`, `operation-id`, `work-item-id`, `artifact-id`, and `incident-id` when that context is available. Streamed provider events now inherit the active provider-run operation, thread, and turn identity before they are logged as session or environment events. Workflow milestones such as validation completion, reconciliation creation, workflow quarantine, workflow resume, workflow closure, and incident creation now also emit canonical correlated events instead of living only inside record payloads. That gives provider runs, environment logs, workflow evidence, and operator renderers one shared correlation spine instead of relying on ad hoc payload conventions.
 
@@ -177,6 +191,8 @@ Provider request assembly is tighter as well. When a bound Environment exists, p
 That same rule now applies to default thread and turn selection for provider requests. When the caller does not explicitly pin a thread or turn, provider context resolution now prefers the Environment conversation snapshot rather than the mutable compatibility-session defaults. The conversation-domain refresh path also now updates the underlying thread/message/turn/operation/artifact records, not only aggregate counters, so environment-owned conversational context remains usable for later request assembly and operator orientation.
 
 Provider requests are also becoming more structured. The provider boundary now carries thread, turn, runtime, workspace, and policy context instead of relying only on a flat prompt string.
+
+That structure now includes retrieval and cognition state as a default part of the turn path. The current implementation can classify retrieval intent, assemble retrieval dossiers, build cognition bundles, reuse prior outcomes and playbooks, and feed validation/execution strategy into provider routing and turn orchestration before the provider call is made.
 
 ### Conversation layer
 
@@ -207,6 +223,43 @@ That subsystem now also has an explicit environment-domain module in `src/conver
 This is the structural shift from "one streamed response" to "one interaction lifecycle."
 
 That lifecycle now includes resumed-turn follow-up in the implemented path: after approval-gated actions execute, a provider can be called again to continue and complete the same turn.
+
+### Service boundary
+
+The runtime now also has an explicit service layer. Those modules expose stable query/command entry points over the environment kernel so that the shell is not the only client path.
+
+Concrete service modules now include:
+
+- `src/execution-service.lisp`
+- `src/environment-service.lisp`
+- `src/conversation-service.lisp`
+- `src/runtime-service.lisp`
+- `src/workflow-service.lisp`
+- `src/approval-service.lisp`
+- `src/work-item-service.lisp`
+- `src/incident-service.lisp`
+- `src/mutation-review-service.lisp`
+- `src/rgp-service.lisp`
+- `src/event-service.lisp`
+- `src/retrieval-service.lisp`
+
+`src/service-core.lisp` provides the shared response envelope and metadata contract used by those service modules.
+
+`src/execution-service.lisp` is now the important bridge between interaction surfaces and governed execution semantics. It owns shared execution entry points for:
+
+- `ask` and `say`
+- staged assistant action processing
+- pending assistant action execution
+- direct tool invocation
+- direct patch application
+- provider stream event capture needed by turn execution
+- retrieval-aware pre-prompt context assembly
+
+That means the shell is no longer the semantic owner of those paths, and assistant action execution no longer bypasses the same public execution boundary that a future UX or service tier would need to use.
+
+The shell now delegates most operator-visible paths through that boundary while preserving compatibility output shapes where needed.
+
+The non-interactive CLI is increasingly participating in that same service boundary. RGP was the first concrete example, and the provider CLI now exposes service-backed `show`, `route`, `preview`, `routing`, `configure`, and `use` operations as JSON envelopes for future presentation-tier clients.
 
 ### Transitional session composition root
 
@@ -254,6 +307,8 @@ Tools remain structured, explicit capabilities. Current tool families include:
 - patch application
 
 Policy and capability control live in `src/policy.lisp` and `src/sandbox.lisp`. The system is designed so conversation mode does not bypass those gates.
+
+One architectural improvement from the current cleanup is that direct tool and patch execution now run through the same execution-service entry points used by higher-level assistant actions. That does not change the underlying policy model, but it does reduce the number of privileged mutation paths that were previously assembled in shell-specific code.
 
 ### Tasks, workers, and governed workflow
 
@@ -388,6 +443,7 @@ The current source tree maps to the architecture like this:
 - `src/main.lisp`: CLI dispatch and top-level commands
 - `src/commands.lisp`: shell command normalization
 - `src/shell.lisp`, `src/repl.lisp`: operator interface and command execution
+- `src/execution-service.lisp`: shared interaction and mutation execution boundary
 - `src/provider-protocol.lisp`, `src/provider-mock.lisp`, `src/provider-openai.lisp`: provider boundary
 - `src/conversation.lisp`, `src/turn-orchestrator.lisp`: conversation and turn lifecycle
 - `src/session.lisp`, `src/events.lisp`, `src/tasks.lisp`: runtime state, event log, tasks, workers
@@ -404,13 +460,14 @@ Already implemented in code:
 - thread, message, turn, operation, and artifact records
 - shell commands for threads, `say`, turn status, and turn resume
 - approval-aware turn orchestration
+- an execution service layer shared by shell interaction, direct tool/patch execution, and assistant action execution
 - persisted session state, tasks, workers, work-items, replay, and reconciliation
 
 Still partial or still planned:
 
 - a fully separated internal conversation/runtime/engineering state model
 - a richer event bus that fully eliminates transitional in-band control behavior
-- governed runtime tool families for image inspection and mutation
+- a service-native external API surface over the execution/service layer for remote UX clients
 - stronger artifact coverage and workflow binding for every mutating turn
 - deeper rollback and cold-start reproducibility orchestration
 

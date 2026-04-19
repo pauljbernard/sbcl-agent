@@ -13,6 +13,11 @@
   runtime-summary
   workspace-summary
   policy-summary
+  retrieval-dossier
+  cognition-bundle
+  reasoning-brief
+  planning-brief
+  outcome-brief
   operator-mode
   stream-p)
 
@@ -93,6 +98,9 @@
                                                    :operator-mode operator-mode
                                                    :stream-p nil)))
 
+(defun send-provider-request (provider request)
+  (send-request provider request))
+
 (defun emit-provider-event (event-handler type payload
                           &key family canonical-type run-id operation-id entity-id thread-id turn-id
                             (visibility :user) metadata)
@@ -142,6 +150,9 @@
                                                      :operator-mode operator-mode
                                                      :stream-p t)
                   event-handler))
+
+(defun stream-provider-request (provider request event-handler)
+  (stream-request provider request event-handler))
 
 (defun normalize-action-type (value)
   (cond
@@ -242,22 +253,23 @@
             (tool-id (or (getf payload :TOOL-ID)
                          (getf payload :TOOL_ID)))
             (arguments (or (getf payload :ARGUMENTS)
-                           (getf payload :arguments)))
-            (*runtime-governance-thread* thread)
-            (*runtime-governance-turn* turn)
-            (*runtime-governance-operation* operation))
-       (declare (special *runtime-governance-thread*
-                         *runtime-governance-turn*
-                         *runtime-governance-operation*))
+                           (getf payload :arguments))))
        (unless (keywordp tool-id)
          (error "Assistant tool action requires keyword tool id, got ~S" tool-id))
-       (apply #'invoke-tool tool-id session (or arguments '()))))
+       (service-response-data
+        (command-invoke-tool-service session
+                                     tool-id
+                                     (or arguments '())
+                                     :thread thread
+                                     :turn turn
+                                     :operation operation))))
     (:PATCH
-     (apply-patch-operations session
-                             (assistant-action-payload action)
-                             :thread thread
-                             :turn turn
-                             :operation operation))
+     (service-response-data
+      (command-apply-patch-service session
+                                   (assistant-action-payload action)
+                                   :thread thread
+                                   :turn turn
+                                   :operation operation)))
     (:EVAL
      (let* ((payload (assistant-action-payload action))
             (*runtime-governance-thread* thread)
@@ -305,13 +317,31 @@
     (cond
       ((string= provider-name "mock")
        (make-instance 'mock-provider :model (config-model config)))
-      ((or (string= provider-name "openai")
-           (string= provider-name "openai-compatible"))
-       (make-instance 'openai-compatible-provider
+      ((string= provider-name "anthropic")
+       (make-instance 'anthropic-provider
                       :model (config-model config)
                       :fast-model (config-fast-model config)
-                      :api-base (or (config-api-base config) "https://api.openai.com/v1")
+                      :api-base (or (config-api-base config) "https://api.anthropic.com")
+                      :api-key (config-api-key config)))
+      ((or (string= provider-name "openai")
+           (string= provider-name "openai-compatible")
+           (string= provider-name "google")
+           (string= provider-name "gemini")
+           (string= provider-name "google-openai-compatible")
+           (string= provider-name "gemini-openai-compatible")
+           (string= provider-name "lm-studio")
+           (string= provider-name "lmstudio")
+           (string= provider-name "local-openai-compatible")
+           (string= provider-name "meta-compatible")
+           (string= provider-name "meta-openai-compatible"))
+       (make-instance 'openai-compatible-provider
+                      :provider-id provider-name
+                      :model (config-model config)
+                      :fast-model (config-fast-model config)
+                      :api-base (or (config-api-base config)
+                                    (provider-default-api-base provider-name)
+                                    "https://api.openai.com/v1")
                       :api-key (config-api-key config)))
       (t
-       (error "Unsupported provider ~S. Supported providers: mock, openai-compatible"
+       (error "Unsupported provider ~S. Supported providers: mock, openai-compatible, anthropic, gemini/google, lm-studio, meta-compatible"
               (config-provider config))))))

@@ -1,8 +1,6 @@
 (in-package #:sbcl-agent)
 
 (defparameter *shell-package* (find-package '#:sbcl-agent-user))
-(defparameter *stream-event-listener* nil)
-(defparameter *default-ask-streaming* nil)
 
 (defun print-shell-help ()
   (format t "Lisp shell commands:~%")
@@ -10,6 +8,12 @@
   (format t "  (say \"prompt\")                   Conversation-style alias for ASK. Same execution path today.~%")
   (format t "  (ask \"prompt\" :stream t)         Stream assistant output while building the final response.~%")
   (format t "  (ask \"prompt\" :enqueue t)        Queue an agent request instead of executing it inline.~%")
+  (format t "  (provider/show)                   Show the active provider profile for this environment.~%")
+  (format t "  (provider/list)                   List configured provider profiles and the active selection.~%")
+  (format t "  (provider/use \"profile\")         Switch the running shell to a configured provider profile.~%")
+  (format t "  (provider/configure \"profile\" :provider \"name\" :model \"name\" [:fast-model \"name\"] [:api-base \"url\"] [:intents '(:architecture-review :quick-turn)] [:latency-tier :fast|:balanced] [:review-bias :deep|:neutral] [:execution-bias :high|:balanced] [:locality :local|:network]) Save a provider profile without storing secrets.~%")
+  (format t "  (provider/routing [:mode])        Show or set provider routing mode (:auto or :manual).~%")
+  (format t "  (provider/route)                  Show the most recent provider routing decision and ranked candidates.~%")
   (format t "  (thread/new [:title \"name\"])      Create and select a conversation thread.~%")
   (format t "  (thread/list)                      List conversation threads in the current session.~%")
   (format t "  (thread/use \"thread-id\")          Select the active conversation thread.~%")
@@ -54,11 +58,13 @@
   (format t "  (list-workers)                     Show worker summaries for the current session.~%")
   (format t "  (list-work-items)                  Show work-item summaries for the current session.~%")
   (format t "  (describe-work-item \"work-id\")   Show one work-item detail record.~%")
+  (format t "  (describe-work-item-plan \"work-id\") Show the current long-horizon plan and steering state for one work-item.~%")
   (format t "  (list-workflow-records)           Show workflow records for the current session.~%")
   (format t "  (describe-workflow-record \"wf-id\") Show one workflow record with its durable log entries.~%")
   (format t "  (request-work-item-approval \"work-id\" :policy [:reason \"...\"]) Mark a work-item as waiting for approval.~%")
   (format t "  (quarantine-work-item \"work-id\" \"reason\") Quarantine a work-item for operator review.~%")
   (format t "  (resume-work-item \"work-id\" [:note \"...\"]) Resume a quarantined or waiting work-item.~%")
+  (format t "  (steer-work-item-plan \"work-id\" :phase :keyword :next-step :keyword [:note \"...\"]) Override plan steering for one work-item.~%")
   (format t "  (describe-worker \"worker-id\")     Show one worker summary.~%")
   (format t "  (approve :process-run)             Grant a capability policy to the current session.~%")
   (format t "  (tool :fs/read :path \"file\")     Read a workspace file.~%")
@@ -93,7 +99,8 @@
         (tool-args (rest arguments)))
     (unless (keywordp tool-id)
       (error "TOOL id must be a keyword, got ~S" tool-id))
-    (apply #'invoke-tool tool-id session tool-args)))
+    (service-response-data
+     (command-invoke-tool-service session tool-id tool-args))))
 
 (defun execute-approve-command (arguments session)
   (let ((policy (first arguments)))
@@ -104,69 +111,43 @@
 
 (defun execute-patch-command (arguments session)
   (let ((operations (first arguments)))
-    (apply-patch-operations session operations)))
-
-(defun split-assistant-actions (actions)
-  (let ((immediate '())
-        (staged '()))
-    (dolist (action actions)
-      (if (and (eq (assistant-action-type action) :eval)
-               (not (mutating-eval-action-p action)))
-          (push action immediate)
-          (push action staged)))
-    (values (nreverse immediate) (nreverse staged))))
-
-(defun process-response-actions (response session)
-  (multiple-value-bind (immediate staged)
-      (split-assistant-actions (assistant-response-actions response))
-    (let ((immediate-results (when immediate
-                               (execute-assistant-action-list immediate session))))
-      (if staged
-          (stage-pending-actions session staged)
-          (clear-pending-actions session))
-      (list :immediate-actions immediate
-            :immediate-results immediate-results
-            :staged-actions staged))))
+    (service-response-data
+     (command-apply-patch-service session operations))))
 
 (defun execute-assistant-action-command (arguments session)
   (let ((action (first arguments)))
     (unless (typep action 'assistant-action)
       (error "ASSISTANT-ACTION command requires an assistant-action object"))
-    (execute-assistant-action action session)))
+    (service-response-data
+     (command-execute-assistant-action-service session action))))
 
 (defun execute-pending-actions-command (session)
-  (let ((actions (agent-session-pending-actions session)))
-    (unless actions
-      (error "No pending assistant actions are staged in the current session"))
-    (let ((results (execute-assistant-action-list actions session)))
-      (clear-pending-actions session)
-      results)))
+  (service-response-data
+   (command-execute-pending-actions-service session)))
 
 (defun execute-pending-actions-command-with-context (session &key thread turn operation)
-  (let ((actions (agent-session-pending-actions session)))
-    (unless actions
-      (error "No pending assistant actions are staged in the current session"))
-    (let ((results (execute-assistant-action-list actions
-                                                  session
-                                                  :thread thread
-                                                  :turn turn
-                                                  :operation operation)))
-      (clear-pending-actions session)
-      results)))
+  (service-response-data
+   (command-execute-pending-actions-service session
+                                            :thread thread
+                                            :turn turn
+                                            :operation operation)))
 
 (defun execute-session-save-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/SAVE requires a string path"))
-    (save-session session path)
-    (list :saved path :summary (session-summary session))))
+    (service-response-data
+     (command-session-save-service session path))))
 
 (defun execute-session-load-command (arguments)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/LOAD requires a string path"))
-    (let ((session (load-session path)))
-      (values (list :loaded path :summary (session-summary session)) session))))
+    (let* ((response (command-session-load-service path))
+           (payload (service-response-data response)))
+      (values (list :loaded path
+                    :summary (getf payload :summary))
+              (getf payload :session)))))
 
 (defun plist-value (plist indicator &optional default)
   (if (and (listp plist) (member indicator plist))
@@ -199,40 +180,6 @@
     (:tool-intent nil)
     (t
      (format t "~&assistant-stream-event> ~S~%" event))))
-
-(defun handle-provider-stream-event (session event events
-                                   &key thread-id turn-id run-id operation-id)
-  (let* ((resolved-thread-id (or thread-id
-                                 (provider-event-thread-id event)))
-         (resolved-turn-id (or turn-id
-                               (provider-event-turn-id event)))
-         (resolved-run-id (or run-id
-                              (provider-event-run-id event)))
-         (resolved-operation-id (or operation-id
-                                    (provider-event-operation-id event)))
-         (metadata (merge-event-metadata
-                    (list :canonical-type (provider-event-effective-type event)
-                          :legacy-type (provider-event-legacy-type event)
-                          :provider-family (provider-event-family event))
-                    (provider-event-metadata event))))
-    (append-session-event session
-                          :provider-stream
-                          event
-                          :family :provider
-                          :entity-id (or (provider-event-entity-id event)
-                                         resolved-run-id
-                                         resolved-operation-id)
-                          :thread-id resolved-thread-id
-                          :turn-id resolved-turn-id
-                          :visibility (provider-event-visibility event)
-                          :metadata metadata
-                          :run-id resolved-run-id
-                          :operation-id resolved-operation-id)
-    (when *task-progress-callback*
-      (funcall *task-progress-callback* :provider-stream event))
-    (when *stream-event-listener*
-      (funcall *stream-event-listener* event))
-    (append events (list event))))
 
 (defun option-present-p (plist key)
   (and (listp plist)
@@ -271,53 +218,116 @@
             (second plist)
             (remove-plist-key (cddr plist) key)))))
 
-(defun ask-task-form (prompt options)
-  (cons 'ask (cons prompt (remove-plist-key options :enqueue))))
+(defun provider-routing-enabled-p (provider)
+  (member (string-downcase (provider-name provider))
+          '("openai" "openai-compatible" "anthropic"
+            "google" "gemini" "google-openai-compatible" "gemini-openai-compatible"
+            "lm-studio" "lmstudio" "local-openai-compatible"
+            "meta-compatible" "meta-openai-compatible")
+          :test #'string=))
 
 (defun execute-ask-command (arguments provider session)
   (multiple-value-bind (prompt options)
       (parse-ask-arguments arguments)
-    (if (plist-value options :enqueue nil)
-        (let* ((task-form (ask-task-form prompt options))
-               (task (enqueue-task session
-                                   (normalize-form-command task-form)
-                                   :payload task-form)))
-          (values (list :queued-task (task-summary task)
-                        :enqueued-p t)
-                  :ask
-                  session))
-        (let ((stream-p (or (and (option-present-p options :stream)
-                                 (plist-value options :stream nil))
-                            *default-ask-streaming*
-                            (not (null *task-progress-callback*)))))
-          (values (run-conversation-turn provider
-                                         session
-                                         prompt
-                                         :stream-p stream-p
-                                         :source :ask
-                                         :operator-mode :repl-bridge)
-                  :ask
-                  session)))))
+    (let* ((bound-environment (and (provider-routing-enabled-p provider)
+                                   (session-bound-environment session)))
+           (route (and bound-environment
+                       (select-environment-provider-profile prompt
+                                                            :environment bound-environment
+                                                            :options options)))
+           (selected-profile (and route (getf route :selected-profile)))
+           (selected-provider (or (and selected-profile
+                                       (provider-from-profile selected-profile))
+                                  provider))
+           (result (service-response-data
+                    (command-conversation-execution-service session
+                                                            selected-provider
+                                                            prompt
+                                                            options
+                                                            :source :ask
+                                                            :operator-mode :repl-bridge)))
+           (route-summary (if route
+                              (record-environment-provider-route route bound-environment)
+                              (list :routing-mode :provider-default
+                                    :reason :unbound-session
+                                    :selected-profile-name nil
+                                    :selected-provider (provider-name provider)
+                                    :selected-model nil))))
+      (values (append result (list :provider-route route-summary))
+              :ask
+              session
+              selected-provider))))
 
 (defun execute-say-command (arguments provider session)
   (multiple-value-bind (prompt options)
       (parse-ask-arguments arguments)
-    (if (plist-value options :enqueue nil)
-        (let* ((task-form (cons 'say (cons prompt (remove-plist-key options :enqueue))))
-               (task (enqueue-task session
-                                   (normalize-form-command task-form)
-                                   :payload task-form)))
-          (values (list :queued-task (task-summary task)
-                        :enqueued-p t)
-                  :say
-                  session))
-        (let ((stream-p (or (and (option-present-p options :stream)
-                                 (plist-value options :stream nil))
-                            *default-ask-streaming*
-                            (not (null *task-progress-callback*)))))
-          (values (run-say-turn provider session prompt :stream-p stream-p)
-                  :say
-                  session)))))
+    (let* ((bound-environment (and (provider-routing-enabled-p provider)
+                                   (session-bound-environment session)))
+           (route (and bound-environment
+                       (select-environment-provider-profile prompt
+                                                            :environment bound-environment
+                                                            :options options)))
+           (selected-profile (and route (getf route :selected-profile)))
+           (selected-provider (or (and selected-profile
+                                       (provider-from-profile selected-profile))
+                                  provider))
+           (result (service-response-data
+                    (command-conversation-execution-service session
+                                                            selected-provider
+                                                            prompt
+                                                            options
+                                                            :source :say
+                                                            :operator-mode :conversation)))
+           (route-summary (if route
+                              (record-environment-provider-route route bound-environment)
+                              (list :routing-mode :provider-default
+                                    :reason :unbound-session
+                                    :selected-profile-name nil
+                                    :selected-provider (provider-name provider)
+                                    :selected-model nil))))
+      (values (append result (list :provider-route route-summary))
+              :say
+              session
+              selected-provider))))
+
+(defun execute-provider-show-command (&optional environment)
+  (service-response-data
+   (query-environment-provider-service environment)))
+
+(defun execute-provider-list-command (&optional environment)
+  (execute-provider-show-command environment))
+
+(defun execute-provider-configure-command (arguments &optional environment)
+  (let ((profile-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp profile-name)
+      (error "PROVIDER/CONFIGURE requires a string profile name"))
+    (when (oddp (length options))
+      (error "PROVIDER/CONFIGURE keyword options must be a property list"))
+    (unless (stringp (getf options :provider))
+      (error "PROVIDER/CONFIGURE requires a string :provider"))
+    (unless (stringp (getf options :model))
+      (error "PROVIDER/CONFIGURE requires a string :model"))
+    (service-response-data
+     (command-environment-provider-configure-service profile-name options environment))))
+
+(defun execute-provider-use-command (arguments &optional environment)
+  (let ((profile-name (first arguments)))
+    (unless (stringp profile-name)
+      (error "PROVIDER/USE requires a string profile name"))
+    (service-response-data
+     (command-environment-provider-use-service profile-name environment))))
+
+(defun execute-provider-routing-command (arguments &optional environment)
+  (let ((mode (first arguments)))
+    (when (> (length arguments) 1)
+      (error "PROVIDER/ROUTING accepts at most one mode argument"))
+    (service-response-data
+     (command-environment-provider-routing-service mode environment))))
+
+(defun execute-provider-route-command (&optional environment)
+  (service-response-data
+   (query-environment-provider-route-service environment)))
 
 (defun execute-thread-new-command (arguments session)
   (let ((title (getf arguments :title)))
@@ -370,38 +380,38 @@
   (let ((turn-id (first arguments)))
     (when (and turn-id (not (stringp turn-id)))
       (error "REVIEW/MUTATION requires a string turn id when provided"))
-    (mutation-review session turn-id)))
+    (service-response-data
+     (query-mutation-review-service session turn-id))))
 
 (defun execute-integration-rgp-bind-command (arguments session)
   (when (oddp (length arguments))
     (error "INTEGRATION/RGP-BIND arguments must be a property list"))
-  (let* ((binding (bind-environment-to-rgp session
-                                           :tenant-id (getf arguments :tenant-id)
-                                           :request-id (getf arguments :request-id)
-                                           :agent-session-id (getf arguments :agent-session-id)
-                                           :integration-id (getf arguments :integration-id)
-                                           :projection-id (getf arguments :projection-id)))
-         (environment (ensure-environment)))
-    (list :binding (rgp-binding-summary environment)
-          :governed-runtime (environment-rgp-runtime-summary environment)
-          :environment-id (environment-id environment)
-          :session-id (agent-session-id session)
-          :updated-binding binding)))
+  (service-response-data
+   (command-rgp-bind-service session
+                             :tenant-id (getf arguments :tenant-id)
+                             :request-id (getf arguments :request-id)
+                             :agent-session-id (getf arguments :agent-session-id)
+                             :integration-id (getf arguments :integration-id)
+                             :projection-id (getf arguments :projection-id))))
 
 (defun execute-integration-rgp-show-command (session)
-  (environment-rgp-snapshot (ensure-rgp-bound-environment session)))
+  (service-response-data
+   (query-rgp-show-service session)))
 
 (defun execute-integration-rgp-export-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "INTEGRATION/RGP-EXPORT requires a string path"))
-    (export-environment-rgp-snapshot path (ensure-rgp-bound-environment session))))
+    (service-response-data
+     (command-rgp-export-service session path))))
 
 (defun execute-integration-rgp-artifacts-command (session)
-  (environment-rgp-artifact-summaries (ensure-rgp-bound-environment session)))
+  (service-response-data
+   (query-rgp-artifacts-service session)))
 
 (defun execute-integration-rgp-approvals-command (session)
-  (environment-rgp-approval-summaries (ensure-rgp-bound-environment session)))
+  (service-response-data
+   (query-rgp-approvals-service session)))
 
 (defun execute-integration-rgp-approve-command (arguments session)
   (let ((work-item-id (first arguments))
@@ -411,28 +421,16 @@
       (error "INTEGRATION/RGP-APPROVE requires a string work-item id"))
     (unless (keywordp policy)
       (error "INTEGRATION/RGP-APPROVE requires a keyword policy"))
-    (ensure-rgp-bound-environment session)
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (request-work-item-approval session work-item policy :reason reason)
-      (list :binding (rgp-binding-summary)
-            :approval (work-item-wait-report session work-item)
-            :work-item (enriched-work-item-detail session work-item)))))
+    (service-response-data
+     (command-rgp-approve-service session work-item-id policy :reason reason))))
 
 (defun execute-integration-rgp-resume-command (arguments session)
   (let ((work-item-id (first arguments))
         (note (getf (rest arguments) :note)))
     (unless (stringp work-item-id)
       (error "INTEGRATION/RGP-RESUME requires a string work-item id"))
-    (ensure-rgp-bound-environment session)
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (resume-work-item session work-item :note note)
-      (list :binding (rgp-binding-summary)
-            :approval (work-item-wait-report session work-item)
-            :work-item (enriched-work-item-detail session work-item)))))
+    (service-response-data
+     (command-rgp-resume-service session work-item-id :note note))))
 
 (defun execute-runtime-current-package-command (session)
   (getf (service-response-data (query-runtime-summary-service session)) :package-details))
@@ -451,7 +449,8 @@
       (error "RUNTIME/DESCRIBE-SYMBOL requires a string symbol name"))
     (when (oddp (length options))
       (error "RUNTIME/DESCRIBE-SYMBOL keyword options must be a property list"))
-    (apply #'tool-runtime-describe-symbol session :symbol symbol-name options)))
+    (service-response-data
+     (apply #'query-runtime-describe-symbol-service session symbol-name options))))
 
 (defun execute-runtime-find-definition-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -460,7 +459,8 @@
       (error "RUNTIME/FIND-DEFINITION requires a string symbol name"))
     (when (oddp (length options))
       (error "RUNTIME/FIND-DEFINITION keyword options must be a property list"))
-    (apply #'tool-runtime-find-definition session :symbol symbol-name options)))
+    (service-response-data
+     (apply #'query-runtime-find-definition-service session symbol-name options))))
 
 (defun execute-runtime-callers-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -469,7 +469,8 @@
       (error "RUNTIME/CALLERS requires a string symbol name"))
     (when (oddp (length options))
       (error "RUNTIME/CALLERS keyword options must be a property list"))
-    (apply #'tool-runtime-callers session :symbol symbol-name options)))
+    (service-response-data
+     (apply #'query-runtime-callers-service session symbol-name options))))
 
 (defun execute-runtime-methods-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -478,7 +479,8 @@
       (error "RUNTIME/METHODS requires a string symbol name"))
     (when (oddp (length options))
       (error "RUNTIME/METHODS keyword options must be a property list"))
-    (apply #'tool-runtime-methods session :symbol symbol-name options)))
+    (service-response-data
+     (apply #'query-runtime-methods-service session symbol-name options))))
 
 (defun execute-runtime-source-image-divergence-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -487,7 +489,8 @@
       (error "RUNTIME/SOURCE-IMAGE-DIVERGENCE requires a string symbol name"))
     (when (oddp (length options))
       (error "RUNTIME/SOURCE-IMAGE-DIVERGENCE keyword options must be a property list"))
-    (apply #'tool-runtime-source-image-divergence session :symbol symbol-name options)))
+    (service-response-data
+     (apply #'query-runtime-source-image-divergence-service session symbol-name options))))
 
 (defun execute-runtime-set-package-command (arguments session)
   (let ((package-name (first arguments)))
@@ -530,23 +533,22 @@
                                      :environment environment)))
 
 (defun execute-environment-save-command (arguments &optional environment)
-  (let ((path (first arguments))
-        (active-environment (ensure-environment environment)))
+  (let ((path (first arguments)))
     (unless (stringp path)
       (error "ENVIRONMENT/SAVE requires a string path"))
-    (save-environment active-environment path)
-    (list :saved path
-          :summary (environment-summary active-environment))))
+    (service-response-data
+     (command-environment-save-service path environment))))
 
 (defun execute-environment-load-command (arguments)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "ENVIRONMENT/LOAD requires a string path"))
-    (let ((environment (load-environment path)))
-      (let ((session (environment-session environment)))
+    (let* ((response (command-environment-load-service path))
+           (payload (service-response-data response))
+           (session (getf payload :session)))
       (values (list :loaded path
-                    :summary (environment-summary environment))
-              session)))))
+                    :summary (getf payload :summary))
+              session))))
 
 (defun resume-turn-command-target (session turn-id)
   (if turn-id
@@ -574,51 +576,47 @@
          (form (unwrap-task-form raw-form))
          (priority (or (getf (rest arguments) :priority) 0))
          (command (normalize-form-command form))
-         (task (enqueue-task session command :priority priority :payload form)))
-    (task-summary task)))
+         (response (command-task-enqueue-service session form command priority)))
+    (service-response-data response)))
 
 (defun execute-describe-task-command (arguments session)
   (let ((task-id (first arguments)))
     (unless (stringp task-id)
       (error "DESCRIBE-TASK requires a string task id"))
-    (let ((task (find-task session task-id)))
-      (unless task
-        (error "Unknown task ~A" task-id))
-      (task-summary task))))
+    (service-response-data
+     (query-task-detail-service session task-id))))
 
 (defun execute-monitor-task-command (arguments session)
   (let ((task-id (first arguments)))
     (unless (stringp task-id)
       (error "MONITOR-TASK requires a string task id"))
-    (let ((task (find-task session task-id)))
-      (unless task
-        (error "Unknown task ~A" task-id))
-      (task-monitor-view task))))
+    (service-response-data
+     (query-task-monitor-service session task-id))))
 
 (defun execute-cancel-task-command (arguments session)
   (let ((task-id (first arguments)))
     (unless (stringp task-id)
       (error "CANCEL-TASK requires a string task id"))
-    (task-summary (cancel-task session task-id))))
+    (service-response-data
+     (command-task-cancel-service session task-id))))
 
 (defun execute-start-worker-command (provider session)
-  (let ((worker (start-worker session provider)))
-    (worker-summary worker)))
+  (service-response-data
+   (command-worker-start-service session provider)))
 
 (defun execute-stop-worker-command (arguments session)
   (let ((worker-id (first arguments)))
     (unless (stringp worker-id)
       (error "STOP-WORKER requires a string worker id"))
-    (worker-summary (stop-worker session worker-id))))
+    (service-response-data
+     (command-worker-stop-service session worker-id))))
 
 (defun execute-describe-worker-command (arguments session)
   (let ((worker-id (first arguments)))
     (unless (stringp worker-id)
       (error "DESCRIBE-WORKER requires a string worker id"))
-    (let ((worker (find-worker session worker-id)))
-      (unless worker
-        (error "Unknown worker ~A" worker-id))
-      (worker-summary worker))))
+    (service-response-data
+     (query-worker-detail-service session worker-id))))
 
 (defun enriched-work-item-detail (session work-item)
   (service-response-data
@@ -630,6 +628,13 @@
       (error "DESCRIBE-WORK-ITEM requires a string work-item id"))
     (service-response-data
      (query-work-item-detail-service session work-item-id))))
+
+(defun execute-describe-work-item-plan-command (arguments session)
+  (let ((work-item-id (first arguments)))
+    (unless (stringp work-item-id)
+      (error "DESCRIBE-WORK-ITEM-PLAN requires a string work-item id"))
+    (service-response-data
+     (query-work-item-plan-service session work-item-id))))
 
 (defun execute-list-workflow-records-command (session)
   (service-response-data
@@ -659,37 +664,49 @@
       (error "QUARANTINE-WORK-ITEM requires a string work-item id"))
     (unless (stringp reason)
       (error "QUARANTINE-WORK-ITEM requires a string reason"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (quarantine-work-item session work-item reason :evidence (work-item-summary work-item))
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-work-item-quarantine-service session work-item-id reason))))
 
 (defun execute-resume-work-item-command (arguments session)
   (let ((work-item-id (first arguments))
         (note (getf (rest arguments) :note)))
     (unless (stringp work-item-id)
       (error "RESUME-WORK-ITEM requires a string work-item id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (resume-work-item session work-item :note note)
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-work-item-resume-service session work-item-id :note note))))
+
+(defun execute-steer-work-item-plan-command (arguments session)
+  (let ((work-item-id (first arguments))
+        (phase (getf (rest arguments) :phase))
+        (next-step (getf (rest arguments) :next-step))
+        (note (getf (rest arguments) :note)))
+    (unless (stringp work-item-id)
+      (error "STEER-WORK-ITEM-PLAN requires a string work-item id"))
+    (unless (keywordp phase)
+      (error "STEER-WORK-ITEM-PLAN requires a keyword :phase"))
+    (unless (keywordp next-step)
+      (error "STEER-WORK-ITEM-PLAN requires a keyword :next-step"))
+    (service-response-data
+     (command-work-item-steer-service session
+                                      work-item-id
+                                      :phase phase
+                                      :next-step next-step
+                                      :note note))))
 
 (defun execute-why-waiting-command (arguments session)
   (let ((work-item-id (first arguments)))
     (unless (stringp work-item-id)
       (error "WHY-WAITING requires a string work-item id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (work-item-wait-report session work-item))))
+    (service-response-data
+     (query-work-item-wait-service session work-item-id))))
 
 (defun execute-list-replay-groups-command (session)
-  (session-validator-replay-groups session))
+  (service-response-data
+   (query-replay-groups-service session)))
 
 (defun execute-list-image-reconciliations-command (session)
-  (session-image-reconciliation-summary session))
+  (service-response-data
+   (query-image-reconciliations-service session)))
 
 (defun execute-replay-validator-task-command (arguments session)
   (let ((work-item-id (first arguments))
@@ -699,11 +716,8 @@
       (error "REPLAY-VALIDATOR-TASK requires a string work-item id"))
     (unless (stringp validator-task-id)
       (error "REPLAY-VALIDATOR-TASK requires a string validator task id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (execute-validator-task-record session work-item validator-task-id :status status)
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-replay-validator-task-service session work-item-id validator-task-id :status status))))
 
 (defun execute-replay-validator-set-command (arguments session)
   (let ((work-item-id (first arguments))
@@ -714,11 +728,8 @@
       (error "REPLAY-VALIDATOR-SET requires a string work-item id"))
     (unless (stringp replay-id)
       (error "REPLAY-VALIDATOR-SET requires a string replay id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (execute-validator-replay-set session work-item replay-id :status status :statuses statuses)
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-replay-validator-set-service session work-item-id replay-id :status status :statuses statuses))))
 
 (defun execute-reconcile-image-only-source-command (arguments session)
   (let ((work-item-id (first arguments))
@@ -727,17 +738,16 @@
       (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string work-item id"))
     (unless (stringp summary)
       (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string summary"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (reconcile-image-only-work-item-to-source session work-item summary)
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-reconcile-image-only-source-service session work-item-id summary))))
 
 
 (defun execute-command (command provider &optional session)
   (let ((active-session (ensure-session session)))
     (append-session-event active-session :command (command-summary command))
-    (case (command-kind command)
+    (let ((active-environment (or (session-bound-environment active-session)
+                                  (bind-session-to-environment active-session (ensure-environment)))))
+      (case (command-kind command)
       (:eval
        (let ((result (eval-user-form (command-form command))))
          (append-transcript-entry active-session :user (command-form command))
@@ -752,6 +762,41 @@
        (execute-ask-command (command-arguments command) provider active-session))
       (:say
        (execute-say-command (command-arguments command) provider active-session))
+      (:provider-show
+       (values (execute-provider-show-command active-environment)
+               :provider-show
+               active-session
+               provider))
+      (:provider-list
+       (values (execute-provider-list-command active-environment)
+               :provider-list
+               active-session
+               provider))
+      (:provider-configure
+       (values (execute-provider-configure-command (command-arguments command)
+                                                  active-environment)
+               :provider-configure
+               active-session
+               provider))
+      (:provider-routing
+       (values (execute-provider-routing-command (command-arguments command)
+                                                active-environment)
+               :provider-routing
+               active-session
+               provider))
+      (:provider-route
+       (values (execute-provider-route-command active-environment)
+               :provider-route
+               active-session
+               provider))
+      (:provider-use
+       (let* ((result (execute-provider-use-command (command-arguments command)
+                                                   active-environment))
+              (active-profile (getf result :active-profile))
+              (updated-provider (or (and active-profile
+                                         (provider-from-profile active-profile))
+                                    provider)))
+         (values result :provider-use active-session updated-provider)))
       (:thread-new
        (values (execute-thread-new-command (command-arguments command) active-session)
                :thread-new
@@ -895,7 +940,10 @@
                :enqueue-task
                active-session))
       (:list-tasks
-       (values (list-task-summaries active-session) :list-tasks active-session))
+       (values (service-response-data
+                (query-task-list-service active-session))
+               :list-tasks
+               active-session))
       (:describe-task
        (values (execute-describe-task-command (command-arguments command) active-session)
                :describe-task
@@ -909,7 +957,8 @@
                :monitor-task
                active-session))
       (:run-next-task
-       (values (task-summary (run-next-task active-session provider))
+       (values (service-response-data
+                (command-task-run-next-service active-session provider))
                :run-next-task
                active-session))
       (:start-worker
@@ -921,7 +970,10 @@
                :stop-worker
                active-session))
       (:list-workers
-       (values (list-worker-summaries active-session) :list-workers active-session))
+       (values (service-response-data
+                (query-worker-list-service active-session))
+               :list-workers
+               active-session))
       (:list-work-items
        (values (service-response-data
                 (query-work-item-list-service active-session))
@@ -930,6 +982,10 @@
       (:describe-work-item
        (values (execute-describe-work-item-command (command-arguments command) active-session)
                :describe-work-item
+               active-session))
+      (:describe-work-item-plan
+       (values (execute-describe-work-item-plan-command (command-arguments command) active-session)
+               :describe-work-item-plan
                active-session))
       (:list-workflow-records
        (values (execute-list-workflow-records-command active-session) :list-workflow-records active-session))
@@ -948,6 +1004,10 @@
       (:resume-work-item
        (values (execute-resume-work-item-command (command-arguments command) active-session)
                :resume-work-item
+               active-session))
+      (:steer-work-item-plan
+       (values (execute-steer-work-item-plan-command (command-arguments command) active-session)
+               :steer-work-item-plan
                active-session))
       (:why-waiting
        (values (execute-why-waiting-command (command-arguments command) active-session)
@@ -1007,7 +1067,7 @@
        (print-shell-help)
        (values nil :help active-session))
       (t
-       (error "Unsupported command kind ~S" (command-kind command))))))
+       (error "Unsupported command kind ~S" (command-kind command)))))))
 
 (defun print-shell-result (result kind)
   (case kind
@@ -1018,7 +1078,18 @@
      (if (getf result :enqueued-p)
          (format t "assistant-task> ~S~%" (getf result :queued-task))
          (let ((response (getf result :response))
-               (staged-count (getf result :staged-action-count)))
+               (staged-count (getf result :staged-action-count))
+               (provider-route (getf result :provider-route)))
+           (when provider-route
+             (format t "provider-route> mode=~A reason=~A profile=~A provider=~A model=~A~%"
+                     (or (getf provider-route :routing-mode) :none)
+                     (or (getf provider-route :reason) :none)
+                     (or (getf provider-route :selected-profile-name) :none)
+                     (or (getf provider-route :selected-provider) :none)
+                     (or (getf provider-route :selected-model) :none))
+             (let ((candidates (getf provider-route :candidate-rankings)))
+               (when candidates
+                 (format t "provider-route-candidates> ~S~%" candidates))))
            (unless (getf result :streamed-p)
              (format t "assistant> ~A~%" (assistant-response->string response)))
            (when (assistant-response-actions response)
@@ -1034,10 +1105,12 @@
              (length (or (getf result :incidents) '())))
      (let ((summary (getf result :detail-summary)))
        (when summary
-         (format t "turn-summary> runtime-ops=~D runtime-artifacts=~D incidents=~D work-item=~A work-status=~A workflow=~A~%"
+         (format t "turn-summary> runtime-ops=~D runtime-artifacts=~D incidents=~D weakly-grounded=~D deferred-weakly-grounded=~D work-item=~A work-status=~A workflow=~A~%"
                  (or (getf summary :runtime-operation-count) 0)
                  (or (getf summary :runtime-artifact-count) 0)
                  (or (getf summary :incident-count) 0)
+                 (or (getf summary :weakly-grounded-operation-count) 0)
+                 (or (getf summary :deferred-weakly-grounded-operation-count) 0)
                  (or (getf summary :work-item-id) :none)
                  (or (getf summary :work-item-status) :none)
                  (or (getf summary :workflow-record-status) :none))))
@@ -1090,7 +1163,67 @@
              (or (getf (getf result :active-runtime) :runtime-id) :none)
              (or (getf (getf result :blocked-work) :count) 0)
              (or (getf (getf result :incidents) :open-count) 0))
+     (let ((provider-profile (getf result :provider-profile)))
+       (when provider-profile
+         (format t "provider> active=~A provider=~A model=~A profiles=~D~%"
+                 (or (getf provider-profile :active-profile-name) :none)
+                 (or (getf (getf provider-profile :active-profile) :provider) :none)
+                 (or (getf (getf provider-profile :active-profile) :model) :none)
+                 (or (getf provider-profile :profile-count) 0))))
      (format t "operator-posture> ~S~%" (getf result :operator-posture))
+     (finish-output))
+    ((:provider-show :provider-list :provider-configure :provider-use :provider-routing)
+     (format t "provider> active=~A profiles=~D~%"
+             (or (getf result :active-profile-name) :none)
+             (or (getf result :profile-count) 0))
+     (format t "provider-routing> mode=~A~%"
+             (or (getf result :routing-mode) :auto))
+     (let ((active-profile (getf result :active-profile)))
+       (when active-profile
+         (format t "provider-active> name=~A provider=~A model=~A fast-model=~A api-base=~A intents=~S latency=~A review=~A execution=~A locality=~A~%"
+                 (or (getf active-profile :name) :none)
+                 (or (getf active-profile :provider) :none)
+                 (or (getf active-profile :model) :none)
+                 (or (getf active-profile :fast-model) :none)
+                 (or (getf active-profile :api-base) :none)
+                 (or (getf active-profile :intents) '())
+                 (or (getf active-profile :latency-tier) :balanced)
+                 (or (getf active-profile :review-bias) :neutral)
+                 (or (getf active-profile :execution-bias) :balanced)
+                 (or (getf active-profile :locality) :network))))
+     (dolist (profile (or (getf result :profiles) '()))
+       (format t "provider-profile> ~A provider=~A model=~A intents=~S latency=~A review=~A execution=~A locality=~A~%"
+               (or (getf profile :name) :none)
+               (or (getf profile :provider) :none)
+               (or (getf profile :model) :none)
+               (or (getf profile :intents) '())
+               (or (getf profile :latency-tier) :balanced)
+               (or (getf profile :review-bias) :neutral)
+               (or (getf profile :execution-bias) :balanced)
+               (or (getf profile :locality) :network)))
+     (let ((last-route (getf result :last-route)))
+       (when last-route
+         (format t "provider-last-route> mode=~A reason=~A profile=~A provider=~A model=~A~%"
+                 (or (getf last-route :routing-mode) :none)
+                 (or (getf last-route :reason) :none)
+                 (or (getf last-route :selected-profile-name) :none)
+                 (or (getf last-route :selected-provider) :none)
+                 (or (getf last-route :selected-model) :none))))
+     (finish-output))
+    (:provider-route
+     (format t "provider-route> mode=~A~%"
+             (or (getf result :routing-mode) :auto))
+     (let ((last-route (getf result :last-route)))
+       (if last-route
+           (progn
+             (format t "provider-route-last> reason=~A profile=~A provider=~A model=~A~%"
+                     (or (getf last-route :reason) :none)
+                     (or (getf last-route :selected-profile-name) :none)
+                     (or (getf last-route :selected-provider) :none)
+                     (or (getf last-route :selected-model) :none))
+             (format t "provider-route-candidates> ~S~%"
+                     (or (getf last-route :candidate-rankings) '())))
+           (format t "provider-route-last> :none~%")))
      (finish-output))
     (:incident-list
      (format t "incidents> count=~D~%" (length (or result '())))
@@ -1153,10 +1286,22 @@
              (or (getf (getf result :mutation) :artifact-count) 0)
              (length (or (getf result :incidents) '())))
      (when (getf (getf result :governance) :work-item)
-       (format t "mutation-governance> work-item=~A status=~A wait=~A~%"
+       (format t "mutation-governance> work-item=~A status=~A wait=~A weakly-grounded=~D deferred-weakly-grounded=~D~%"
                (getf (getf (getf result :governance) :work-item) :id)
                (getf (getf (getf result :governance) :work-item) :status)
-               (or (getf (getf (getf result :governance) :wait) :why) :none)))
+               (or (getf (getf (getf result :governance) :wait) :why) :none)
+               (or (getf (getf (getf result :governance) :action-assessment-summary)
+                         :weakly-grounded-operation-count)
+                   0)
+               (or (getf (getf (getf result :governance) :action-assessment-summary)
+                         :deferred-weakly-grounded-operation-count)
+                   0)))
+     (unless (getf (getf result :governance) :work-item)
+       (let ((assessment-summary (getf (getf result :governance) :action-assessment-summary)))
+         (when assessment-summary
+           (format t "mutation-assessment> weakly-grounded=~D deferred-weakly-grounded=~D~%"
+                   (or (getf assessment-summary :weakly-grounded-operation-count) 0)
+                   (or (getf assessment-summary :deferred-weakly-grounded-operation-count) 0)))))
      (when (getf (getf result :governance) :next-action)
        (format t "mutation-next> ~S~%" (getf (getf result :governance) :next-action)))
      (finish-output))
@@ -1174,7 +1319,7 @@
      (when (getf result :divergence)
        (format t "runtime-divergence> ~A~%" (getf result :divergence)))
      (finish-output))
-    ((:thread-new :thread-list :thread-use :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approvals :integration-rgp-approve :integration-rgp-resume)
+    ((:thread-new :thread-list :thread-use :enqueue-task :list-tasks :describe-task :cancel-task :monitor-task :run-next-task :start-worker :stop-worker :list-workers :describe-worker :list-work-items :describe-work-item :describe-work-item-plan :list-workflow-records :describe-workflow-record :request-work-item-approval :quarantine-work-item :resume-work-item :steer-work-item-plan :why-waiting :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approvals :integration-rgp-approve :integration-rgp-resume)
      (format t "tasks> ~S~%" result))
     ((:integration-rgp-bind :integration-rgp-show :integration-rgp-export)
      (format t "rgp> ~S~%" result))
@@ -1274,6 +1419,16 @@
   (let* ((active-session (ensure-session session))
          (active-environment (or (session-bound-environment active-session)
                                  (bind-session-to-environment active-session (ensure-environment)))))
+    (unless (environment-provider-profiles active-environment)
+      (ensure-environment-provider-profile
+       :environment active-environment
+       :config (config-with-overrides
+                (load-config)
+                :provider (provider-name provider)
+                :model (or (ignore-errors (slot-value provider 'model))
+                           (config-model (load-config)))
+                :fast-model (ignore-errors (slot-value provider 'fast-model))
+                :api-base (ignore-errors (slot-value provider 'api-base)))))
     (format t "Starting Lisp-native shell with provider ~A.~%" (provider-name provider))
     (when default-stream-p
       (format t "Interactive streaming is enabled by default for ask requests.~%"))
@@ -1289,9 +1444,10 @@
                  (format t "~%")
                  (return 0))
                (handler-case
-                   (multiple-value-bind (result kind updated-session)
+                   (multiple-value-bind (result kind updated-session updated-provider)
                        (execute-command (normalize-form-command form) provider active-session)
                      (setf active-session updated-session
+                           provider (or updated-provider provider)
                            *current-session* updated-session)
                      (print-shell-result result kind))
                  (error (condition)

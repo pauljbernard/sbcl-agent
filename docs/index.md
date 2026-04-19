@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent is a real SBCL-native shell, conversation runtime, and governed workflow substrate today. It is also in the middle of a deliberate architectural shift from session-centered composition toward an environment-centered model.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent is a real SBCL-native shell, environment-centered runtime, governed workflow substrate, retrieval-and-cognition loop, and service-backed provider/router surface today. It is still evolving, but the system is materially beyond a shell-plus-tools prototype.</div>
 
 <div class="quick-links">
   <a class="quick-link" href="{{ '/problem.html' | relative_url }}"><strong>The Problem</strong>Understand why the old model worked, why it now constrains understanding, and why this project exists.</a>
@@ -98,6 +98,10 @@ Then use the roadmap and transition documents as forward-looking context rather 
     <div class="card-title">Testing Coverage Analysis</div>
     <p>A measured assessment of unit coverage, functional coverage, user-story coverage, and current performance-testing gaps.</p>
   </a>
+  <a class="card" href="{{ '/roadmap/engineering-parity-plan.html' | relative_url }}">
+    <div class="card-title">Engineering Parity Plan</div>
+    <p>The concrete program for pushing sbcl-agent toward parity or advantage against leading software engineering agents through internal evaluation, memory, orchestration, UX hardening, and reflective improvement.</p>
+  </a>
   <a class="card" href="{{ '/conversation-architecture.html' | relative_url }}">
     <div class="card-title">Conversation Runtime</div>
     <p>The thread, message, turn, operation, and artifact model, now treated as one subsystem within the larger Environment architecture.</p>
@@ -142,15 +146,18 @@ Then use the roadmap and transition documents as forward-looking context rather 
 
 - an SBCL-native CLI and Common Lisp shell
 - direct Lisp evaluation in the live runtime
-- mock and OpenAI-compatible providers
+- multi-vendor providers spanning mock, OpenAI-compatible, Anthropic, Google/Gemini-compatible, Meta-compatible, and LM Studio/local-compatible backends
+- provider profiles, routing policies, prompt-aware route preview, and service-backed provider selection
 - canonical provider event normalization for streaming
 - a concrete Environment object with save/load and projected environment events
+- retrieval dossiers, reasoning/planning briefs, validation strategies, and prior-outcome reuse in the default turn path
 - persistent threads, messages, turns, operations, and artifacts
 - runtime inspection, eval, reload, and history commands with policy gates
 - first-class incident recording, operator summaries, and environment event inspection
 - direct Lisp control, conversation, and governed workflow as coexisting interaction modes
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
+- stable public service interfaces and non-shell JSON CLI surfaces for future UX integration
 
 ## Strengths
 

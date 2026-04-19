@@ -6,7 +6,9 @@
   (format t "Commands:~%")
   (format t "  chat [options]     Start the Lisp-native interactive shell.~%")
   (format t "                     Options: -i, --provider NAME, --model NAME, --api-base URL, --cwd PATH~%")
+  (format t "                     Providers: mock, openai-compatible, anthropic, gemini/google, lm-studio, meta-compatible~%")
   (format t "  exec <cmd...>      Run a shell command from the current directory.~%")
+  (format t "  provider <subcmd>  Query or mutate provider profiles and routing as JSON service envelopes.~%")
   (format t "  rgp <subcommand>   Execute non-interactive governed runtime operations for RGP.~%")
   (format t "  doctor             Print runtime and configuration diagnostics.~%")
   (format t "  help               Show this message.~%"))
@@ -32,6 +34,19 @@
   policy
   reason
   note)
+
+(defstruct provider-options
+  subcommand
+  environment-path
+  working-directory
+  profile-name
+  prompt
+  mode
+  provider
+  model
+  fast-model
+  api-base
+  intents)
 
 (defun normalize-arguments (arguments)
   (if (and arguments (string= (first arguments) "--"))
@@ -81,6 +96,79 @@
   (unless (stringp value)
     (error "Expected a string keyword designator"))
   (intern (string-upcase value) "KEYWORD"))
+
+(defun parse-provider-intents (value)
+  (when value
+    (remove nil
+            (mapcar (lambda (entry)
+                      (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) entry)))
+                        (unless (string= trimmed "")
+                          (parse-rgp-keyword trimmed))))
+                    (uiop:split-string value :separator ",")))))
+
+(defun parse-provider-arguments (arguments)
+  (let ((subcommand (first arguments))
+        (remaining (rest arguments))
+        (environment-path nil)
+        (working-directory nil)
+        (profile-name nil)
+        (prompt nil)
+        (mode nil)
+        (provider nil)
+        (model nil)
+        (fast-model nil)
+        (api-base nil)
+        (intents nil))
+    (unless subcommand
+      (error "provider requires a subcommand"))
+    (loop while remaining
+          for argument = (pop remaining)
+          do (cond
+               ((string= argument "--environment")
+                (setf environment-path (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--cwd")
+                    (string= argument "--working-directory"))
+                (setf working-directory (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--profile")
+                    (string= argument "--profile-name"))
+                (setf profile-name (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--prompt")
+                (setf prompt (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--mode")
+                (setf mode (parse-rgp-keyword (require-option-value argument remaining)))
+                (pop remaining))
+               ((string= argument "--provider")
+                (setf provider (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--model")
+                (setf model (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--fast-model")
+                (setf fast-model (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--api-base")
+                (setf api-base (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--intents")
+                (setf intents (parse-provider-intents (require-option-value argument remaining)))
+                (pop remaining))
+               (t
+                (error "Unknown provider option ~A" argument))))
+    (make-provider-options :subcommand subcommand
+                           :environment-path environment-path
+                           :working-directory working-directory
+                           :profile-name profile-name
+                           :prompt prompt
+                           :mode mode
+                           :provider provider
+                           :model model
+                           :fast-model fast-model
+                           :api-base api-base
+                           :intents intents)))
 
 (defun parse-rgp-arguments (arguments)
   (let ((subcommand (first arguments))
@@ -178,46 +266,90 @@
   (format t "~A~%" (emit-json (json-safe-value value)))
   (finish-output))
 
+(defun write-service-result (response)
+  (format t "~A~%" (emit-json (json-safe-value response)))
+  (finish-output))
+
+(defun persist-rgp-environment (environment options)
+  (let ((environment-path (rgp-options-environment-path options)))
+    (when environment-path
+      (save-environment environment environment-path)))
+  environment)
+
+(defun load-or-create-provider-environment (options &optional config)
+  (let* ((environment-path (provider-options-environment-path options))
+         (active-config (or config (load-config)))
+         (working-directory (or (provider-options-working-directory options)
+                                (config-working-directory active-config))))
+    (when environment-path
+      (ensure-rgp-path-parent environment-path))
+    (let ((environment (if (and environment-path (probe-file environment-path))
+                           (load-environment environment-path)
+                           (make-default-environment :storage-root working-directory))))
+      (setf *current-environment* environment)
+      (or (environment-session environment)
+          (bind-session-to-environment (make-default-session :cwd working-directory)
+                                       environment))
+      (ensure-environment-provider-profile :environment environment
+                                           :config active-config
+                                           :profile-name "default")
+      environment)))
+
+(defun persist-provider-environment (environment options)
+  (let ((environment-path (provider-options-environment-path options)))
+    (when environment-path
+      (save-environment environment environment-path)))
+  environment)
+
 (defun rgp-command-bind (options)
   (let* ((environment (load-or-create-rgp-environment options))
-         (session (environment-session environment)))
-    (bind-environment-to-rgp session
-                             :tenant-id (rgp-options-tenant-id options)
-                             :request-id (rgp-options-request-id options)
-                             :agent-session-id (rgp-options-agent-session-id options)
-                             :integration-id (rgp-options-integration-id options)
-                             :projection-id (rgp-options-projection-id options)
-                             :environment environment)
-    (save-environment environment (rgp-options-environment-path options))
+         (session (environment-session environment))
+         (response (command-rgp-bind-service session
+                                             :tenant-id (rgp-options-tenant-id options)
+                                             :request-id (rgp-options-request-id options)
+                                             :agent-session-id (rgp-options-agent-session-id options)
+                                             :integration-id (rgp-options-integration-id options)
+                                             :projection-id (rgp-options-projection-id options)
+                                             :environment environment)))
+    (persist-rgp-environment environment options)
     (write-rgp-result
      (list :status "bound"
            :environment_path (rgp-options-environment-path options)
-           :binding (rgp-binding-summary environment)
-           :governed_runtime (environment-rgp-runtime-summary environment)))
+           :binding (getf (service-response-data response) :binding)
+           :governed_runtime (getf (service-response-data response) :governed-runtime)))
     0))
 
 (defun rgp-command-show (options)
-  (let ((environment (load-or-create-rgp-environment options)))
-    (write-rgp-result (environment-rgp-snapshot environment))
+  (let* ((environment (load-or-create-rgp-environment options))
+         (session (environment-session environment)))
+    (write-rgp-result
+     (service-response-data (query-rgp-show-service session environment)))
     0))
 
 (defun rgp-command-export (options)
   (let ((environment (load-or-create-rgp-environment options))
+        (session nil)
         (output-path (rgp-options-output-path options)))
     (unless output-path
       (error "rgp export requires --output"))
     (ensure-rgp-path-parent output-path)
-    (write-rgp-result (export-environment-rgp-snapshot output-path environment))
+    (setf session (environment-session environment))
+    (write-rgp-result
+     (service-response-data (command-rgp-export-service session output-path environment)))
     0))
 
 (defun rgp-command-artifacts (options)
-  (let ((environment (load-or-create-rgp-environment options)))
-    (write-rgp-result (environment-rgp-artifact-summaries environment))
+  (let* ((environment (load-or-create-rgp-environment options))
+         (session (environment-session environment)))
+    (write-rgp-result
+     (service-response-data (query-rgp-artifacts-service session environment)))
     0))
 
 (defun rgp-command-approvals (options)
-  (let ((environment (load-or-create-rgp-environment options)))
-    (write-rgp-result (environment-rgp-approval-summaries environment))
+  (let* ((environment (load-or-create-rgp-environment options))
+         (session (environment-session environment)))
+    (write-rgp-result
+     (service-response-data (query-rgp-approvals-service session environment)))
     0))
 
 (defun rgp-command-approve (options)
@@ -229,16 +361,17 @@
       (error "rgp approve requires --work-item-id"))
     (unless policy
       (error "rgp approve requires --policy"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (request-work-item-approval session work-item policy :reason (rgp-options-reason options))
-      (save-environment environment (rgp-options-environment-path options))
+    (let ((response (command-rgp-approve-service session
+                                                 work-item-id
+                                                 policy
+                                                 :reason (rgp-options-reason options)
+                                                 :environment environment)))
+      (persist-rgp-environment environment options)
       (write-rgp-result
        (list :status "approved"
              :environment_path (rgp-options-environment-path options)
-             :work_item (enriched-work-item-detail session work-item)
-             :approval (work-item-wait-report session work-item))))
+             :work_item (getf (service-response-data response) :work-item)
+             :approval (getf (service-response-data response) :approval))))
     0))
 
 (defun rgp-command-resume (options)
@@ -247,16 +380,16 @@
          (work-item-id (rgp-options-work-item-id options)))
     (unless work-item-id
       (error "rgp resume requires --work-item-id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (resume-work-item session work-item :note (rgp-options-note options))
-      (save-environment environment (rgp-options-environment-path options))
+    (let ((response (command-rgp-resume-service session
+                                                work-item-id
+                                                :note (rgp-options-note options)
+                                                :environment environment)))
+      (persist-rgp-environment environment options)
       (write-rgp-result
        (list :status "resumed"
              :environment_path (rgp-options-environment-path options)
-             :work_item (enriched-work-item-detail session work-item)
-             :approval (work-item-wait-report session work-item))))
+             :work_item (getf (service-response-data response) :work-item)
+             :approval (getf (service-response-data response) :approval))))
     0))
 
 (defun rgp-command (config arguments)
@@ -281,7 +414,85 @@
       (t
        (error "Unknown rgp subcommand ~A" subcommand)))))
 
+(defun provider-command-show (environment)
+  (write-service-result
+   (query-environment-provider-service environment))
+  0)
+
+(defun provider-command-route (environment)
+  (write-service-result
+   (query-environment-provider-route-service environment))
+  0)
+
+(defun provider-command-preview (options environment)
+  (unless (provider-options-prompt options)
+    (error "provider preview requires --prompt"))
+  (let ((response (query-environment-provider-preview-service
+                   (provider-options-prompt options)
+                   :environment environment
+                   :session (environment-session environment))))
+    (write-service-result response))
+  0)
+
+(defun provider-command-routing (options environment)
+  (let ((response (command-environment-provider-routing-service
+                   (provider-options-mode options)
+                   environment)))
+    (persist-provider-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun provider-command-configure (options environment)
+  (unless (provider-options-profile-name options)
+    (error "provider configure requires --profile"))
+  (unless (provider-options-provider options)
+    (error "provider configure requires --provider"))
+  (unless (provider-options-model options)
+    (error "provider configure requires --model"))
+  (let ((response (command-environment-provider-configure-service
+                   (provider-options-profile-name options)
+                   (list :provider (provider-options-provider options)
+                         :model (provider-options-model options)
+                         :fast-model (provider-options-fast-model options)
+                         :api-base (provider-options-api-base options)
+                         :intents (provider-options-intents options))
+                   environment)))
+    (persist-provider-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun provider-command-use (options environment)
+  (unless (provider-options-profile-name options)
+    (error "provider use requires --profile"))
+  (let ((response (command-environment-provider-use-service
+                   (provider-options-profile-name options)
+                   environment)))
+    (persist-provider-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun provider-command (config arguments)
+  (let* ((options (parse-provider-arguments arguments))
+         (subcommand (string-downcase (provider-options-subcommand options)))
+         (environment (load-or-create-provider-environment options config)))
+    (cond
+      ((string= subcommand "show")
+       (provider-command-show environment))
+      ((string= subcommand "route")
+       (provider-command-route environment))
+      ((string= subcommand "preview")
+       (provider-command-preview options environment))
+      ((string= subcommand "routing")
+       (provider-command-routing options environment))
+      ((string= subcommand "configure")
+       (provider-command-configure options environment))
+      ((string= subcommand "use")
+       (provider-command-use options environment))
+      (t
+       (error "Unknown provider subcommand ~A" subcommand)))))
+
 (defun session-for-chat-config (config)
+  (configure-retrieval-ranking-mode (config-retrieval-ranking-mode config))
   (let ((environment (or *current-environment*
                          (setf *current-environment*
                                (make-default-environment
@@ -289,37 +500,55 @@
                                 :session (or *current-session*
                                              (setf *current-session*
                                                    (make-default-session :cwd (config-working-directory config)))))))))
+    (ensure-environment-provider-profile :environment environment
+                                         :config config
+                                         :profile-name "default")
+    (set-environment-metadata-value environment :active-provider-profile "default")
     (or (environment-session environment)
         (bind-session-to-environment
          (make-default-session :cwd (config-working-directory config))
          environment))))
 
 (defun doctor-command (config)
+  (configure-retrieval-ranking-mode (config-retrieval-ranking-mode config))
   (let* ((environment (ensure-environment))
          (session (ensure-session))
-         (environment-summary (environment-summary environment))
-         (artifact-summary (getf environment-summary :artifact-summary)))
+         (environment-summary (service-response-data
+                               (query-environment-summary-service environment)))
+         (session-summary (service-response-data
+                           (query-session-summary-service session)))
+         (artifact-summary (getf environment-summary :artifact-summary))
+         (replay-groups (service-response-data
+                         (query-replay-groups-service session)))
+         (image-reconciliations (service-response-data
+                                 (query-image-reconciliations-service session))))
     (format t "Runtime: SBCL~%")
     (format t "Environment id: ~A~%" (environment-id environment))
     (format t "Provider: ~A~%" (config-provider config))
     (format t "Model: ~A~%" (config-model config))
+    (format t "Fast model: ~A~%" (config-fast-model config))
+    (let ((provider-profile (getf environment-summary :provider-profile)))
+      (format t "Active provider profile: ~A~%"
+              (or (getf provider-profile :active-profile-name) "<none>"))
+      (format t "Provider profiles configured: ~D~%"
+              (or (getf provider-profile :profile-count) 0)))
+    (format t "Retrieval ranking mode: ~A~%" (config-retrieval-ranking-mode config))
     (format t "Working directory: ~A~%" (config-working-directory config))
     (format t "Shell package: ~A~%" (package-name *shell-package*))
     (format t "Session id: ~A~%" (agent-session-id session))
     (format t "Active runtime id: ~A~%" (environment-active-runtime-id environment))
     (format t "Environment events: ~D~%" (getf environment-summary :event-count))
-    (format t "Session plan: ~A~%" (or (agent-session-plan session) "<none>"))
-    (format t "Pending assistant actions: ~D~%" (length (agent-session-pending-actions session)))
+    (format t "Session plan: ~A~%" (or (getf session-summary :plan) "<none>"))
+    (format t "Pending assistant actions: ~D~%" (or (getf session-summary :pending-action-count) 0))
     (format t "Queued tasks: ~D~%" (count :queued (agent-session-tasks session) :key #'task-status))
     (format t "Work items: ~D~%" (getf environment-summary :work-item-count))
     (format t "Artifacts: ~D~%" (getf environment-summary :artifact-count))
     (format t "Artifact evidence: ~S~%" artifact-summary)
     (format t "Workflow records: ~D~%" (getf (getf environment-summary :workflow-state) :workflow-record-count))
-    (let ((wait-summary (session-wait-summary session))
+    (let ((wait-summary (getf session-summary :wait-summary))
           (operator-status (getf environment-summary :operator-status))
           (incident-summary (getf environment-summary :incident-summary))
-          (replay-groups (session-validator-replay-groups session))
-          (image-reconciliations (session-image-reconciliation-summary session)))
+          (active-worker-count (or (getf session-summary :active-worker-count) 0)))
       (format t "Blocked work items: ~D~%" (getf wait-summary :blocked-count))
       (format t "Blocked summary: ~S~%" (getf wait-summary :by-reason))
       (format t "Operator status: ready=~D blocked=~D quarantined=~D image-only=~D durable=~D incidents=~D open-incidents=~D~%"
@@ -334,10 +563,10 @@
               (getf incident-summary :count)
               (getf incident-summary :open-count))
       (format t "Validator replay groups: ~D~%" (length replay-groups))
-      (format t "Image reconciliations: ~D~%" (length image-reconciliations)))
-    (format t "Active workers: ~D~%" (active-worker-count session))
-    (format t "Approved policies: ~S~%" (session-approved-policies session))
-    (format t "Capability grants: ~S~%" (session-capability-grants-summary session))
+      (format t "Image reconciliations: ~D~%" (length image-reconciliations))
+      (format t "Active workers: ~D~%" active-worker-count))
+    (format t "Approved policies: ~S~%" (getf session-summary :approved-policies))
+    (format t "Capability grants: ~S~%" (getf session-summary :capability-grants))
     (format t "Sandbox profiles: ~S~%" (mapcar #'sandbox-profile-id *sandbox-profiles*))
     (format t "Git tools registered: ~:[no~;yes~]~%"
             (and (find-tool :git/status) (find-tool :git/commit)))
@@ -366,6 +595,8 @@
        0)
       ((string= command "doctor")
        (doctor-command config))
+      ((string= command "provider")
+       (provider-command config (rest arguments)))
       ((string= command "rgp")
        (rgp-command config (rest arguments)))
       ((string= command "chat")

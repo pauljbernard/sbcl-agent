@@ -49,6 +49,9 @@
                      :thread (provider-request-thread-context request)
                      :turn (provider-request-turn-context request)
                      :environment (provider-request-environment-context request)
+                     :cognition (and (provider-request-cognition-bundle request)
+                                     (cognition-bundle-summary
+                                      (provider-request-cognition-bundle request)))
                      :session (provider-request-session-summary request)))))
 
 (defun split-stream-message (message)

@@ -24,6 +24,12 @@ From the repository root:
 
 `doctor` is the quickest way to confirm provider selection, working directory, API-key visibility, session and environment posture, and pending governed work.
 
+If you want to verify the current internal evaluation harness as well as the test suite, run:
+
+```bash
+./bin/run-evals
+```
+
 ## Start the Shell
 
 Launch the interactive runtime:
@@ -38,6 +44,13 @@ This is both:
 - the entry point into the conversation runtime
 
 There is no separate conversation daemon.
+
+If you want to inspect the provider surface before entering the shell, the non-interactive CLI now also supports:
+
+```bash
+./bin/sbcl-agent provider show
+./bin/sbcl-agent provider preview --prompt "Summarize the current architecture"
+```
 
 ## First Conversation
 
@@ -59,6 +72,8 @@ Useful early commands:
 - `(thread/show)`
 - `(turn/status)`
 - `(describe-session)`
+- `(provider/show)`
+- `(provider/route)`
 
 Use these to understand what environment is active, which thread is current, whether work is blocked, and what evidence exists.
 

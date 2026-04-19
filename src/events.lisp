@@ -73,7 +73,9 @@
           :workflow-record-quarantined :workflow-record-resumed :workflow-record-closed)
          :workflow)
         ((:incident-created) :incident)
-        ((:assistant-response :assistant-actions-executed :pending-actions :pending-actions-cleared)
+        ((:assistant-response :assistant-actions-executed :pending-actions :pending-actions-cleared
+          :governed-mutations-deferred :strategy-governed-mutations-deferred
+          :weakly-grounded-mutations-deferred)
          :assistant)
         ((:task-enqueued :task-started :task-completed :task-failed :task-cancelled :worker-started :worker-stopped)
          :runtime)

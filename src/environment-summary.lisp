@@ -124,6 +124,7 @@
             :incident-summary (or (getf agent-summary :incident-summary)
                                   (getf root-summary :incident-summary))
             :operator-status (getf root-summary :operator-status)
+            :provider-profile (environment-provider-profile-summary active-environment)
             :has-session-p (not (null (compatibility-session-id session)))))))
 
 (defun summarize-operator-blockers (operator-status)
@@ -177,6 +178,7 @@
                                 :summary runtime-state)
           :blocked-work blocked-summary
           :incidents incident-summary
+          :provider-profile (getf summary :provider-profile)
           :operator-posture (append operator-status
                                     (list :outstanding-approval-count (getf blocked-summary :approval-count)
                                           :outstanding-cold-validation-count (getf blocked-summary :cold-validation-count)

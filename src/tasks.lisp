@@ -5,6 +5,10 @@
   kind
   command
   payload
+  orchestration-group-id
+  ownership-scope
+  merge-policy
+  shared-context
   status
   priority
   created-at
@@ -25,12 +29,16 @@
 
 (defparameter *worker-sleep-seconds* 0.1)
 (defparameter *task-progress-callback* nil)
+(defparameter *task-scheduler-lock* (sb-thread:make-mutex :name "sbcl-agent-task-scheduler"))
 
 (defun make-task-id ()
   (format nil "task-~D-~D" (get-universal-time) (random 1000000)))
 
 (defun make-worker-id ()
   (format nil "worker-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun make-orchestration-group-id ()
+  (format nil "group-~D-~D" (get-universal-time) (random 1000000)))
 
 (defun session-tasks (session)
   (agent-session-tasks session))
@@ -94,11 +102,86 @@
         (agent-session-workers session)
         :key #'worker-state-id :test #'string=))
 
-(defun make-queued-task (session command &key (priority 0) payload)
+(defun task-orchestration-summary (task)
+  (list :group-id (task-orchestration-group-id task)
+        :ownership-scope (task-ownership-scope task)
+        :merge-policy (task-merge-policy task)
+        :shared-context (task-shared-context task)))
+
+(defun orchestration-group-tasks (session group-id)
+  (remove-if-not (lambda (task)
+                   (and (task-orchestration-group-id task)
+                        (string= group-id (task-orchestration-group-id task))))
+                 (agent-session-tasks session)))
+
+(defun finalized-task-status-p (status)
+  (member status '(:completed :failed :cancelled) :test #'eq))
+
+(defun orchestration-group-finalized-p (session group-id)
+  (every (lambda (task)
+           (finalized-task-status-p (task-status task)))
+         (orchestration-group-tasks session group-id)))
+
+(defun orchestration-group-summary (session group-id)
+  (let* ((tasks (orchestration-group-tasks session group-id))
+         (worker-ids (remove-duplicates (remove nil (mapcar #'task-worker-id tasks)) :test #'string=))
+         (ownership-scopes (remove nil (mapcar #'task-ownership-scope tasks)))
+         (merge-policy (and tasks (task-merge-policy (first tasks))))
+         (shared-context (and tasks (task-shared-context (first tasks)))))
+    (list :group-id group-id
+          :task-count (length tasks)
+          :completed-task-count (count :completed tasks :key #'task-status :test #'eq)
+          :distinct-worker-count (length worker-ids)
+          :worker-ids worker-ids
+          :merge-policy merge-policy
+          :shared-context shared-context
+          :ownership-explicit-p (every #'identity ownership-scopes)
+          :ownership-scopes (copy-tree ownership-scopes)
+          :review-required-p (eq merge-policy :serial-review)
+          :finalized-p (every (lambda (task)
+                                (finalized-task-status-p (task-status task)))
+                              tasks))))
+
+(defun apply-task-orchestration-review-posture (session task)
+  (let ((group-id (task-orchestration-group-id task)))
+    (when (and group-id
+               (eq (task-merge-policy task) :serial-review)
+               (orchestration-group-finalized-p session group-id))
+      (let* ((group-summary (orchestration-group-summary session group-id))
+             (task-summaries (mapcar #'task-summary (orchestration-group-tasks session group-id))))
+        (dolist (group-task (orchestration-group-tasks session group-id))
+          (let ((work-item (and (task-work-item-id group-task)
+                                (find-work-item session (task-work-item-id group-task)))))
+            (when work-item
+              (set-work-item-next-action
+               session
+               work-item
+               (list :type :serial-review-merge
+                     :suggested-step :review-orchestration-group
+                     :orchestration-group group-summary))
+              (set-work-item-resume-payload
+               session
+               work-item
+               (list :resume-command :review-orchestration-group
+                     :group-id group-id
+                     :merge-policy (task-merge-policy group-task)
+                     :task-summaries task-summaries
+                     :orchestration-group group-summary)))))
+        (remember-orchestration-outcome-memory
+         session
+         group-summary
+         :prompt (or (getf (getf group-summary :shared-context) :goal)
+                     (format nil "Parallel orchestration group ~A" group-id)))))))
+
+(defun make-queued-task (session command &key (priority 0) payload orchestration-group-id ownership-scope merge-policy shared-context)
   (make-task :id (make-task-id)
              :kind (command-kind command)
              :command command
              :payload payload
+             :orchestration-group-id orchestration-group-id
+             :ownership-scope ownership-scope
+             :merge-policy merge-policy
+             :shared-context shared-context
              :status :queued
              :priority priority
              :created-at (get-universal-time)
@@ -122,6 +205,8 @@
         :session-id (task-session-id task)
         :worker-id (task-worker-id task)
         :work-item-id (task-work-item-id task)
+        :orchestration (task-orchestration-summary task)
+        :merge-review-required-p (eq (task-merge-policy task) :serial-review)
         :progress-event-count (length (task-progress-events task))
         :latest-progress-event (car (last (task-progress-events task)))
         :result (task-result task)
@@ -169,8 +254,15 @@
         (agent-session-tasks-tail session) (last tasks))
   tasks)
 
-(defun enqueue-task (session command &key (priority 0) payload)
-  (let* ((task (make-queued-task session command :priority priority :payload payload))
+(defun enqueue-task (session command &key (priority 0) payload orchestration-group-id ownership-scope merge-policy shared-context)
+  (let* ((task (make-queued-task session
+                                 command
+                                 :priority priority
+                                 :payload payload
+                                 :orchestration-group-id orchestration-group-id
+                                 :ownership-scope ownership-scope
+                                 :merge-policy merge-policy
+                                 :shared-context shared-context))
          (work-item (create-work-item-for-task session task)))
     (setf (task-work-item-id task) (work-item-id work-item))
     (append-work-item-checkpoint session work-item)
@@ -185,6 +277,19 @@
     (append-session-event session :task-enqueued (task-summary task))
     (refresh-bound-environment-agent-state session)
     task))
+
+(defun enqueue-parallel-task-group (session task-specs &key shared-context (merge-policy :serial-review) group-id)
+  (let ((resolved-group-id (or group-id (make-orchestration-group-id))))
+    (mapcar (lambda (spec)
+              (enqueue-task session
+                            (getf spec :command)
+                            :priority (or (getf spec :priority) 0)
+                            :payload (getf spec :payload)
+                            :orchestration-group-id resolved-group-id
+                            :ownership-scope (getf spec :ownership-scope)
+                            :merge-policy merge-policy
+                            :shared-context shared-context))
+            task-specs)))
 
 (defun find-task (session task-id)
   (let ((environment (session-bound-environment session)))
@@ -224,10 +329,19 @@
 (defun next-queued-task (session)
   (find :queued (agent-session-tasks session) :key #'task-status))
 
+(defun claim-next-queued-task (session &optional worker-id)
+  (sb-thread:with-mutex (*task-scheduler-lock*)
+    (let ((task (next-queued-task session)))
+      (when task
+        (setf (task-status task) :claimed
+              (task-worker-id task) worker-id
+              (task-started-at task) (get-universal-time))
+        task))))
+
 (defun execute-task (session provider task &optional worker-id)
   (setf (task-status task) :running
-        (task-started-at task) (get-universal-time)
-        (task-worker-id task) worker-id)
+        (task-started-at task) (or (task-started-at task) (get-universal-time))
+        (task-worker-id task) (or worker-id (task-worker-id task)))
   (append-task-progress-event session task :task-started (task-summary task))
   (append-session-event session :task-started (task-summary task))
   (append-work-item-image-mutation (find-work-item session (task-work-item-id task))
@@ -260,6 +374,7 @@
                                                 session)))
           (update-work-item-status-from-task session task :committed
                                              :closure-decision :committed-to-source-and-image)
+          (apply-task-orchestration-review-posture session task)
           (refresh-bound-environment-agent-state session)
           task)
       (error (condition)
@@ -283,14 +398,14 @@
 
 (defun run-next-task
  (session provider &optional worker-id)
-  (let ((task (next-queued-task session)))
+  (let ((task (claim-next-queued-task session worker-id)))
     (unless task
       (error "No queued tasks are available in the current session"))
     (execute-task session provider task worker-id)))
 
 (defun worker-loop (session provider worker-state)
   (loop while (worker-state-running-p worker-state)
-        do (let ((task (next-queued-task session)))
+        do (let ((task (claim-next-queued-task session (worker-state-id worker-state))))
              (if task
                  (execute-task session provider task (worker-state-id worker-state))
                  (sleep *worker-sleep-seconds*))))

@@ -1,54 +1,9 @@
 (in-package #:sbcl-agent)
 
-(defun policy-decision-summary (policy &key (decision :allowed) reason)
-  (let ((policy-record (ensure-capability-policy policy)))
-    (list :policy-id (capability-policy-id policy-record)
-          :decision decision
-          :risk-level (capability-policy-risk-level policy-record)
-          :default-grant-mode (capability-policy-default-grant-mode policy-record)
-          :reason reason)))
-
 (defun say-provider-operation-policy-decision ()
-  (policy-decision-summary :safe-read
-                           :decision :allowed
-                           :reason "Conversation provider runs are currently read-only orchestrator operations."))
-
-(defun assistant-action-policy-decision (action disposition)
-  (let ((policy-id (assistant-action-policy-id action)))
-    (if policy-id
-        (policy-decision-summary policy-id
-                                 :decision disposition
-                                 :reason "Assistant action recorded from conversation response handling.")
-        (list :policy-id nil
-              :decision disposition
-              :reason "Assistant action recorded without a known policy mapping."))))
-
-(defun assistant-action-policy-id (action)
-  (case (assistant-action-type action)
-    (:eval
-     (if (mutating-eval-action-p action)
-         :runtime-eval-mutate
-         :runtime-eval-safe))
-    (:tool
-     (let* ((payload (assistant-action-payload action))
-            (tool-id (or (getf payload :TOOL-ID)
-                         (getf payload :TOOL_ID))))
-       (and tool-id
-            (ignore-errors (getf (describe-tool tool-id) :policy)))))
-    (:patch :workspace-write)
-    (t nil)))
-
-(defun assistant-action-requires-approval-p (action)
-  (let ((policy-id (assistant-action-policy-id action)))
-    (and policy-id
-         (let ((policy (ensure-capability-policy policy-id)))
-           (not (eq (capability-policy-default-grant-mode policy) :implicit))))))
-
-(defun governed-assistant-action-p (action)
-  (let ((policy-id (assistant-action-policy-id action)))
-    (or (eq (assistant-action-type action) :patch)
-        (eq policy-id :runtime-eval-mutate)
-        (member policy-id '(:workspace-write :git-write :process-run) :test #'eq))))
+  (mutation-policy-decision-summary :safe-read
+                                    :decision :allowed
+                                    :reason "Conversation provider runs are currently read-only orchestrator operations."))
 
 (defun staged-assistant-action-disposition (action)
   (if (assistant-action-requires-approval-p action)
@@ -59,13 +14,6 @@
   (if (assistant-action-requires-approval-p action)
       :awaiting-approval
       :staged))
-
-(defun action-operation-name (action)
-  (case (assistant-action-type action)
-    (:eval "assistant-eval")
-    (:tool "assistant-tool")
-    (:patch "assistant-patch")
-    (t "assistant-action")))
 
 (defun turn-status-from-action-operations (operations)
   (cond
@@ -81,56 +29,6 @@
         (append (getf action-report :immediate-actions)
                 (getf action-report :staged-actions))
         :key #'assistant-action-type))
-
-(defun governed-actions-present-p (action-report)
-  (find-if #'governed-assistant-action-p
-           (append (getf action-report :immediate-actions)
-                   (getf action-report :staged-actions))))
-
-(defun turn-bound-work-item-id (turn)
-  (getf (turn-metadata turn) :work-item-id))
-
-(defun ensure-turn-work-item (session thread turn action-report prompt)
-  (let ((existing-id (turn-bound-work-item-id turn)))
-    (cond
-      (existing-id
-       (find-work-item session existing-id))
-      ((not (governed-actions-present-p action-report))
-       nil)
-      (t
-       (let ((work-item (create-work-item session
-                                          (format nil "Conversation turn ~A mutation" (turn-id turn))
-                                          :mutation-intent (list :source :conversation-turn
-                                                                 :thread-id (thread-id thread)
-                                                                 :turn-id (turn-id turn)
-                                                                 :prompt prompt
-                                                                 :action-types (mapcar #'assistant-action-type
-                                                                                       (append (getf action-report :immediate-actions)
-                                                                                               (getf action-report :staged-actions))))
-                                          :transaction-scope :conversation-turn)))
-         (append-work-item-checkpoint session work-item
-                                      :validation-baseline (list :turn-id (turn-id turn)
-                                                                 :thread-id (thread-id thread)
-                                                                 :prompt prompt))
-         (append-work-item-runtime-observation session
-                                               work-item
-                                               :conversation-turn-bound
-                                               (list :thread-id (thread-id thread)
-                                                     :turn-id (turn-id turn)
-                                                     :prompt prompt))
-         (setf (turn-metadata turn)
-               (append (turn-metadata turn)
-                       (list :work-item-id (work-item-id work-item))))
-         (let ((approval-action (find-if #'assistant-action-requires-approval-p
-                                         (append (getf action-report :immediate-actions)
-                                                 (getf action-report :staged-actions)))))
-           (when approval-action
-             (let ((policy-id (assistant-action-policy-id approval-action)))
-               (request-work-item-approval session
-                                           work-item
-                                           policy-id
-                                           :reason "Governed conversation turn requires explicit approval before mutation."))))
-         work-item)))))
 
 (defun record-assistant-action-operations (session thread turn action-report &key work-item)
   (let ((records '()))
@@ -250,7 +148,7 @@
                                     :turn turn
                                     :operator-mode operator-mode))
            (action-report (process-response-actions response session))
-           (work-item (ensure-turn-work-item session thread turn action-report prompt))
+           (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
            (immediate-results (getf action-report :immediate-results))
            (completed-operation (complete-operation session
                                                    thread
@@ -319,7 +217,7 @@
                                 :turn turn
                                 :operator-mode operator-mode))
          (action-report (process-response-actions response session))
-         (work-item (ensure-turn-work-item session thread turn action-report prompt))
+         (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
          (immediate-results (getf action-report :immediate-results))
          (completed-operation (complete-operation session
                                                  thread
@@ -423,7 +321,7 @@
                                   :turn turn
                                   :operator-mode operator-mode))
            (action-report (process-response-actions response session))
-           (work-item (ensure-turn-work-item session thread turn action-report prompt))
+           (work-item (ensure-turn-mutation-work-item session thread turn action-report prompt))
            (immediate-results (getf action-report :immediate-results))
            (completed-operation (complete-operation session
                                                    thread
@@ -534,63 +432,6 @@
         :action-results results
         :followup followup))
 
-(defun apply-resumed-operation-result (session thread turn operation result)
-  (let ((policy-id (getf (operation-policy-decision operation) :policy-id)))
-  (update-work-item-status-from-operation session
-                                          operation
-                                          :mutating
-                                          :closure-decision :conversation-mutation-in-progress)
-  (if (eq (getf result :status) :failed)
-      (progn
-        (complete-operation session
-                            thread
-                            turn
-                            operation
-                            result
-                            :status :failed
-                            :metadata (append '(:execution :resumed)
-                                              (let ((incident (getf result :incident)))
-                                                (when incident
-                                                  (list :incident-id (getf incident :id))))))
-        (let ((work-item (operation-bound-work-item session operation)))
-          (cond
-            ((and work-item
-                  (eq (work-item-status work-item) :quarantined))
-             nil)
-            (work-item
-             (quarantine-work-item session
-                                   work-item
-                                   (or (getf result :error)
-                                       "Resumed assistant action failed during governed execution.")
-                                   :evidence (list :source :turn-resume
-                                                   :turn-id (turn-id turn)
-                                                   :operation-id (operation-id operation)
-                                                   :incident (getf result :incident))))
-            (t
-             (update-work-item-status-from-operation session
-                                                     operation
-                                                     :failed
-                                                     :closure-decision :runtime-incident
-                                                     :error (getf result :error)
-                                                     :result result)))))
-      (progn
-        (complete-operation session
-                            thread
-                            turn
-                            operation
-                            (or result (list :resumed-p t))
-                            :status :completed
-                            :metadata '(:execution :resumed))
-        (update-work-item-status-from-operation session
-                                                operation
-                                                (if (member policy-id '(:runtime-eval-mutate :runtime-reload) :test #'eq)
-                                                    :awaiting-cold-validation
-                                                    :committed)
-                                                :closure-decision (if (eq policy-id :runtime-eval-mutate)
-                                                                      :committed-to-image
-                                                                      :committed-to-source-and-image)
-                                                :result result)))))
-
 (defun resume-conversation-turn (provider session turn
                                   &key (source (or (getf (turn-metadata turn) :source) :say))
                                     (operator-mode :conversation))
@@ -602,7 +443,7 @@
              (policy-id (getf decision :policy-id)))
         (when policy-id
           (ensure-policy-approved session policy-id))))
-    (let* ((thread (or (find-thread session (turn-thread-id turn))
+      (let* ((thread (or (find-thread session (turn-thread-id turn))
                        (current-thread session)))
            (results (execute-turn-pending-actions session
                                                   operations
@@ -611,7 +452,7 @@
            (followup nil))
       (loop for operation in operations
             for result in results
-            do (apply-resumed-operation-result session thread turn operation result))
+            do (apply-resumed-mutation-result session thread turn operation result))
       (refresh-turn-status session turn :metadata '(:resumed-p t))
       (when (and provider
                  (provider-turn-followup-p provider)

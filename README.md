@@ -6,6 +6,15 @@ It began as a Codex-style shell, but the project has matured into something more
 
 The point of the project is not to recreate a conventional IDE in Lisp or to wrap an LLM with shell tools. The point is to let humans and agents inspect and mutate the same running system they are reasoning about while preserving approvals, evidence, incidents, reconciliation, and operator trust.
 
+## Licensing
+
+This repository uses a split license structure reflected in [LICENSE.md](LICENSE.md):
+
+- software and source code are licensed under [PolyForm Noncommercial 1.0.0](LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt)
+- documentation and other non-software content are licensed under [CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.txt)
+
+This repository is source-available and noncommercial. Commercial-use rights are reserved unless separately granted in writing by Paul Bernard or his authorized designee.
+
 ## Why It Exists
 
 The dominant SDLC model was correct for the constraints it was built under:

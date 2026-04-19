@@ -99,10 +99,8 @@
   (let ((policy (first arguments)))
     (unless (keywordp policy)
       (error "APPROVE requires a keyword policy"))
-    (approve-policy session policy)
-    (list :approved policy
-          :approved-policies (session-approved-policies session)
-          :capability-grants (session-capability-grants-summary session))))
+    (service-response-data
+     (command-approve-policy-service session policy))))
 
 (defun execute-patch-command (arguments session)
   (let ((operations (first arguments)))
@@ -325,43 +323,48 @@
   (let ((title (getf arguments :title)))
     (when (and title (not (stringp title)))
       (error "THREAD/NEW :TITLE must be a string"))
-    (thread-record-summary (create-thread session :title title))))
+    (service-response-data
+     (command-conversation-create-thread-service session :title title))))
 
 (defun execute-thread-list-command (session)
-  (list-thread-summaries session))
+  (service-response-data
+   (query-conversation-thread-list-service session)))
 
 (defun execute-thread-use-command (arguments session)
   (let ((thread-id (first arguments)))
     (unless (stringp thread-id)
       (error "THREAD/USE requires a string thread id"))
-    (thread-record-summary (use-thread session thread-id))))
+    (service-response-data
+     (command-conversation-use-thread-service session thread-id))))
 
 (defun execute-thread-show-command (arguments session)
   (let ((thread-id (first arguments)))
     (when (and thread-id (not (stringp thread-id)))
       (error "THREAD/SHOW requires a string thread id when provided"))
-    (thread-detail session thread-id)))
+    (service-response-data
+     (query-conversation-thread-detail-service session thread-id))))
 
 (defun execute-turn-status-command (arguments session)
   (let ((turn-id (first arguments)))
     (when (and turn-id (not (stringp turn-id)))
       (error "TURN/STATUS requires a string turn id when provided"))
-    (turn-detail session turn-id)))
+    (service-response-data
+     (query-conversation-turn-detail-service session turn-id))))
 
 (defun execute-incident-list-command (session)
-  (list-incident-summaries session))
+  (service-response-data
+   (query-incident-list-service session)))
 
 (defun execute-incident-show-command (arguments session)
   (let ((incident-id (first arguments)))
     (unless (stringp incident-id)
       (error "INCIDENT/SHOW requires a string incident id"))
-    (let ((incident (find-incident session incident-id)))
-      (unless incident
-        (error "Unknown incident ~A" incident-id))
-      (incident-detail session incident))))
+    (service-response-data
+     (query-incident-detail-service session incident-id))))
 
 (defun execute-environment-status-command (&optional environment)
-  (environment-status (ensure-environment environment)))
+  (service-response-data
+   (query-environment-status-service environment)))
 
 (defun execute-review-mutation-command (arguments session)
   (let ((turn-id (first arguments)))
@@ -432,10 +435,14 @@
             :work-item (enriched-work-item-detail session work-item)))))
 
 (defun execute-runtime-current-package-command (session)
-  (tool-runtime-current-package session))
+  (getf (service-response-data (query-runtime-summary-service session)) :package-details))
 
 (defun execute-runtime-list-loaded-systems-command (session)
-  (tool-runtime-list-loaded-systems session))
+  (let ((summary (service-response-data (query-runtime-summary-service session))))
+    (list :tool :runtime/list-loaded-systems
+          :system-count (getf summary :loaded-system-count)
+          :systems (getf summary :loaded-systems)
+          :sandbox-profile :in-process)))
 
 (defun execute-runtime-describe-symbol-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -486,7 +493,8 @@
   (let ((package-name (first arguments)))
     (unless (stringp package-name)
       (error "RUNTIME/SET-PACKAGE requires a string package name"))
-    (tool-runtime-set-package session :package package-name)))
+    (service-response-data
+     (command-runtime-set-package-service session package-name))))
 
 (defun execute-runtime-eval-command (arguments session)
   (let ((form-or-source (first arguments))
@@ -495,34 +503,31 @@
       (error "RUNTIME/EVAL requires a form or source string"))
     (when (oddp (length options))
       (error "RUNTIME/EVAL keyword options must be a property list"))
-    (apply #'tool-runtime-eval session :form form-or-source options)))
+    (service-response-data
+     (apply #'command-runtime-eval-service session form-or-source options))))
 
 (defun execute-runtime-history-command (arguments session)
-  (declare (ignore session))
   (let ((options arguments))
     (when (oddp (length options))
       (error "RUNTIME/HISTORY keyword options must be a property list"))
-    (apply #'tool-runtime-history (ensure-session) options)))
+    (service-response-data
+     (apply #'query-runtime-history-service session options))))
 
 (defun execute-runtime-reload-file-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "RUNTIME/RELOAD-FILE requires a string path"))
-    (tool-runtime-reload-file session :path path)))
+    (service-response-data
+     (command-runtime-reload-file-service session path))))
 
 (defun execute-environment-show-command (&optional environment)
-  (environment-summary (ensure-environment environment)))
+  (service-response-data
+   (query-environment-summary-service environment)))
 
 (defun execute-environment-events-command (arguments &optional environment)
-  (let* ((options arguments)
-         (tail (getf options :tail))
-         (tail-count (normalize-tail-count tail))
-         (active-environment (ensure-environment environment))
-         (events (environment-event-log active-environment))
-         (start (max 0 (- (length events) tail-count))))
-    (list :environment-id (environment-id active-environment)
-          :event-count (length events)
-          :events (subseq events start))))
+  (service-response-data
+   (query-environment-events-service :tail (getf arguments :tail)
+                                     :environment environment)))
 
 (defun execute-environment-save-command (arguments &optional environment)
   (let ((path (first arguments))
@@ -616,29 +621,26 @@
       (worker-summary worker))))
 
 (defun enriched-work-item-detail (session work-item)
-  (let ((detail (work-item-detail work-item))
-        (record (work-item-workflow-record session work-item)))
-    (if record
-        (append detail (list :workflow-record (workflow-record-summary record)))
-        detail)))
+  (service-response-data
+   (query-work-item-detail-service session (work-item-id work-item))))
 
 (defun execute-describe-work-item-command (arguments session)
   (let ((work-item-id (first arguments)))
     (unless (stringp work-item-id)
       (error "DESCRIBE-WORK-ITEM requires a string work-item id"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (query-work-item-detail-service session work-item-id))))
+
+(defun execute-list-workflow-records-command (session)
+  (service-response-data
+   (query-workflow-record-list-service session)))
 
 (defun execute-describe-workflow-record-command (arguments session)
   (let ((workflow-record-id (first arguments)))
     (unless (stringp workflow-record-id)
       (error "DESCRIBE-WORKFLOW-RECORD requires a string workflow record id"))
-    (let ((record (find-workflow-record session workflow-record-id)))
-      (unless record
-        (error "Unknown workflow record ~A" workflow-record-id))
-      (workflow-record-detail record))))
+    (service-response-data
+     (query-workflow-record-detail-service session workflow-record-id))))
 (defun execute-request-work-item-approval-command (arguments session)
   (let ((work-item-id (first arguments))
         (policy (second arguments))
@@ -647,11 +649,8 @@
       (error "REQUEST-WORK-ITEM-APPROVAL requires a string work-item id"))
     (unless (keywordp policy)
       (error "REQUEST-WORK-ITEM-APPROVAL requires a keyword policy"))
-    (let ((work-item (find-work-item session work-item-id)))
-      (unless work-item
-        (error "Unknown work-item ~A" work-item-id))
-      (request-work-item-approval session work-item policy :reason reason)
-      (enriched-work-item-detail session work-item))))
+    (service-response-data
+     (command-request-work-item-approval-service session work-item-id policy :reason reason))))
 
 (defun execute-quarantine-work-item-command (arguments session)
   (let ((work-item-id (first arguments))
@@ -924,13 +923,16 @@
       (:list-workers
        (values (list-worker-summaries active-session) :list-workers active-session))
       (:list-work-items
-       (values (list-work-item-summaries active-session) :list-work-items active-session))
+       (values (service-response-data
+                (query-work-item-list-service active-session))
+               :list-work-items
+               active-session))
       (:describe-work-item
        (values (execute-describe-work-item-command (command-arguments command) active-session)
                :describe-work-item
                active-session))
       (:list-workflow-records
-       (values (list-workflow-record-summaries active-session) :list-workflow-records active-session))
+       (values (execute-list-workflow-records-command active-session) :list-workflow-records active-session))
       (:describe-workflow-record
        (values (execute-describe-workflow-record-command (command-arguments command) active-session)
                :describe-workflow-record

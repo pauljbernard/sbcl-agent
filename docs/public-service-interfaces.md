@@ -162,3 +162,16 @@ The service layer is doing its job when:
 - shell commands and future UI clients share the same governed operations
 - policy and approval behavior are consistent across front ends
 - internal kernel refactors do not force presentation-tier rewrites
+
+## Hardening Note
+
+The service boundary also needs stable governance metadata, not just stable payloads.
+
+That means service responses should consistently expose:
+
+- authority
+- session/environment binding
+- read-model or command-model identity
+- policy identifiers for governed commands
+
+See [Service Boundary Hardening]({{ '/service-boundary-hardening.html' | relative_url }}).

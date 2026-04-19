@@ -194,7 +194,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -223,7 +223,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -251,7 +251,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -279,7 +279,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -308,7 +308,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -337,7 +337,7 @@ Acceptance criteria:
 
 Status:
 
-- pending
+- complete
 
 Cumulative completion after iteration:
 
@@ -350,13 +350,13 @@ Cumulative completion after iteration:
 | 1 | Authority and service boundary lock | Complete | 10% |
 | 2 | Environment module split | Complete | 22% |
 | 3 | Canonical request snapshot | Complete | 34% |
-| 4 | Test decomposition and fixture cleanup | Pending | 46% |
-| 5 | Provider transport abstraction | Pending | 58% |
-| 6 | Governed mutation engine | Pending | 70% |
-| 7 | Public service contract extraction | Pending | 82% |
-| 8 | Shell-to-service migration | Pending | 92% |
-| 9 | UX-ready boundary hardening | Pending | 100% |
+| 4 | Test decomposition and fixture cleanup | Complete | 46% |
+| 5 | Provider transport abstraction | Complete | 58% |
+| 6 | Governed mutation engine | Complete | 70% |
+| 7 | Public service contract extraction | Complete | 82% |
+| 8 | Shell-to-service migration | Complete | 92% |
+| 9 | UX-ready boundary hardening | Complete | 100% |
 
 ## Immediate Next Step
 
-Begin Iteration 4 by decomposing the smoke suite into domain-oriented test files and centralizing fixture/path helpers.
+Execution tracker complete. Future work should extend the public service surface, but the kernel-to-service-to-UX boundary is now explicit and governed.

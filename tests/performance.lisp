@@ -19,8 +19,8 @@
 (defun benchmark-value-ms (summary key)
   (* 1000.0 (or (getf summary key) 0.0)))
 
-(defun make-performance-session (&key (cwd "/Volumes/data/development/sbcl-agent/"))
-  (sbcl-agent::make-default-session :cwd cwd))
+(defun make-performance-session (&key (cwd (current-workspace-root)))
+  (make-test-session :cwd cwd))
 
 (defun populate-session-with-turns (session provider count)
   (dotimes (index count session)

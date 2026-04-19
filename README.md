@@ -8,12 +8,7 @@ The point of the project is not to recreate a conventional IDE in Lisp or to wra
 
 ## Licensing
 
-This repository uses a split license structure reflected in [LICENSE.md](LICENSE.md):
-
-- software and source code are licensed under [PolyForm Noncommercial 1.0.0](LICENSES/POLYFORM-NONCOMMERCIAL-1.0.0.txt)
-- documentation and other non-software content are licensed under [CC BY-NC 4.0](LICENSES/CC-BY-NC-4.0.txt)
-
-This repository is source-available and noncommercial. Commercial-use rights are reserved unless separately granted in writing by Paul Bernard or his authorized designee.
+This repository is licensed under the [Apache License 2.0](LICENSES/APACHE-2.0.txt).
 
 ## Why It Exists
 

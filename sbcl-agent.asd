@@ -1,7 +1,7 @@
 (asdf:defsystem "sbcl-agent"
   :description "An environment based agentic first development enviornment"
   :author "Paul Bernard"
-  :license "Software/source: PolyForm Noncommercial 1.0.0; docs/non-software: CC BY-NC 4.0"
+  :license "Apache-2.0"
   :version "0.1.0"
   :serial t
   :depends-on ()
@@ -79,7 +79,7 @@
 (asdf:defsystem "sbcl-agent/tests"
   :description "Base test suite for sbcl-agent."
   :author "Paul Bernard"
-  :license "Software/source: PolyForm Noncommercial 1.0.0; docs/non-software: CC BY-NC 4.0"
+  :license "Apache-2.0"
   :depends-on ("sbcl-agent")
   :serial t
   :components ((:file "tests/package")

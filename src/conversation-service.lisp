@@ -17,8 +17,22 @@
                                                  :summary summary
                                                  :metadata metadata))
                                  :metadata (make-service-metadata :authority :environment
+                                                                 :command-model :thread-command-v1
+                                                                 :session session)))
+
+(defun command-conversation-update-thread-service (session thread-id &key title summary metadata)
+  (make-service-command-response :conversation
+                                 :update-thread
+                                 (thread-record-summary
+                                  (update-thread session
+                                                 thread-id
+                                                 :title title
+                                                 :summary summary
+                                                 :metadata metadata))
+                                 :metadata (make-service-metadata :authority :environment
                                                                   :command-model :thread-command-v1
-                                                                  :session session)))
+                                                                  :session session
+                                                                  :thread-id thread-id)))
 
 (defun command-conversation-use-thread-service (session thread-id)
   (make-service-command-response :conversation

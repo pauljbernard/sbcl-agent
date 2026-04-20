@@ -181,6 +181,26 @@
                           :visibility :operator)
     thread))
 
+(defun update-thread (session thread-id &key title summary metadata)
+  (let ((thread (find-thread session thread-id)))
+    (unless thread
+      (error "Unknown thread ~A" thread-id))
+    (when title
+      (setf (thread-title thread) title))
+    (when summary
+      (setf (thread-summary thread) summary))
+    (when metadata
+      (setf (thread-metadata thread) metadata))
+    (setf (thread-updated-at thread) (get-universal-time))
+    (append-session-event session
+                          :thread-updated
+                          (thread-record-summary thread)
+                          :family :conversation
+                          :entity-id thread-id
+                          :thread-id thread-id
+                          :visibility :operator)
+    thread))
+
 (defun use-thread (session thread-id)
   (let ((thread (find-thread session thread-id)))
     (unless thread

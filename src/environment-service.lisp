@@ -51,34 +51,50 @@
     (remove nil
             (mapcar #'normalize-provider-profile-keyword values))))
 
+(defun canonicalize-provider-profile (profile)
+  (normalize-provider-profile (getf profile :name)
+                              (list :provider (getf profile :provider)
+                                    :model (getf profile :model)
+                                    :fast-model (getf profile :fast-model)
+                                    :api-base (getf profile :api-base)
+                                    :intents (getf profile :intents)
+                                    :latency-tier (getf profile :latency-tier)
+                                    :review-bias (getf profile :review-bias)
+                                    :execution-bias (getf profile :execution-bias)
+                                    :locality (getf profile :locality))))
+
 (defun normalize-provider-profile (name options)
-  (list :name (normalize-provider-profile-name name)
-        :provider (or (normalize-config-string (getf options :provider)) "mock")
-        :model (or (normalize-config-string (getf options :model)) "gpt-5")
-        :fast-model (normalize-config-string (getf options :fast-model))
-        :api-base (normalize-config-string (getf options :api-base))
-        :intents (normalize-provider-profile-keywords (getf options :intents))
-        :latency-tier (or (normalize-provider-profile-keyword
-                           (unwrap-provider-profile-option-value (getf options :latency-tier)))
-                          :balanced)
-        :review-bias (or (normalize-provider-profile-keyword
-                          (unwrap-provider-profile-option-value (getf options :review-bias)))
-                         :neutral)
-        :execution-bias (or (normalize-provider-profile-keyword
-                             (unwrap-provider-profile-option-value (getf options :execution-bias)))
+  (let* ((provider (or (normalize-config-string (getf options :provider)) "mock")))
+    (list :name (normalize-provider-profile-name name)
+          :provider provider
+          :model (or (normalize-config-string (getf options :model))
+                     (provider-default-model provider))
+          :fast-model (or (normalize-config-string (getf options :fast-model))
+                          (provider-default-fast-model provider))
+          :api-base (normalize-config-string (getf options :api-base))
+          :intents (normalize-provider-profile-keywords (getf options :intents))
+          :latency-tier (or (normalize-provider-profile-keyword
+                             (unwrap-provider-profile-option-value (getf options :latency-tier)))
                             :balanced)
-        :locality (or (normalize-provider-profile-keyword
-                       (unwrap-provider-profile-option-value (getf options :locality)))
-                      (if (member (normalize-config-string (getf options :provider))
-                                  '("lm-studio" "lmstudio" "local-openai-compatible")
-                                  :test #'string-equal)
-                          :local
-                          :network))))
+          :review-bias (or (normalize-provider-profile-keyword
+                            (unwrap-provider-profile-option-value (getf options :review-bias)))
+                           :neutral)
+          :execution-bias (or (normalize-provider-profile-keyword
+                               (unwrap-provider-profile-option-value (getf options :execution-bias)))
+                              :balanced)
+          :locality (or (normalize-provider-profile-keyword
+                         (unwrap-provider-profile-option-value (getf options :locality)))
+                        (if (member provider
+                                    '("lm-studio" "lmstudio" "local-openai-compatible")
+                                    :test #'string-equal)
+                            :local
+                            :network)))))
 
 (defun environment-provider-profiles (&optional environment)
-  (copy-list (or (environment-metadata-value (ensure-environment environment)
-                                             :provider-profiles)
-                 '())))
+  (mapcar #'canonicalize-provider-profile
+          (or (environment-metadata-value (ensure-environment environment)
+                                          :provider-profiles)
+              '())))
 
 (defun environment-active-provider-profile-name (&optional environment)
   (environment-metadata-value (ensure-environment environment)
@@ -455,11 +471,12 @@
     summary))
 
 (defun provider-profile->config (profile &optional (base-config (load-config)))
-  (config-with-overrides base-config
-                         :provider (getf profile :provider)
-                         :model (getf profile :model)
-                         :fast-model (getf profile :fast-model)
-                         :api-base (getf profile :api-base)))
+  (let ((normalized (canonicalize-provider-profile profile)))
+    (config-with-overrides base-config
+                           :provider (getf normalized :provider)
+                           :model (getf normalized :model)
+                           :fast-model (getf normalized :fast-model)
+                           :api-base (getf normalized :api-base))))
 
 (defun provider-from-profile (profile &optional (base-config (load-config)))
   (make-provider (provider-profile->config profile base-config)))

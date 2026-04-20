@@ -65,6 +65,32 @@
     (t
      nil)))
 
+(defun provider-default-model (provider-name)
+  (cond
+    ((member provider-name '("anthropic") :test #'string-equal)
+     "claude-sonnet-4-20250514")
+    ((member provider-name '("google" "gemini" "google-openai-compatible" "gemini-openai-compatible")
+             :test #'string-equal)
+     "gemini-2.5-pro")
+    ((member provider-name '("lm-studio" "lmstudio" "local-openai-compatible")
+             :test #'string-equal)
+     "local-model")
+    (t
+     "gpt-5")))
+
+(defun provider-default-fast-model (provider-name)
+  (cond
+    ((member provider-name '("anthropic") :test #'string-equal)
+     "claude-3-5-haiku")
+    ((member provider-name '("google" "gemini" "google-openai-compatible" "gemini-openai-compatible")
+             :test #'string-equal)
+     "gemini-2.5-flash")
+    ((member provider-name '("lm-studio" "lmstudio" "local-openai-compatible")
+             :test #'string-equal)
+     "local-model")
+    (t
+     "gpt-4.1-mini")))
+
 (defun provider-env-api-key (provider-name)
   (cond
     ((member provider-name '("anthropic") :test #'string-equal)
@@ -91,9 +117,9 @@
          (gemini-key (or (provider-env-api-key "gemini")
                          (load-api-key-from-file working-directory "gemini"))))
     (or provider
+        (and openai-key "openai-compatible")
         (and anthropic-key "anthropic")
         (and gemini-key "gemini")
-        (and openai-key "openai-compatible")
         "mock")))
 
 (defun resolve-provider-api-key (provider-name working-directory)
@@ -123,8 +149,10 @@
          (api-key (resolve-provider-api-key provider-name normalized-working-directory)))
     (make-config
      :provider provider-name
-     :model (or (getenv "TUTOR_CODEX_MODEL") "gpt-5")
-     :fast-model (or (getenv "TUTOR_CODEX_FAST_MODEL") "gpt-4.1-mini")
+     :model (or (getenv "TUTOR_CODEX_MODEL")
+                (provider-default-model provider-name))
+     :fast-model (or (getenv "TUTOR_CODEX_FAST_MODEL")
+                     (provider-default-fast-model provider-name))
      :api-base (or (normalize-config-string (getenv "TUTOR_CODEX_API_BASE"))
                    (provider-default-api-base provider-name))
      :api-key api-key

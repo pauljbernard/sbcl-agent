@@ -3,6 +3,10 @@
 (defparameter *stream-event-listener* nil)
 (defparameter *default-ask-streaming* nil)
 
+(declaim (special *runtime-governance-thread*
+                  *runtime-governance-turn*
+                  *runtime-governance-operation*))
+
 (defun plist-value (plist indicator &optional default)
   (if (and (listp plist) (member indicator plist))
       (getf plist indicator)
@@ -279,6 +283,187 @@
 (defun ask-task-form (prompt options)
   (execution-task-form 'ask prompt options))
 
+(defun trim-conversation-prompt (prompt)
+  (string-trim '(#\Space #\Tab #\Newline #\Return) (or prompt "")))
+
+(defun explicit-runtime-eval-form-prompt (prompt)
+  (let ((trimmed (trim-conversation-prompt prompt)))
+    (when (and (> (length trimmed) 0)
+               (char= (char trimmed 0) #\()
+               (ignore-errors (parse-runtime-form trimmed)))
+      trimmed)))
+
+(defun affirmative-runtime-eval-confirmation-p (prompt)
+  (member (string-downcase (trim-conversation-prompt prompt))
+          '("y"
+            "yes"
+            "yes."
+            "yes please"
+            "please do"
+            "go ahead"
+            "do it"
+            "run it"
+            "evaluate it"
+            "evaluate that"
+            "execute it"
+            "execute that")
+          :test #'string=))
+
+(defun assistant-runtime-eval-offer-p (content)
+  (let ((text (string-downcase (or content ""))))
+    (or (search "would you like me to evaluate" text :test #'char=)
+        (search "would you like me to execute" text :test #'char=)
+        (search "evaluate this expression directly" text :test #'char=)
+        (search "evaluate this directly" text :test #'char=))))
+
+(defun pending-thread-runtime-eval-confirmation-form (session &optional thread)
+  (let* ((active-thread (or thread (current-thread session)))
+         (last-turn (most-recent-thread-turn session (thread-id active-thread)))
+         (user-message (and last-turn
+                            (find-message session (turn-user-message-id last-turn))))
+         (assistant-message (and last-turn
+                                 (find-message session (turn-assistant-message-id last-turn))))
+         (form (and user-message
+                    (explicit-runtime-eval-form-prompt (message-content user-message)))))
+    (when (and form
+               assistant-message
+               (assistant-runtime-eval-offer-p (message-content assistant-message)))
+      form)))
+
+(defun resolve-conversation-runtime-eval-form (session prompt)
+  (or (let ((form (explicit-runtime-eval-form-prompt prompt)))
+        (and form
+             (list :form form
+                   :reason :direct-form)))
+      (let ((form (and (affirmative-runtime-eval-confirmation-p prompt)
+                       (pending-thread-runtime-eval-confirmation-form session))))
+        (and form
+             (list :form form
+                   :reason :confirmed-prior-form)))))
+
+(defun runtime-eval-assistant-message (tool-result reason)
+  (let* ((form (getf tool-result :form))
+         (package (getf tool-result :package))
+         (values (or (getf tool-result :values) '())))
+    (format nil "~A in ~A. Result: ~S.~@[ Values: ~S.~]"
+            (if (eq reason :confirmed-prior-form)
+                "Evaluated the previously requested form"
+                (format nil "Evaluated ~A" form))
+            package
+            (first values)
+            (and (rest values) values))))
+
+(defun run-direct-conversation-runtime-eval (session prompt form reason
+                                              &key (source :say) (operator-mode :conversation))
+  (declare (ignore operator-mode))
+  (let* ((thread (current-thread session)))
+    (append-transcript-entry session :user prompt)
+    (emit-conversation-progress (conversation-progress-phase source :started)
+                                (list :prompt prompt
+                                      :stream-p nil
+                                      :thread-id (thread-id thread)
+                                      :auto-routed-p t
+                                      :direct-runtime-eval-p t))
+    (let* ((user-message (create-message session thread :user prompt
+                                         :metadata (list :source source
+                                                         :auto-routed-p t
+                                                         :direct-runtime-eval-p t
+                                                         :direct-runtime-eval-reason reason)))
+           (turn (start-turn session thread user-message
+                             :metadata (list :source source
+                                             :streamed-p nil
+                                             :auto-routed-p t
+                                             :direct-runtime-eval-p t
+                                             :direct-runtime-eval-reason reason)))
+           (operation (start-operation session
+                                       thread
+                                       turn
+                                       :runtime
+                                       "conversation-runtime-eval"
+                                       (list :prompt prompt
+                                             :form form
+                                             :reason reason)
+                                       :policy-decision
+                                       (mutation-policy-decision-summary
+                                        :runtime-eval-safe
+                                        :decision :allowed
+                                        :reason "Conversation prompt was recognized as a direct runtime evaluation request.")
+                                       :metadata (list :source source
+                                                       :auto-routed-p t
+                                                       :direct-runtime-eval-p t
+                                                       :direct-runtime-eval-reason reason)))
+           (tool-result (let ((*runtime-governance-thread* thread)
+                              (*runtime-governance-turn* turn)
+                              (*runtime-governance-operation* operation))
+                          (tool-runtime-eval session :form form)))
+           (completed-operation (complete-operation session
+                                                   thread
+                                                   turn
+                                                   operation
+                                                   tool-result
+                                                   :status :completed
+                                                   :metadata (list :auto-routed-p t
+                                                                   :direct-runtime-eval-p t
+                                                                   :direct-runtime-eval-reason reason)))
+           (assistant-content (runtime-eval-assistant-message tool-result reason))
+           (assistant-message (create-message session thread :assistant assistant-content
+                                              :content-type :text
+                                              :metadata (list :source source
+                                                              :streamed-p nil
+                                                              :auto-routed-p t
+                                                              :direct-runtime-eval-p t
+                                                              :direct-runtime-eval-reason reason
+                                                              :operation-id (operation-id completed-operation))))
+           (completed-turn (complete-turn session
+                                          thread
+                                          turn
+                                          assistant-message
+                                          :status :completed
+                                          :metadata (list :stream-event-count 0
+                                                          :operation-id (operation-id completed-operation)
+                                                          :auto-routed-p t
+                                                          :direct-runtime-eval-p t
+                                                          :direct-runtime-eval-reason reason))))
+      (append-transcript-entry session :assistant assistant-content)
+      (append-session-event session
+                            :conversation-runtime-eval
+                            (list :form form
+                                  :reason reason
+                                  :result (first (getf tool-result :values))
+                                  :values (getf tool-result :values))
+                            :family :runtime
+                            :entity-id (operation-id completed-operation)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id completed-turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :direct-runtime-eval-p t
+                                            :direct-runtime-eval-reason reason))
+      (emit-conversation-progress (conversation-progress-phase source :response)
+                                  (list :message assistant-content
+                                        :staged-action-count 0
+                                        :deferred-action-count 0
+                                        :immediate-action-count 1
+                                        :stream-event-count 0
+                                        :thread-id (thread-id thread)
+                                        :turn-id (turn-id completed-turn)
+                                        :auto-routed-p t
+                                        :direct-runtime-eval-p t))
+      (append (list :response nil
+                    :staged-action-count 0
+                    :deferred-action-count 0
+                    :immediate-action-count 1
+                    :action-results (list tool-result)
+                    :streamed-p nil
+                    :stream-event-count 0
+                    :direct-runtime-eval-p t
+                    :direct-runtime-eval-reason reason
+                    :runtime-result tool-result)
+              (conversation-turn-summary thread
+                                         user-message
+                                         assistant-message
+                                         completed-turn)))))
+
 (defun command-invoke-tool-service (session tool-id tool-args &key thread turn operation)
   (make-service-command-response :execution
                                  :tool
@@ -323,24 +508,42 @@
                                          :metadata (make-service-metadata :authority :environment
                                                                           :command-model :conversation-execution-v1
                                                                           :session session)))
-        (let* ((stream-p (or (and (option-present-p options :stream)
-                                  (plist-value options :stream nil))
-                             *default-ask-streaming*
-                             (not (null *task-progress-callback*))))
-               (result (run-conversation-turn provider
-                                             session
-                                             prompt
-                                             :stream-p stream-p
-                                             :source source
-                                             :operator-mode operator-mode)))
-          (make-service-command-response :execution
-                                         source
-                                         result
-                                         :metadata (make-service-metadata :authority :environment
-                                                                          :command-model :conversation-execution-v1
-                                                                          :session session
-                                                                          :thread-id (getf (getf result :thread) :id)
-                                                                          :turn-id (getf (getf result :turn) :id)))))))
+        (let ((direct-runtime-eval (resolve-conversation-runtime-eval-form session prompt)))
+          (if direct-runtime-eval
+              (let ((result (run-direct-conversation-runtime-eval session
+                                                                  prompt
+                                                                  (getf direct-runtime-eval :form)
+                                                                  (getf direct-runtime-eval :reason)
+                                                                  :source source
+                                                                  :operator-mode operator-mode)))
+                (make-service-command-response :execution
+                                               source
+                                               result
+                                               :metadata (make-service-metadata :authority :environment
+                                                                                :command-model :conversation-execution-v1
+                                                                                :session session
+                                                                                :thread-id (getf (getf result :thread) :id)
+                                                                                :turn-id (getf (getf result :turn) :id)
+                                                                                :runtime-id (default-runtime-id)
+                                                                                :policy-id :runtime-eval-safe)))
+              (let* ((stream-p (or (and (option-present-p options :stream)
+                                        (plist-value options :stream nil))
+                                   *default-ask-streaming*
+                                   (not (null *task-progress-callback*))))
+                     (result (run-conversation-turn provider
+                                                   session
+                                                   prompt
+                                                   :stream-p stream-p
+                                                   :source source
+                                                   :operator-mode operator-mode)))
+                (make-service-command-response :execution
+                                               source
+                                               result
+                                               :metadata (make-service-metadata :authority :environment
+                                                                                :command-model :conversation-execution-v1
+                                                                                :session session
+                                                                                :thread-id (getf (getf result :thread) :id)
+                                                                                :turn-id (getf (getf result :turn) :id)))))))))
 
 (defun command-execute-assistant-action-service (session action &key thread turn operation)
   (make-service-command-response :execution

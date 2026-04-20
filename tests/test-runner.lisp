@@ -75,6 +75,8 @@
         (list "assistant-mixed-action-ask-test" #'assistant-mixed-action-ask-test)
         (list "assistant-action-execution-test" #'assistant-action-execution-test)
         (list "assistant-eval-action-execution-test" #'assistant-eval-action-execution-test)
+        (list "direct-conversation-runtime-eval-routing-test" #'direct-conversation-runtime-eval-routing-test)
+        (list "conversation-runtime-eval-confirmation-routing-test" #'conversation-runtime-eval-confirmation-routing-test)
         (list "pasted-assistant-action-command-test" #'pasted-assistant-action-command-test)
         (list "journal-date-time-followup-execution-test" #'journal-date-time-followup-execution-test)
         (list "session-summary-recent-transcript-test" #'session-summary-recent-transcript-test)

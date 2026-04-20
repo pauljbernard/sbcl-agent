@@ -4526,6 +4526,88 @@ fi
                   (getf (sbcl-agent::execute-assistant-action code-action session) :result)
                   "assistant eval actions should also accept payloads under :code")))
 
+(defun direct-conversation-runtime-eval-routing-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service session
+                                                                      provider
+                                                                      "(+ 5 6)"
+                                                                      '()
+                                                                      :source :say
+                                                                      :operator-mode :conversation)))
+         (turn-id (getf (getf result :turn) :id))
+         (turn-detail (sbcl-agent::turn-detail session turn-id))
+         (operations (getf turn-detail :operations))
+         (eval-operation (find "conversation-runtime-eval"
+                               operations
+                               :key (lambda (entry) (getf entry :name))
+                               :test #'string=)))
+    (assert-true (getf result :direct-runtime-eval-p)
+                 "bare Lisp forms in conversation should route directly to runtime eval")
+    (assert-equal :direct-form
+                  (getf result :direct-runtime-eval-reason)
+                  "direct runtime eval routing should record the direct-form reason")
+    (assert-true (search "Result: 11."
+                         (getf (getf result :assistant-message) :content))
+                 "direct runtime eval should answer from the runtime result")
+    (assert-true eval-operation
+                 "direct runtime eval should create a dedicated runtime operation in the turn")
+    (assert-equal :completed
+                  (getf eval-operation :status)
+                  "direct runtime eval operation should complete")
+    (assert-equal 11
+                  (getf (getf eval-operation :output) :result)
+                  "direct runtime eval output should expose the computed runtime result")
+    (assert-true (find :assistant
+                       (sbcl-agent::agent-session-transcript session)
+                       :key (lambda (entry) (getf entry :role)))
+                 "direct runtime eval should still append an assistant transcript entry")))
+
+(defun conversation-runtime-eval-confirmation-routing-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (thread (sbcl-agent::current-thread session))
+         (user-message (sbcl-agent::create-message session thread :user "(+ 5 6)"))
+         (turn (sbcl-agent::start-turn session thread user-message))
+         (assistant-message (sbcl-agent::create-message session
+                                                        thread
+                                                        :assistant
+                                                        "The result of the expression (+ 5 6) is 11. Would you like me to evaluate this expression directly for you?"
+                                                        :turn-id (sbcl-agent::turn-id turn)))
+         (_completed-turn (sbcl-agent::complete-turn session
+                                                     thread
+                                                     turn
+                                                     assistant-message
+                                                     :status :completed))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service session
+                                                                      provider
+                                                                      "yes"
+                                                                      '()
+                                                                      :source :say
+                                                                      :operator-mode :conversation)))
+         (turn-id (getf (getf result :turn) :id))
+         (turn-detail (sbcl-agent::turn-detail session turn-id))
+         (eval-operation (find "conversation-runtime-eval"
+                               (getf turn-detail :operations)
+                               :key (lambda (entry) (getf entry :name))
+                               :test #'string=)))
+    (declare (ignore _completed-turn))
+    (assert-true (getf result :direct-runtime-eval-p)
+                 "explicit confirmation should route the conversation into runtime eval")
+    (assert-equal :confirmed-prior-form
+                  (getf result :direct-runtime-eval-reason)
+                  "explicit confirmation should reuse the pending prior form")
+    (assert-true (search "Evaluated the previously requested form"
+                         (getf (getf result :assistant-message) :content))
+                 "confirmation routing should explain that the prior form was evaluated")
+    (assert-true eval-operation
+                 "confirmation routing should still create a runtime eval operation")
+    (assert-equal 11
+                  (getf (getf eval-operation :output) :result)
+                  "confirmation routing should evaluate the prior Lisp form in the runtime")))
+
 (defun pasted-assistant-action-command-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))

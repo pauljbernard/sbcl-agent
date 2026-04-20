@@ -60,6 +60,19 @@
     (loop for start from 0 below length by chunk-size
           collect (subseq message start (min length (+ start chunk-size))))))
 
+(defun mock-stream-delay-seconds ()
+  (let ((value (ignore-errors
+                 (parse-integer (or (getenv "TUTOR_CODEX_MOCK_STREAM_DELAY_MS") "0")
+                                :junk-allowed t))))
+    (if (and value (> value 0))
+        (/ value 1000.0)
+        0.0)))
+
+(defun maybe-sleep-for-mock-stream ()
+  (let ((delay (mock-stream-delay-seconds)))
+    (when (> delay 0.0)
+      (sleep delay))))
+
 (defmethod send-request ((provider mock-provider) request)
   (declare (ignore provider))
   (build-mock-response request))
@@ -69,10 +82,14 @@
   (let* ((response (build-mock-response request))
          (actions (assistant-response-actions response)))
     (emit-provider-event event-handler :message-start nil)
+    (maybe-sleep-for-mock-stream)
     (dolist (chunk (split-stream-message (assistant-response-message response)))
-      (emit-provider-event event-handler :message-delta chunk))
+      (emit-provider-event event-handler :message-delta chunk)
+      (maybe-sleep-for-mock-stream))
     (when actions
       (emit-provider-event event-handler :action-proposal actions))
+    (when actions
+      (maybe-sleep-for-mock-stream))
     (emit-provider-event event-handler
                          :message-complete
                          (list :response response

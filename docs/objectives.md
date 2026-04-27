@@ -20,6 +20,8 @@ For the transition from current system to target system, this document should no
 - [IntentOS Constitution]({{ '/intentos-constitution.html' | relative_url }})
 - [IntentOS Requirements]({{ '/intentos-requirements.html' | relative_url }})
 
+Both architecture documents include the accepted context diagrams directly, and the docs front page now exposes those diagrams side by side.
+
 ## Primary Objective
 
 Build a persistent, image-native, agentic Common Lisp environment that can inspect and mutate the same live system it is reasoning about while preserving operator trust through explicit approvals, durable evidence, and reproducible source-backed outcomes.

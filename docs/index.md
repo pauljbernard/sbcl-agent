@@ -35,6 +35,23 @@ If you are new to the project, read in this order:
 
 Then use the roadmap and transition documents as forward-looking context rather than entry points.
 
+## Current And Target Architecture
+
+The transition is easiest to understand if you look at the current and target architecture side by side:
+
+<div class="card-grid">
+  <a class="card" href="{{ '/agentos-current-state-gap-analysis.html' | relative_url }}">
+    <div class="card-title">Current-State Architecture</div>
+    <p>The current governed-runtime and desktop-host shape of `sbcl-agent` and `sbcl-agent-ux`.</p>
+    <img src="{{ '/assets/sbcl-agent-current-state-architecture-diagram.png' | relative_url }}" alt="Current-state architecture diagram for sbcl-agent and sbcl-agent-ux">
+  </a>
+  <a class="card" href="{{ '/agentos-target-state-architecture.html' | relative_url }}">
+    <div class="card-title">IntentOS Target Architecture</div>
+    <p>The target execution-kernel architecture with `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers.</p>
+    <img src="{{ '/assets/intentos-target-architecture-context-diagram.png' | relative_url }}" alt="IntentOS target architecture context diagram">
+  </a>
+</div>
+
 ## Documentation Layers
 
 <div class="card-grid">

@@ -37,18 +37,21 @@ Then use the roadmap and transition documents as forward-looking context rather 
 
 ## Current And Target Architecture
 
-The transition is easiest to understand if you look at the current and target architecture side by side:
+The transition is easiest to understand if you look at the current and target architecture in sequence:
 
 <div class="card-grid">
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html">
     <div class="card-title">Current-State Architecture</div>
     <p>The current governed-runtime and desktop-host shape of `sbcl-agent` and `sbcl-agent-ux`.</p>
-    <img src="https://pauljbernard.github.io/sbcl-agent/assets/sbcl-agent-current-state-architecture-diagram.png" alt="Current-state architecture diagram for sbcl-agent and sbcl-agent-ux">
+    <img src="https://pauljbernard.github.io/sbcl-agent/assets/sbcl-agent-current-state-architecture-diagram.png" alt="Current-state architecture diagram for sbcl-agent and sbcl-agent-ux" style="display: block; width: 100%; height: auto;">
   </a>
+</div>
+
+<div class="card-grid">
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
     <div class="card-title">IntentOS Target Architecture</div>
     <p>The target execution-kernel architecture with `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers.</p>
-    <img src="https://pauljbernard.github.io/sbcl-agent/assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram">
+    <img src="https://pauljbernard.github.io/sbcl-agent/assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram" style="display: block; width: 100%; height: auto;">
   </a>
 </div>
 

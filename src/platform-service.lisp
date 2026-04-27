@@ -41,6 +41,21 @@
      :kind :command
      :command "(platform/install-package \"file.aop\")"
      :description "Validate, import, and activate one IntentOS developer package in the bound environment.")
+    (:command-id :platform/simulate-package
+     :transport :shell
+     :kind :query
+     :command "(platform/simulate-package \"file.aop\")"
+     :description "Preview the profile and registry effects of importing and activating one IntentOS developer package without mutating the environment.")
+    (:command-id :platform/harness
+     :transport :shell
+     :kind :query
+     :command "(platform/harness)"
+     :description "List the available developer platform harnesses and their availability.")
+    (:command-id :platform/run-harness
+     :transport :shell
+     :kind :command
+     :command "(platform/run-harness [:harness-id :internal-evaluations])"
+     :description "Run one available developer platform harness and return its report.")
     (:command-id :desktop/show
      :transport :shell
      :kind :query
@@ -105,7 +120,22 @@
      :transport :cli
      :kind :command
      :command "sbcl-agent platform install --input <file.aop> [--environment <path>] [--working-directory <path>]"
-     :description "Validate, import, and activate one IntentOS developer package from the command line.")))
+     :description "Validate, import, and activate one IntentOS developer package from the command line.")
+    (:command-id :platform-cli/simulate
+     :transport :cli
+     :kind :query
+     :command "sbcl-agent platform simulate --input <file.aop> [--environment <path>] [--working-directory <path>]"
+     :description "Preview the profile and registry effects of importing and activating one IntentOS developer package from the command line.")
+    (:command-id :platform-cli/harness
+     :transport :cli
+     :kind :query
+     :command "sbcl-agent platform harness [--environment <path>] [--working-directory <path>]"
+     :description "List the available developer platform harnesses from the command line.")
+    (:command-id :platform-cli/run-harness
+     :transport :cli
+     :kind :command
+     :command "sbcl-agent platform run-harness [--harness-id <id>] [--environment <path>] [--working-directory <path>]"
+     :description "Run one available developer platform harness from the command line.")))
 
 (defparameter +platform-workflow-catalog+
   '((:workflow-id :governed-mutation-review
@@ -135,7 +165,22 @@
      :surface-kind :desktop
      :required-capabilities nil
      :entrypoints (:desktop/show :desktop/action :desktop/restore)
-     :control-actions (:activate-panel :select-panel :open-panel :restore-panel))))
+     :control-actions (:activate-panel :select-panel :open-panel :restore-panel))
+    (:workflow-id :developer-platform-lifecycle
+     :title "Developer Platform Lifecycle"
+     :description "Package, simulate, inspect, and validate developer platform artifacts and harnesses."
+     :surface-kind :platform
+     :required-capabilities nil
+     :entrypoints (:platform/manifest :platform/package :platform/simulate-package :platform/harness :platform/run-harness)
+     :control-actions (:install-package :activate-package :deactivate-package))))
+
+(defparameter +platform-harness-catalog+
+  '((:harness-id :internal-evaluations
+     :title "Internal Evaluations"
+     :description "Run the built-in evaluation families that exercise governed execution, recovery, orchestration, and self-improvement behavior."
+     :runner-package "SBCL-AGENT/TESTS"
+     :runner-symbol "RUN-INTERNAL-EVALUATIONS"
+     :report-shape :evaluation-report-v1)))
 
 (defun normalize-platform-capability-ids (value)
   (cond

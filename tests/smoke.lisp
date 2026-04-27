@@ -135,6 +135,30 @@
   (let ((options (sbcl-agent::parse-provider-arguments '("routing" "--mode" "manual"))))
     (assert-equal :manual (sbcl-agent::provider-options-mode options)
                   "parse-provider-arguments should parse provider routing mode"))
+  (let ((options (sbcl-agent::parse-rgp-arguments
+                  '("workspace" "--environment" "/tmp/rgp-cli.sexp" "--working-directory" "/tmp"))))
+    (assert-equal "workspace" (sbcl-agent::rgp-options-subcommand options)
+                  "parse-rgp-arguments should capture the rgp workspace subcommand")
+    (assert-equal "/tmp/rgp-cli.sexp" (sbcl-agent::rgp-options-environment-path options)
+                  "parse-rgp-arguments should capture the rgp environment path")
+    (assert-equal "/tmp" (sbcl-agent::rgp-options-working-directory options)
+                  "parse-rgp-arguments should capture the rgp working directory"))
+  (let ((options (sbcl-agent::parse-platform-arguments
+                  '("package" "--input" "/tmp/source.aop" "--output" "/tmp/devkit.aop" "--package-id" "demo-kit"
+                    "--title" "Demo Kit" "--capability" "proc/run" "--capability" "git/status"))))
+    (assert-equal "package" (sbcl-agent::platform-options-subcommand options)
+                  "parse-platform-arguments should capture the platform subcommand")
+    (assert-equal "/tmp/source.aop" (sbcl-agent::platform-options-input-path options)
+                  "parse-platform-arguments should capture the input path")
+    (assert-equal "/tmp/devkit.aop" (sbcl-agent::platform-options-output-path options)
+                  "parse-platform-arguments should capture the output path")
+    (assert-equal "demo-kit" (sbcl-agent::platform-options-package-id options)
+                  "parse-platform-arguments should capture the package id")
+    (assert-equal "Demo Kit" (sbcl-agent::platform-options-title options)
+                  "parse-platform-arguments should capture the package title")
+    (assert-true (equal '(:PROC/RUN :GIT/STATUS)
+                        (sbcl-agent::platform-options-capabilities options))
+                 "parse-platform-arguments should collect repeated capability flags"))
   (assert-signals-error
    (lambda ()
      (sbcl-agent::parse-provider-arguments '()))
@@ -219,6 +243,8 @@
                                          :working-directory "/tmp/"))
         (original-doctor (symbol-function 'sbcl-agent::doctor-command))
         (original-provider (symbol-function 'sbcl-agent::provider-command))
+        (original-platform (symbol-function 'sbcl-agent::platform-command))
+        (original-rgp (symbol-function 'sbcl-agent::rgp-command))
         (original-exec (symbol-function 'sbcl-agent::exec-command))
         (original-start-shell (symbol-function 'sbcl-agent::start-shell))
         (original-load-config (symbol-function 'sbcl-agent::load-config))
@@ -236,6 +262,18 @@
                    (assert-equal '("show") arguments
                                  "dispatch-command should route provider arguments through")
                    19))
+           (setf (symbol-function 'sbcl-agent::platform-command)
+                 (lambda (cfg arguments)
+                   (declare (ignore cfg))
+                   (assert-equal '("show" "--input" "/tmp/demo.aop") arguments
+                                 "dispatch-command should route platform arguments through")
+                   21))
+           (setf (symbol-function 'sbcl-agent::rgp-command)
+                 (lambda (cfg arguments)
+                   (declare (ignore cfg))
+                   (assert-equal '("workspace" "--environment" "/tmp/rgp-cli.sexp") arguments
+                                 "dispatch-command should route rgp arguments through")
+                   29))
            (setf (symbol-function 'sbcl-agent::exec-command)
                  (lambda (arguments)
                    (assert-equal '("echo" "hi") arguments
@@ -262,6 +300,12 @@
            (assert-equal 19
                          (sbcl-agent::dispatch-command config '("provider" "show"))
                          "dispatch-command should route to provider-command")
+           (assert-equal 21
+                         (sbcl-agent::dispatch-command config '("platform" "show" "--input" "/tmp/demo.aop"))
+                         "dispatch-command should route to platform-command")
+           (assert-equal 29
+                         (sbcl-agent::dispatch-command config '("rgp" "workspace" "--environment" "/tmp/rgp-cli.sexp"))
+                         "dispatch-command should route to rgp-command")
            (assert-equal 23
                          (sbcl-agent::dispatch-command config '("exec" "echo" "hi"))
                          "dispatch-command should route to exec-command")
@@ -274,6 +318,8 @@
                          "main should return the status from dispatch-command"))
       (setf (symbol-function 'sbcl-agent::doctor-command) original-doctor)
       (setf (symbol-function 'sbcl-agent::provider-command) original-provider)
+      (setf (symbol-function 'sbcl-agent::platform-command) original-platform)
+      (setf (symbol-function 'sbcl-agent::rgp-command) original-rgp)
       (setf (symbol-function 'sbcl-agent::exec-command) original-exec)
       (setf (symbol-function 'sbcl-agent::start-shell) original-start-shell)
       (setf (symbol-function 'sbcl-agent::load-config) original-load-config)
@@ -370,6 +416,173 @@
                      "provider preview CLI command should emit the provider-preview operation")
         (assert-true (search "\"selected_profile_name\":\"local-fast\"" stdout)
                      "provider preview CLI command should expose the previewed selected profile")))))
+
+(defun platform-cli-command-test ()
+  (let ((sbcl-agent::*current-environment* nil)
+        (sbcl-agent::*current-session* nil))
+    (let* ((output-path "/tmp/platform-cli-package.aop")
+           (environment-path "/tmp/platform-cli-import.sexp")
+           (config (sbcl-agent::make-config :provider "mock"
+                                            :model "gpt-5"
+                                            :working-directory "/tmp/platform-cli/")))
+      (when (probe-file output-path)
+        (delete-file output-path))
+      (when (probe-file environment-path)
+        (delete-file environment-path))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               '("manifest" "--capability" "proc/run"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform manifest CLI command should return success")
+        (assert-true (search "\"operation\":\"manifest\"" stdout)
+                     "platform manifest CLI command should emit the manifest operation")
+        (assert-true (search "\"capability_count\":1" stdout)
+                     "platform manifest CLI command should respect the capability filter")
+        (assert-true (search "\"workflow_count\"" stdout)
+                     "platform manifest CLI command should emit workflow inventory")
+        (assert-true (search "\"sdk_command_count\"" stdout)
+                     "platform manifest CLI command should emit sdk command inventory"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("package" "--output" ,output-path "--package-id" "demo-kit" "--title" "Demo Kit"
+                 "--capability" "proc/run"))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform package CLI command should return success")
+        (assert-true (search "\"operation\":\"package\"" stdout)
+                     "platform package CLI command should emit the package operation")
+        (assert-true (probe-file output-path)
+                     "platform package CLI command should write the .aop descriptor")
+        (let ((contents (uiop:read-file-string output-path)))
+          (assert-true (search "\"package_id\":\"demo-kit\"" contents)
+                       "platform package CLI command should persist the requested package id")
+          (assert-true (search "\"package_format\":\"intentos.aop.v1\"" contents)
+                       "platform package CLI command should persist the package format")
+          (assert-true (search "\"contents\"" contents)
+                       "platform package CLI command should persist the top-level contents summary")
+          (assert-true (search "\"workflow_ids\"" contents)
+                       "platform package CLI command should persist workflow inventory")))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("show" "--input" ,output-path))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform show CLI command should return success")
+        (assert-true (search "\"operation\":\"package\"" stdout)
+                     "platform show CLI command should emit the package operation")
+        (assert-true (search "\"valid_p\":true" stdout)
+                     "platform show CLI command should report a valid package"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("validate" "--input" ,output-path))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform validate CLI command should return success")
+        (assert-true (search "\"operation\":\"validate-package\"" stdout)
+                     "platform validate CLI command should emit the validation operation")
+        (assert-true (search "\"valid_p\":true" stdout)
+                     "platform validate CLI command should report a valid package"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("import" "--environment" ,environment-path "--input" ,output-path))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform import CLI command should return success")
+        (assert-true (search "\"operation\":\"import-package\"" stdout)
+                     "platform import CLI command should emit the import operation")
+        (assert-true (search "\"registry_count\":1" stdout)
+                     "platform import CLI command should register the imported package"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("list" "--environment" ,environment-path))))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform list CLI command should return success")
+        (assert-true (search "\"operation\":\"package-registry\"" stdout)
+                     "platform list CLI command should emit the registry operation")
+        (assert-true (search "\"count\":1" stdout)
+                     "platform list CLI command should report imported package count"))
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::platform-command
+               config
+               `("show-imported" "--environment" ,environment-path "--package-id" "demo-kit"))))
+        (declare (ignore stderr))
+      (assert-equal 0 status "platform show-imported CLI command should return success")
+      (assert-true (search "\"operation\":\"imported-package\"" stdout)
+                     "platform show-imported CLI command should emit the imported package operation")
+      (assert-true (search "\"package_id\":\"demo-kit\"" stdout)
+                     "platform show-imported CLI command should return the imported package")))
+    (multiple-value-bind (stdout stderr status)
+        (run-main-command
+         '("platform" "activate"
+           "--environment" "/tmp/platform-cli-command.env"
+           "--package-id" "demo-kit"))
+      (declare (ignore stderr))
+      (assert-equal 0 status "platform activate CLI command should return success")
+      (assert-true (search "\"operation\":\"activate-package\"" stdout)
+                   "platform activate CLI command should emit the activation operation")
+      (assert-true (search "\"active_p\":true" stdout)
+                   "platform activate CLI command should mark the imported package active"))
+    (multiple-value-bind (stdout stderr status)
+        (run-main-command
+         '("platform" "active"
+           "--environment" "/tmp/platform-cli-command.env"))
+      (declare (ignore stderr))
+      (assert-equal 0 status "platform active CLI command should return success")
+      (assert-true (search "\"operation\":\"active-packages\"" stdout)
+                   "platform active CLI command should emit the active-packages operation")
+      (assert-true (search "\"count\":1" stdout)
+                   "platform active CLI command should report active imported package count"))
+    (multiple-value-bind (stdout stderr status)
+        (run-main-command
+         '("platform" "profile"
+           "--environment" "/tmp/platform-cli-command.env"))
+      (declare (ignore stderr))
+      (assert-equal 0 status "platform profile CLI command should return success")
+      (assert-true (search "\"operation\":\"profile\"" stdout)
+                   "platform profile CLI command should emit the profile operation")
+      (assert-true (search "\"capability_count\":1" stdout)
+                   "platform profile CLI command should expose the applied active-package capability set"))
+    (multiple-value-bind (stdout stderr status)
+        (run-main-command
+         '("platform" "deactivate"
+           "--environment" "/tmp/platform-cli-command.env"
+           "--package-id" "demo-kit"))
+      (declare (ignore stderr))
+      (assert-equal 0 status "platform deactivate CLI command should return success")
+      (assert-true (search "\"operation\":\"deactivate-package\"" stdout)
+                   "platform deactivate CLI command should emit the deactivation operation")
+      (assert-true (search "\"active_p\":false" stdout)
+                   "platform deactivate CLI command should mark the imported package inactive"))
+    (let ((install-environment-path "/tmp/platform-cli-install.env"))
+      (when (probe-file install-environment-path)
+        (delete-file install-environment-path))
+      (multiple-value-bind (stdout stderr status)
+          (run-main-command
+           `("platform" "install"
+             "--environment" ,install-environment-path
+             "--input" "/tmp/platform-cli-package.aop"))
+        (declare (ignore stderr))
+        (assert-equal 0 status "platform install CLI command should return success")
+        (assert-true (search "\"operation\":\"install-package\"" stdout)
+                     "platform install CLI command should emit the install operation")
+        (assert-true (search "\"active_p\":true" stdout)
+                     "platform install CLI command should activate the imported package")))))
 
 (defun openai-helper-coverage-test ()
   (let* ((provider (make-instance 'sbcl-agent::openai-compatible-provider
@@ -1442,6 +1655,41 @@ fi
   (let ((result (with-output-to-string (stream)
                   (let ((*standard-output* stream))
                     (sbcl-agent::print-shell-result
+                     '(:workspace-id "workspace-1"
+                       :environment-id "env-1"
+                       :plan "Focus governed work"
+                       :execution-surfaces (:count 2)
+                       :governance-queue (:count 1 :top-item (:queue-kind :approval :execution-id "exec-approval"))
+                       :object-browser (:group-count 2)
+                       :top-surface (:surface-kind "governed-work" :status :awaiting-approval :execution-id "exec-work"))
+                     :workspace-show)))))
+    (assert-true (search "workspace-open> (open :surface-index 0)" result)
+                 "print-shell-result should render the default workspace open handoff")
+    (assert-true (search "workspace-governance-open> (open :governance-index 0)" result)
+                 "print-shell-result should render the default governance open handoff from workspace"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:count 1
+                       :top-item (:queue-kind :approval
+                                  :status :awaiting-approval
+                                  :execution-id "exec-approval"
+                                  :surface (:surface-kind "governed-work")))
+                     :governance-queue)))))
+    (assert-true (search "governance-open> (open :governance-index 0)" result)
+                 "print-shell-result should render the default governance open handoff"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:group-count 1
+                       :focus-object-id "exec-work"
+                       :top-group (:object-kind :work-item :count 1))
+                     :object-browser)))))
+    (assert-true (search "object-browser-open> (open :object-kind :WORK-ITEM :object-index 0)" result)
+                 "print-shell-result should render the default object-browser open handoff"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
                      '(:id "env-1"
                        :active-runtime-id "runtime-1"
                        :thread-count 2
@@ -1493,14 +1741,60 @@ fi
                                          :durable-count 0)
                        :incident-summary (:count 1
                                           :open-count 1
-                                          :recent ((:id "incident-1"))))
+                                          :recent ((:id "incident-1")))
+                       :execution-surfaces (:count 1
+                                            :top-surface (:surface-kind "conversation"
+                                                          :status :completed
+                                                          :execution-id "exec-turn"))
+                       :blocked-work-surfaces (:count 1
+                                                :top-surface (:surface-kind "governed-work"
+                                                              :status :awaiting-approval
+                                                              :execution-id "exec-blocked"))
+                       :approval-surfaces (:count 1
+                                           :top-surface (:surface-kind "governed-work"
+                                                         :status :awaiting-approval
+                                                         :execution-id "exec-approval")))
                      :describe-session)))))
     (assert-true (search "session> session-1 package=SBCL-AGENT-USER threads=2 turns=3 work-items=2 incidents=1" result)
                  "print-shell-result should render session summaries")
     (assert-true (search "session-operator> blocked=1 quarantined=1 incidents=1 open=1 durable=0" result)
                  "print-shell-result should render session operator summaries")
     (assert-true (search "session-incidents> total=1 open=1 recent=1" result)
-                 "print-shell-result should render compact session incident summaries"))
+                 "print-shell-result should render compact session incident summaries")
+    (assert-true (search "session-open> (open :execution-id \"exec-turn\")" result)
+                 "print-shell-result should render the default session open handoff")
+    (assert-true (search "session-blocked-open> (open :execution-id \"exec-blocked\")" result)
+                 "print-shell-result should render the default blocked session handoff")
+    (assert-true (search "session-approval-open> (open :execution-id \"exec-approval\")" result)
+                 "print-shell-result should render the default approval session handoff"))
+  (let ((result (with-output-to-string (stream)
+                  (let ((*standard-output* stream))
+                    (sbcl-agent::print-shell-result
+                     '(:environment (:id "env-1")
+                       :active-thread (:id "thread-1")
+                       :active-runtime (:runtime-id "runtime-1")
+                       :blocked-work (:count 1)
+                       :incidents (:open-count 1)
+                       :operator-posture (:blocked-count 1)
+                       :execution-surfaces (:count 1
+                                            :top-surface (:surface-kind "conversation"
+                                                          :status :completed
+                                                          :execution-id "exec-env"))
+                       :blocked-work-surfaces (:count 1
+                                                :top-surface (:surface-kind "governed-work"
+                                                              :status :awaiting-approval
+                                                              :execution-id "exec-blocked"))
+                       :approval-surfaces (:count 1
+                                           :top-surface (:surface-kind "governed-work"
+                                                         :status :awaiting-approval
+                                                         :execution-id "exec-approval")))
+                     :environment-status)))))
+    (assert-true (search "environment-open> (open :execution-id \"exec-env\")" result)
+                 "print-shell-result should render the default environment open handoff")
+    (assert-true (search "blocked-open> (open :execution-id \"exec-blocked\")" result)
+                 "print-shell-result should render the default blocked-work open handoff")
+    (assert-true (search "approval-open> (open :execution-id \"exec-approval\")" result)
+                 "print-shell-result should render the default approval open handoff"))
   (let ((result (with-output-to-string (stream)
                   (let ((*standard-output* stream))
                     (sbcl-agent::print-shell-result
@@ -2023,6 +2317,27 @@ fi
                                      '(provider/configure "anthropic-review"
                                        :provider "anthropic"
                                        :model "claude-3-7-sonnet")))
+        (execution-show-command (sbcl-agent::normalize-form-command '(execution/show "exec-1")))
+        (execution-control-command (sbcl-agent::normalize-form-command '(execution/control "exec-1" :action :quarantine :reason "Review")))
+        (compatibility-list-command (sbcl-agent::normalize-form-command '(compatibility/list :kind :host-process)))
+        (compatibility-show-command (sbcl-agent::normalize-form-command '(compatibility/show "exec-1")))
+        (workspace-show-command (sbcl-agent::normalize-form-command '(workspace/show)))
+        (desktop-show-command (sbcl-agent::normalize-form-command '(desktop/show)))
+        (desktop-panel-command (sbcl-agent::normalize-form-command '(desktop/panel :governance)))
+        (desktop-select-command (sbcl-agent::normalize-form-command '(desktop/select :panel :workspace :index 0)))
+        (desktop-restore-command (sbcl-agent::normalize-form-command '(desktop/restore :panel-id :workspace)))
+        (desktop-action-command (sbcl-agent::normalize-form-command '(desktop/action :action-kind :activate-panel :panel-id :governance)))
+        (surface-list-command (sbcl-agent::normalize-form-command '(surface/list)))
+        (surface-select-command (sbcl-agent::normalize-form-command '(surface/select :index 0)))
+        (surface-step-command (sbcl-agent::normalize-form-command '(surface/step :next)))
+        (open-command (sbcl-agent::normalize-form-command '(open :surface-index 0)))
+        (focus-show-command (sbcl-agent::normalize-form-command '(focus/show)))
+        (focus-set-command (sbcl-agent::normalize-form-command '(focus/set "exec-1")))
+        (governance-queue-command (sbcl-agent::normalize-form-command '(governance/queue)))
+        (governance-select-command (sbcl-agent::normalize-form-command '(governance/select :index 0)))
+        (object-browser-command (sbcl-agent::normalize-form-command '(object-browser :work-item)))
+        (object-browser-select-command (sbcl-agent::normalize-form-command '(object-browser/select :kind :work-item :index 0)))
+        (inspector-show-command (sbcl-agent::normalize-form-command '(inspector/show "exec-1")))
         (thread-new-command (sbcl-agent::normalize-form-command '(thread/new :title "Conversation")))
         (thread-list-command (sbcl-agent::normalize-form-command '(thread/list)))
         (thread-use-command (sbcl-agent::normalize-form-command '(thread/use "thread-1")))
@@ -2059,6 +2374,7 @@ fi
         (reconcile-image-only-command (sbcl-agent::normalize-form-command '(reconcile-image-only-source "work" "summary")))
         (integration-rgp-bind-command (sbcl-agent::normalize-form-command '(integration/rgp-bind :request-id "req" :agent-session-id "agent-session")))
         (integration-rgp-show-command (sbcl-agent::normalize-form-command '(integration/rgp-show)))
+        (integration-rgp-workspace-command (sbcl-agent::normalize-form-command '(integration/rgp-workspace)))
         (integration-rgp-export-command (sbcl-agent::normalize-form-command '(integration/rgp-export "/tmp/rgp-snapshot.json")))
         (integration-rgp-artifacts-command (sbcl-agent::normalize-form-command '(integration/rgp-artifacts)))
         (integration-rgp-approvals-command (sbcl-agent::normalize-form-command '(integration/rgp-approvals)))
@@ -2083,6 +2399,48 @@ fi
                   "provider/route form should normalize to :provider-route")
     (assert-equal :provider-configure (sbcl-agent::command-kind provider-configure-command)
                   "provider/configure form should normalize to :provider-configure")
+    (assert-equal :execution-show (sbcl-agent::command-kind execution-show-command)
+                  "execution/show form should normalize to :execution-show")
+    (assert-equal :execution-control (sbcl-agent::command-kind execution-control-command)
+                  "execution/control form should normalize to :execution-control")
+    (assert-equal :compatibility-list (sbcl-agent::command-kind compatibility-list-command)
+                  "compatibility/list form should normalize to :compatibility-list")
+    (assert-equal :compatibility-show (sbcl-agent::command-kind compatibility-show-command)
+                  "compatibility/show form should normalize to :compatibility-show")
+    (assert-equal :workspace-show (sbcl-agent::command-kind workspace-show-command)
+                  "workspace/show form should normalize to :workspace-show")
+    (assert-equal :desktop-show (sbcl-agent::command-kind desktop-show-command)
+                  "desktop/show form should normalize to :desktop-show")
+    (assert-equal :desktop-panel (sbcl-agent::command-kind desktop-panel-command)
+                  "desktop/panel form should normalize to :desktop-panel")
+    (assert-equal :desktop-select (sbcl-agent::command-kind desktop-select-command)
+                  "desktop/select form should normalize to :desktop-select")
+    (assert-equal :desktop-restore (sbcl-agent::command-kind desktop-restore-command)
+                  "desktop/restore form should normalize to :desktop-restore")
+    (assert-equal :desktop-action (sbcl-agent::command-kind desktop-action-command)
+                  "desktop/action form should normalize to :desktop-action")
+    (assert-equal :surface-list (sbcl-agent::command-kind surface-list-command)
+                  "surface/list form should normalize to :surface-list")
+    (assert-equal :surface-select (sbcl-agent::command-kind surface-select-command)
+                  "surface/select form should normalize to :surface-select")
+    (assert-equal :surface-step (sbcl-agent::command-kind surface-step-command)
+                  "surface/step form should normalize to :surface-step")
+    (assert-equal :open (sbcl-agent::command-kind open-command)
+                  "open form should normalize to :open")
+    (assert-equal :focus-show (sbcl-agent::command-kind focus-show-command)
+                  "focus/show form should normalize to :focus-show")
+    (assert-equal :focus-set (sbcl-agent::command-kind focus-set-command)
+                  "focus/set form should normalize to :focus-set")
+    (assert-equal :governance-queue (sbcl-agent::command-kind governance-queue-command)
+                  "governance/queue form should normalize to :governance-queue")
+    (assert-equal :governance-select (sbcl-agent::command-kind governance-select-command)
+                  "governance/select form should normalize to :governance-select")
+    (assert-equal :object-browser (sbcl-agent::command-kind object-browser-command)
+                  "object-browser form should normalize to :object-browser")
+    (assert-equal :object-browser-select (sbcl-agent::command-kind object-browser-select-command)
+                  "object-browser/select form should normalize to :object-browser-select")
+    (assert-equal :inspector-show (sbcl-agent::command-kind inspector-show-command)
+                  "inspector/show form should normalize to :inspector-show")
     (assert-equal :thread-new (sbcl-agent::command-kind thread-new-command)
                   "thread/new form should normalize to :thread-new")
     (assert-equal :thread-list (sbcl-agent::command-kind thread-list-command)
@@ -2155,6 +2513,8 @@ fi
                   "integration/rgp-bind form should normalize to :integration-rgp-bind")
     (assert-equal :integration-rgp-show (sbcl-agent::command-kind integration-rgp-show-command)
                   "integration/rgp-show form should normalize to :integration-rgp-show")
+    (assert-equal :integration-rgp-workspace (sbcl-agent::command-kind integration-rgp-workspace-command)
+                  "integration/rgp-workspace form should normalize to :integration-rgp-workspace")
     (assert-equal :integration-rgp-export (sbcl-agent::command-kind integration-rgp-export-command)
                   "integration/rgp-export form should normalize to :integration-rgp-export")
     (assert-equal :integration-rgp-artifacts (sbcl-agent::command-kind integration-rgp-artifacts-command)
@@ -2487,7 +2847,10 @@ fi
       (assert-equal :integration-rgp-approvals approval-list-kind
                     "integration/rgp-approvals should dispatch correctly")
       (assert-equal 1 (length approval-list)
-                    "integration/rgp-approvals should list blocked governed runtime work-items"))
+                    "integration/rgp-approvals should list blocked governed runtime work-items")
+      (assert-equal "governed-work"
+                    (getf (getf (first approval-list) :execution-surface) :surface-kind)
+                    "integration/rgp-approvals should expose execution surfaces for approvals"))
     (multiple-value-bind (resume-result resume-kind resume-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command
@@ -3161,6 +3524,9 @@ fi
         (assert-equal :describe-task describe-kind "describe-task should dispatch correctly after queued ask")
         (assert-true (> (getf describe-result :progress-event-count) 2)
                      "describe-task should report recorded task progress events")
+        (assert-equal "task"
+                      (getf (getf describe-result :execution-surface) :surface-kind)
+                      "describe-task should expose a task execution surface")
         (assert-true (typep (getf describe-result :latest-progress-event) 'sbcl-agent::event)
                      "describe-task should expose the latest task progress event")))))
 
@@ -3187,6 +3553,9 @@ fi
         (assert-equal :monitor-task monitor-kind "monitor-task should dispatch correctly")
         (assert-true (> (length (getf monitor-result :recent-progress-events)) 0)
                      "monitor-task should report recent task progress events")
+        (assert-equal "task"
+                      (getf (getf monitor-result :execution-surface) :surface-kind)
+                      "monitor-task should expose a task execution surface")
         (assert-equal :completed (getf monitor-result :status)
                       "monitor-task should report the completed task status")))))
 
@@ -3229,6 +3598,9 @@ fi
          session)
       (assert-equal :enqueue-task enqueue-kind "enqueue-task should dispatch correctly")
       (assert-equal :queued (getf enqueue-result :status) "new task should start queued")
+      (assert-equal "task"
+                    (getf (getf enqueue-result :execution-surface) :surface-kind)
+                    "enqueue-task should expose a task execution surface")
       (assert-equal 1 (length (sbcl-agent::agent-session-tasks updated-session))
                     "session should retain one queued task"))
     (multiple-value-bind (tasks kind updated-session)
@@ -3238,7 +3610,10 @@ fi
          session)
       (declare (ignore updated-session))
       (assert-equal :list-tasks kind "list-tasks should dispatch correctly")
-      (assert-equal 1 (length tasks) "list-tasks should return one task summary"))))
+      (assert-equal 1 (length tasks) "list-tasks should return one task summary")
+      (assert-equal "task"
+                    (getf (getf (first tasks) :execution-surface) :surface-kind)
+                    "list-tasks should expose task execution surfaces"))))
 
 (defun enqueue-task-updates-environment-agent-state-test ()
   (let* ((provider (make-test-provider))
@@ -3271,6 +3646,9 @@ fi
          session)
       (assert-equal :run-next-task kind "run-next-task should dispatch correctly")
       (assert-equal :completed (getf result :status) "run-next-task should complete the queued task")
+      (assert-equal "task"
+                    (getf (getf result :execution-surface) :surface-kind)
+                    "run-next-task should preserve the task execution surface")
       (assert-true (search "print-help"
                            (getf (getf result :result) :content))
                    "queued tool task should return fs/read content")
@@ -3323,7 +3701,10 @@ fi
              updated-session)
           (declare (ignore final-session))
           (assert-equal :stop-worker stop-kind "stop-worker should dispatch correctly")
-          (assert-true (not (getf stop-result :running-p)) "stop-worker should mark the worker as stopped"))))))
+          (assert-true (not (getf stop-result :running-p)) "stop-worker should mark the worker as stopped")
+          (assert-equal "worker"
+                        (getf (getf stop-result :execution-surface) :surface-kind)
+                        "stop-worker should expose a worker execution surface"))))))
 
 (defun worker-mutations-update-environment-agent-state-test ()
   (let* ((provider (make-test-provider))
@@ -3373,6 +3754,9 @@ fi
            updated-session)
         (assert-equal :list-workers workers-kind "list-workers should dispatch correctly")
         (assert-equal 1 (length workers) "list-workers should return one worker summary")
+        (assert-equal "worker"
+                      (getf (getf (first workers) :execution-surface) :surface-kind)
+                      "list-workers should expose worker execution surfaces")
         (multiple-value-bind (worker-result worker-kind final-session)
             (sbcl-agent::execute-command
              (sbcl-agent::normalize-form-command `(describe-worker ,(getf start-result :id)))
@@ -3381,7 +3765,10 @@ fi
           (declare (ignore final-session))
           (assert-equal :describe-worker worker-kind "describe-worker should dispatch correctly")
           (assert-equal (getf start-result :id) (getf worker-result :id)
-                        "describe-worker should return the matching worker id"))
+                        "describe-worker should return the matching worker id")
+          (assert-equal "worker"
+                        (getf (getf worker-result :execution-surface) :surface-kind)
+                        "describe-worker should expose a worker execution surface"))
       (sbcl-agent::execute-command
        (sbcl-agent::normalize-form-command `(stop-worker ,(getf start-result :id)))
        provider
@@ -3476,7 +3863,10 @@ fi
            updated-session)
         (declare (ignore listed-session))
         (assert-equal :list-work-items list-kind "list-work-items should dispatch correctly")
-        (assert-equal 1 (length list-result) "list-work-items should return one work-item summary"))
+        (assert-equal 1 (length list-result) "list-work-items should return one work-item summary")
+        (assert-equal nil
+                      (getf (first list-result) :primary-execution-handle)
+                      "list-work-items should leave primary execution empty before governed actions exist"))
       (multiple-value-bind (detail-result detail-kind detailed-session)
           (sbcl-agent::execute-command
            (sbcl-agent::normalize-form-command `(describe-work-item ,(getf enqueue-result :work-item-id)))
@@ -3487,7 +3877,33 @@ fi
         (assert-equal 1 (length (getf detail-result :transactions))
                       "describe-work-item should expose transaction detail")
         (assert-equal 1 (length (getf detail-result :checkpoints))
-                      "describe-work-item should expose checkpoint detail")))))
+                      "describe-work-item should expose checkpoint detail")
+        (assert-equal nil
+                      (getf detail-result :primary-execution-handle)
+                      "work-item detail should leave primary execution empty before governed actions exist"))
+      (let* ((work-item-id (getf enqueue-result :work-item-id))
+             (approval-response (sbcl-agent::command-request-work-item-approval-service updated-session
+                                                                                        work-item-id
+                                                                                        :workspace-write
+                                                                                        :reason "Execution-native detail"))
+             (execution-id (getf (getf approval-response :metadata) :execution-id)))
+        (multiple-value-bind (execution-detail execution-kind execution-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-work-item ,execution-id))
+             provider
+             updated-session)
+          (declare (ignore execution-session))
+          (assert-equal :describe-work-item execution-kind
+                        "describe-work-item should accept execution ids")
+          (assert-equal work-item-id
+                        (getf execution-detail :id)
+                        "describe-work-item should resolve execution ids to work-items")
+          (assert-equal execution-id
+                        (getf (getf execution-detail :primary-execution-handle) :execution-id)
+                        "work-item detail should expose the canonical governing execution handle")
+          (assert-equal "governed-work"
+                        (getf (getf execution-detail :execution-surface) :surface-kind)
+                        "work-item detail should expose the governed execution surface"))))))
 
 (defun work-item-plan-shell-commands-test ()
   (let* ((provider (make-test-provider))
@@ -3511,7 +3927,10 @@ fi
                         (getf plan-result :id)
                         "describe-work-item-plan should return the requested work-item")
           (assert-true (listp (getf plan-result :plan-steering))
-                       "describe-work-item-plan should expose plan steering"))
+                       "describe-work-item-plan should expose plan steering")
+          (assert-equal nil
+                        (getf plan-result :primary-execution-handle)
+                        "work-item plan should leave primary execution empty before governed actions exist"))
         (multiple-value-bind (steer-result steer-kind steer-session)
             (sbcl-agent::execute-command
              (sbcl-agent::normalize-form-command
@@ -3542,7 +3961,26 @@ fi
                         "describe-work-item-plan should remain available after steering")
           (assert-equal :validate
                         (getf (getf followup-result :plan-steering) :operator-directed-phase)
-                        "describe-work-item-plan should expose the persisted operator-directed phase"))))))
+                        "describe-work-item-plan should expose the persisted operator-directed phase"))
+        (let* ((approval-response (sbcl-agent::command-request-work-item-approval-service updated-session
+                                                                                          work-item-id
+                                                                                          :workspace-write
+                                                                                          :reason "Execution-native plan"))
+               (execution-id (getf (getf approval-response :metadata) :execution-id)))
+          (multiple-value-bind (execution-plan execution-kind execution-session)
+              (sbcl-agent::execute-command
+               (sbcl-agent::normalize-form-command `(describe-work-item-plan ,execution-id))
+               provider
+               updated-session)
+          (declare (ignore execution-session))
+          (assert-equal :describe-work-item-plan execution-kind
+                        "describe-work-item-plan should accept execution ids")
+          (assert-equal work-item-id
+                        (getf execution-plan :id)
+                        "describe-work-item-plan should resolve execution ids to work-items")
+          (assert-equal execution-id
+                        (getf (getf execution-plan :primary-execution-handle) :execution-id)
+                        "work-item plan should expose the canonical governing execution handle")))))))
 
 (defun work-item-validation-test ()
   (let* ((provider (make-test-provider))
@@ -3804,23 +4242,58 @@ fi
            updated-session)
         (declare (ignore listed-session))
         (assert-equal :list-workflow-records list-kind "list-workflow-records should dispatch correctly")
-        (assert-equal 1 (length list-result) "list-workflow-records should return one workflow record"))
-      (let ((record (first (sbcl-agent::agent-session-workflow-records updated-session))))
+        (assert-equal 1 (length list-result) "list-workflow-records should return one workflow record")
+        (assert-equal nil
+                      (getf (first list-result) :primary-execution-handle)
+                      "workflow list should leave primary execution empty before governed actions exist"))
+      (let* ((record (first (sbcl-agent::agent-session-workflow-records updated-session)))
+             (record-id (sbcl-agent::workflow-record-id record)))
         (multiple-value-bind (detail-result detail-kind detailed-session)
             (sbcl-agent::execute-command
-             (sbcl-agent::normalize-form-command `(describe-workflow-record ,(sbcl-agent::workflow-record-id record)))
+             (sbcl-agent::normalize-form-command `(describe-workflow-record ,record-id))
              provider
              updated-session)
           (declare (ignore detailed-session))
-          (assert-equal :describe-workflow-record detail-kind "describe-workflow-record should dispatch correctly")
-          (assert-equal (sbcl-agent::workflow-record-id record)
+          (assert-equal :describe-workflow-record detail-kind
+                        "describe-workflow-record should dispatch correctly")
+          (assert-equal record-id
                         (getf detail-result :id)
                         "describe-workflow-record should return the requested workflow record")
           (assert-true (> (length (getf detail-result :entries)) 2)
                        "describe-workflow-record should expose appended workflow entries")
           (assert-equal :committed
                         (getf detail-result :status)
-                        "describe-workflow-record should expose committed closure state"))))))
+                        "describe-workflow-record should expose committed closure state")
+          (assert-equal nil
+                        (getf detail-result :primary-execution-handle)
+                        "workflow detail should leave primary execution empty before governed actions exist")))
+      (let* ((work-item (sbcl-agent::create-work-item updated-session
+                                                      "Workflow execution shell check"
+                                                      :transaction-scope :test))
+             (approval-response (sbcl-agent::command-request-work-item-approval-service updated-session
+                                                                                        (sbcl-agent::work-item-id work-item)
+                                                                                        :workspace-write
+                                                                                        :reason "Workflow execution detail"))
+             (execution-id (getf (getf approval-response :metadata) :execution-id))
+             (record (sbcl-agent::work-item-workflow-record updated-session work-item))
+             (record-id (sbcl-agent::workflow-record-id record)))
+        (multiple-value-bind (execution-detail execution-kind execution-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command `(describe-workflow-record ,execution-id))
+             provider
+             updated-session)
+          (declare (ignore execution-session))
+          (assert-equal :describe-workflow-record execution-kind
+                        "describe-workflow-record should accept execution ids")
+          (assert-equal record-id
+                        (getf execution-detail :id)
+                        "describe-workflow-record should resolve execution ids through work-items")
+          (assert-equal execution-id
+                        (getf (getf execution-detail :primary-execution-handle) :execution-id)
+                        "workflow detail should expose the canonical governing execution handle")
+          (assert-equal "governed-work"
+                        (getf (getf execution-detail :execution-surface) :surface-kind)
+                        "workflow detail should expose the governed execution surface"))))))
 
 (defun workflow-record-approval-state-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -3839,6 +4312,115 @@ fi
                  "approval requirements should record the requested policy")
     (assert-true (> (length (sbcl-agent::provenance-record-approval-checkpoints (sbcl-agent::work-item-provenance work-item))) 0)
                  "approval requests should be preserved in provenance checkpoints")))
+
+(defun execution-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Execution shell command check" :transaction-scope :test))
+         (approval-response (sbcl-agent::command-request-work-item-approval-service session
+                                                                                    (sbcl-agent::work-item-id work-item)
+                                                                                    :workspace-write
+                                                                                    :reason "Execution shell coverage"))
+         (execution-id (getf (getf approval-response :metadata) :execution-id)))
+    (multiple-value-bind (show-result show-kind shown-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(execution/show ,execution-id))
+         provider
+         session)
+      (declare (ignore shown-session))
+      (assert-equal :execution-show show-kind
+                    "execution/show should dispatch correctly")
+      (assert-equal execution-id
+                    (getf (getf show-result :execution) :execution-id)
+                    "execution/show should return the requested execution handle")
+      (assert-equal :work-item
+                    (getf show-result :object-kind)
+                    "execution/show should project the governed work-item object kind"))
+    (multiple-value-bind (control-result control-kind controlled-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(execution/control ,execution-id :action :approve))
+         provider
+         session)
+      (declare (ignore controlled-session))
+      (assert-equal :execution-control control-kind
+                    "execution/control should dispatch correctly")
+      (assert-true (member :workspace-write
+                           (getf (getf control-result :result) :approved-policies))
+                   "execution/control should allow policy approval through execution identity"))))
+
+(defun compatibility-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/compatibility-shell-commands/")))
+    (ensure-directories-exist "/tmp/compatibility-shell-commands/")
+    (sbcl-agent::approve-policy session :process-run)
+    (let* ((command-response
+             (sbcl-agent::command-invoke-tool-service session :proc/run '(:argv ("/bin/echo" "compat-shell"))))
+           (execution-id (getf (sbcl-agent::service-response-metadata command-response) :execution-id)))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(compatibility/list :kind :host-process))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :compatibility-list kind
+                      "compatibility/list should dispatch correctly")
+        (assert-true (> (getf result :count) 0)
+                     "compatibility/list should return hosted compatibility executions")
+        (let ((matching-entry (find execution-id
+                                   (getf result :entries)
+                                   :key (lambda (entry) (getf entry :execution-id))
+                                   :test #'string=)))
+          (assert-true matching-entry
+                       "compatibility/list should include the created compatibility execution")
+          (assert-equal :host-process
+                        (getf matching-entry :kind)
+                        "compatibility/list should expose compatibility execution kind")
+          (assert-equal :completed
+                        (getf matching-entry :status)
+                        "compatibility/list should expose completed lifecycle state for synchronous compatibility execution")
+          (assert-equal :sbcl-sandbox-worker
+                        (getf matching-entry :backend)
+                        "compatibility/list should expose compatibility backend")
+          (assert-equal '()
+                        (getf (getf matching-entry :control-posture) :supported-actions)
+                        "compatibility/list should expose an empty compatibility action set for synchronous host-process execution"))))
+    (let* ((spawn-response
+             (sbcl-agent::command-invoke-tool-service session :proc/spawn '(:argv ("/bin/sleep" "5"))))
+           (spawn-execution-id (getf (sbcl-agent::service-response-metadata spawn-response) :execution-id)))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(compatibility/list :kind :host-process))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :compatibility-list kind
+                      "compatibility/list should keep dispatching correctly after spawned execution")
+        (let ((matching-entry (find spawn-execution-id
+                                   (getf result :entries)
+                                   :key (lambda (entry) (getf entry :execution-id))
+                                   :test #'string=)))
+          (assert-true matching-entry
+                       "compatibility/list should include the spawned compatibility execution")
+          (assert-equal :running
+                        (getf matching-entry :status)
+                        "compatibility/list should expose running lifecycle state for spawned compatibility execution")
+          (assert-true (member :stop
+                               (getf (getf matching-entry :control-posture) :supported-actions))
+                       "compatibility/list should expose stop support for spawned compatibility execution")))
+      (multiple-value-bind (detail detail-kind detail-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(compatibility/show ,spawn-execution-id))
+           provider
+           session)
+        (declare (ignore detail-session))
+        (assert-equal :compatibility-show detail-kind
+                      "compatibility/show should dispatch correctly")
+        (assert-equal :running
+                      (getf (getf detail :lifecycle) :status)
+                      "compatibility/show should expose running lifecycle state for spawned compatibility execution")
+        (assert-true (integerp (getf (getf detail :lifecycle) :registered-at))
+                     "compatibility/show should expose registration time for spawned compatibility execution"))
+      (sbcl-agent::command-kernel-control-service session spawn-execution-id :stop))))
 
 (defun workflow-record-quarantine-resume-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -3865,7 +4447,43 @@ fi
                   (sbcl-agent::workflow-record-resume-count record)
                   "resume-work-item should increment the resume count")
     (assert-true (> (length (sbcl-agent::workflow-record-operator-interventions record)) 1)
-                 "quarantine and resume should both record operator interventions")))
+                 "quarantine and resume should both record operator interventions"))
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (work-item (sbcl-agent::create-work-item session "Execution-native quarantine" :transaction-scope :test))
+         (approval-response (sbcl-agent::command-request-work-item-approval-service session
+                                                                                    (sbcl-agent::work-item-id work-item)
+                                                                                    :workspace-write
+                                                                                    :reason "Execution-native quarantine"))
+         (execution-id (getf (getf approval-response :metadata) :execution-id))
+         (record (sbcl-agent::work-item-workflow-record session work-item)))
+    (multiple-value-bind (quarantine-result quarantine-kind quarantine-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          `(quarantine-work-item ,execution-id "Operator hold"))
+         provider
+         session)
+      (declare (ignore quarantine-session))
+      (assert-equal :quarantine-work-item quarantine-kind
+                    "quarantine-work-item should accept execution ids")
+      (assert-equal :quarantined
+                    (getf quarantine-result :status)
+                    "quarantine-work-item should quarantine the underlying work-item"))
+    (multiple-value-bind (resume-result resume-kind resume-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          `(resume-work-item ,execution-id :note "Resume via execution"))
+         provider
+         session)
+      (declare (ignore resume-session))
+      (assert-equal :resume-work-item resume-kind
+                    "resume-work-item should accept execution ids")
+      (assert-equal :resumed
+                    (getf resume-result :status)
+                    "resume-work-item should resume the underlying workflow record")
+      (assert-equal 1
+                    (sbcl-agent::workflow-record-resume-count record)
+                    "execution-native resume should update workflow record state"))))
 
 (defun workflow-milestone-event-correlation-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -4011,7 +4629,32 @@ fi
                     "why-waiting should return the workflow wait reason")
       (assert-true (equal :await-approval
                           (getf (getf result :next-action) :type))
-                   "why-waiting should expose a deterministic next action"))))
+                   "why-waiting should expose a deterministic next action")
+      (assert-equal "governed-work"
+                    (getf (getf result :execution-surface) :surface-kind)
+                    "why-waiting should expose the governed work execution surface"))
+    (let* ((approval-response (sbcl-agent::command-request-work-item-approval-service session
+                                                                                       (sbcl-agent::work-item-id work-item)
+                                                                                       :workspace-write
+                                                                                       :reason "Execution-native why-waiting"))
+           (execution-id (getf (getf approval-response :metadata) :execution-id)))
+      (multiple-value-bind (execution-result execution-kind execution-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(why-waiting ,execution-id))
+           provider
+           session)
+        (declare (ignore execution-session))
+        (assert-equal :why-waiting execution-kind
+                      "why-waiting should accept execution ids")
+        (assert-equal :approval-required
+                      (getf execution-result :why)
+                      "why-waiting should resolve execution ids to the underlying wait report")
+        (assert-equal :approval
+                      (getf execution-result :waiting-on)
+                      "why-waiting should preserve the underlying workflow wait reason")
+        (assert-equal "governed-work"
+                      (getf (getf execution-result :execution-surface) :surface-kind)
+                      "why-waiting should preserve execution-surface posture when resolving execution ids")))))
 
 (defun workflow-record-resume-payload-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -4417,8 +5060,52 @@ fi
                    "doctor command should print blocked work-item count")
       (assert-true (search ":APPROVAL-REQUIRED" output)
                    "doctor command should print blocked work-item reasons")
+      (assert-true (search "Blocked surfaces: 1" output)
+                   "doctor command should print blocked surface count")
+      (assert-true (search "Blocked open: (open :" output)
+                   "doctor command should print the blocked-work open handoff")
+      (assert-true (search "Approval surfaces: 1" output)
+                   "doctor command should print approval surface count")
+      (assert-true (search "Approval open: (open :" output)
+                   "doctor command should print the approval open handoff")
+      (assert-true (search "Task surfaces: 0" output)
+                   "doctor command should print task surface count")
+      (assert-true (search "Worker surfaces: 0" output)
+                   "doctor command should print worker surface count")
       (assert-true (search "Operator status: ready=0 blocked=1 quarantined=0 image-only=0 durable=0 incidents=0 open-incidents=0" output)
                    "doctor command should print operator status counts"))))
+
+(defun doctor-command-task-worker-surface-summary-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (config (sbcl-agent::load-config))
+         (stdout (make-string-output-stream)))
+    (setf sbcl-agent::*current-session* session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
+     provider
+     session)
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(start-worker))
+     provider
+     session)
+    (let ((*standard-output* stdout))
+      (assert-equal 0
+                    (sbcl-agent::doctor-command config)
+                    "doctor command should succeed with task and worker surfaces"))
+    (let ((output (get-output-stream-string stdout)))
+      (assert-true (search "Task surfaces: 1" output)
+                   "doctor command should print task surface count when a task exists")
+      (assert-true (search "Task top surface: kind=task" output)
+                   "doctor command should print the top task surface posture")
+      (assert-true (search "Task open: (open :" output)
+                   "doctor command should print the task open handoff")
+      (assert-true (search "Worker surfaces: 1" output)
+                   "doctor command should print worker surface count when a worker exists")
+      (assert-true (search "Worker top surface: kind=worker" output)
+                   "doctor command should print the top worker surface posture")
+      (assert-true (search "Worker open: (open :" output)
+                   "doctor command should print the worker open handoff"))))
 
 (defun task-persistence-test ()
   (let* ((provider (make-test-provider))
@@ -5624,7 +6311,14 @@ fi
                    "completed turn/status should report no approval wait")
       (assert-equal 0
                     (getf (getf turn-result :awaiting-approval) :blocked-operation-count)
-                    "completed turn/status should report zero blocked operations"))))
+                    "completed turn/status should report zero blocked operations")
+      (assert-true (member :primary-execution-handle turn-result)
+                   "turn/status should advertise the primary execution-handle field")
+      (assert-equal "conversation"
+                    (getf (getf turn-result :execution-surface) :surface-kind)
+                    "turn/status should expose the turn execution surface")
+      (assert-true (consp (getf turn-result :execution-handles))
+                   "turn/status should expose execution handles for persisted turn executions"))))
 
 (defun turn-status-approval-summary-test ()
   (let* ((provider (make-instance 'patch-action-provider))
@@ -5654,7 +6348,12 @@ fi
                    "turn/status should report approval-gated turns as resumable")
       (assert-equal 1
                     (getf (getf turn-result :recovery) :resumable-operation-count)
-                    "turn/status should report one resumable blocked operation"))))
+                    "turn/status should report one resumable blocked operation")
+      (assert-equal "conversation"
+                    (getf (getf turn-result :execution-surface) :surface-kind)
+                    "approval-gated turn/status should expose the turn execution surface")
+      (assert-true (consp (getf turn-result :execution-handles))
+                   "approval-gated turn/status should preserve execution-handle listings"))))
 
 (defun turn-resume-approval-flow-test ()
   (let* ((provider (make-instance 'patch-action-provider))
@@ -5914,6 +6613,8 @@ fi
          (path "/tmp/sbcl-agent-shell-session.sexp")
          (session (sbcl-agent::make-default-session)))
     (sbcl-agent::update-session-plan session "Shell persistence")
+    (sbcl-agent::approve-policy session :runtime-package-switch)
+    (sbcl-agent::command-runtime-set-package-service session "CL-USER")
     (multiple-value-bind (describe-result describe-kind described-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(describe-session))
@@ -5923,7 +6624,13 @@ fi
       (assert-equal :describe-session describe-kind "describe-session should dispatch correctly")
       (assert-equal "Shell persistence"
                     (getf describe-result :plan)
-                    "describe-session should report the current plan"))
+                    "describe-session should report the current plan")
+      (assert-true (> (getf (getf describe-result :execution-surfaces) :count) 0)
+                   "describe-session should expose execution-backed surfaces")
+      (assert-true (integerp (getf (getf describe-result :blocked-work-surfaces) :count))
+                   "describe-session should expose compact blocked-work surfaces")
+      (assert-true (integerp (getf (getf describe-result :approval-surfaces) :count))
+                   "describe-session should expose compact approval surfaces"))
     (multiple-value-bind (save-result save-kind saved-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command `(session/save ,path))
@@ -5944,9 +6651,609 @@ fi
       (assert-equal :session-load load-kind "session/load should dispatch correctly")
       (assert-equal path (getf load-result :loaded)
                     "session/load should report the loaded path")
+      (assert-true (listp (getf load-result :workspace))
+                   "session/load should now expose workspace shell posture")
       (assert-equal "Shell persistence"
                     (sbcl-agent::agent-session-plan loaded-session)
                     "session/load should restore the saved plan"))))
+
+(defun shell-workspace-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (make-test-session :cwd "/tmp/shell-workspace-commands/"))
+         (work-item (sbcl-agent::create-work-item session "Shell workspace governed work")))
+    (sbcl-agent::approve-policy session :process-run)
+    (sbcl-agent::command-request-work-item-approval-service session
+                                                            (sbcl-agent::work-item-id work-item)
+                                                            :process-run
+                                                            :reason "Need operator review")
+    (sbcl-agent::command-task-enqueue-service
+     session
+     '(tool :fs/list :path ".")
+     (sbcl-agent::normalize-form-command '(tool :fs/list :path "."))
+     0)
+    (sbcl-agent::command-worker-start-service session provider)
+    (multiple-value-bind (workspace-result workspace-kind workspace-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(workspace/show))
+         provider
+         session)
+      (declare (ignore workspace-session))
+      (assert-equal :workspace-show workspace-kind
+                    "workspace/show should dispatch correctly")
+      (assert-true (> (getf (getf workspace-result :execution-surfaces) :count) 0)
+                   "workspace/show should expose execution surfaces")
+      (assert-true (> (getf (getf workspace-result :governance-queue) :count) 0)
+                   "workspace/show should expose governance queue items")
+      (assert-true (> (getf (getf workspace-result :object-browser) :group-count) 0)
+                   "workspace/show should expose object-browser groups")
+      (assert-true (stringp (getf workspace-result :inspector-focus-object-id))
+                   "workspace/show should expose an inspector focus object id")
+      (multiple-value-bind (desktop-result desktop-kind desktop-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(desktop/show))
+           provider
+           session)
+        (declare (ignore desktop-session))
+        (assert-equal :desktop-show desktop-kind
+                      "desktop/show should dispatch correctly")
+        (assert-true (> (getf desktop-result :surface-count) 0)
+                     "desktop/show should expose surface count")
+        (assert-true (> (getf desktop-result :governance-count) 0)
+                     "desktop/show should expose governance count")
+        (assert-true (> (length (getf desktop-result :entry-points)) 0)
+                     "desktop/show should expose desktop entry points")
+        (assert-equal :inspector
+                      (getf desktop-result :active-panel)
+                      "desktop/show should expose the active panel")
+        (assert-true (listp (getf desktop-result :panels))
+                     "desktop/show should expose panel state")
+        (assert-equal (getf (getf (getf desktop-result :panels) :workspace) :selected-index)
+                      (getf (getf desktop-result :surface-list) :focus-index)
+                      "desktop/show should align workspace panel selection with surface focus")
+        (assert-true (stringp (getf (getf (getf (getf desktop-result :panels) :workspace) :actions)
+                                          :open-command))
+                     "desktop/show should expose workspace panel open commands")
+        (assert-true (stringp (getf (getf (getf (getf desktop-result :panels) :governance) :actions)
+                                          :select-command))
+                     "desktop/show should expose governance panel select commands")
+        (assert-equal :activate-panel
+                      (getf (getf (getf (getf (getf desktop-result :panels) :workspace) :actions)
+                                  :activate)
+                            :action-kind)
+                      "desktop/show should expose structured workspace panel activate actions")
+        (assert-true (stringp (getf (getf (getf (getf (getf desktop-result :panels) :workspace) :actions)
+                                                :activate)
+                                      :action-id))
+                     "desktop/show should expose stable workspace panel action ids")
+        (assert-true (stringp (getf (getf (getf (getf (getf desktop-result :panels) :workspace) :actions)
+                                                :restore)
+                                      :action-id))
+                     "desktop/show should expose stable workspace panel restore action ids")
+        (assert-true (stringp (getf (first (getf desktop-result :entry-points)) :command))
+                     "desktop/show should expose string shell commands for entry points"))
+      (multiple-value-bind (desktop-panel-result desktop-panel-kind desktop-panel-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(desktop/panel :governance))
+           provider
+           session)
+        (declare (ignore desktop-panel-session))
+        (assert-equal :desktop-panel desktop-panel-kind
+                      "desktop/panel should dispatch correctly")
+        (assert-equal :governance
+                      (getf desktop-panel-result :active-panel)
+                      "desktop/panel should persist the requested active panel")
+        (assert-equal :governance
+                      (getf (getf desktop-panel-result :desktop-model) :active-panel)
+                      "desktop/panel should return a desktop model with the requested active panel"))
+      (multiple-value-bind (desktop-select-result desktop-select-kind desktop-select-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(desktop/select :panel :workspace :index 0))
+           provider
+           session)
+        (declare (ignore desktop-select-session))
+        (assert-equal :desktop-select desktop-select-kind
+                      "desktop/select workspace should dispatch correctly")
+        (assert-equal :workspace
+                      (getf desktop-select-result :panel-id)
+                      "desktop/select workspace should report the selected panel")
+        (assert-equal :workspace
+                      (getf (getf desktop-select-result :desktop-model) :active-panel)
+                      "desktop/select workspace should make workspace the active panel")
+        (assert-equal (getf (getf desktop-select-result :selection) :selected-index)
+                      (getf (getf (getf (getf desktop-select-result :desktop-model) :panels)
+                                  :workspace)
+                            :selected-index)
+                      "desktop/select workspace should restore selected index in the desktop model")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf (getf desktop-select-result :desktop-model) :focus-object-id)
+                      "desktop/select workspace should preserve the selected focus object"))
+      (let* ((desktop-model (sbcl-agent::service-response-data
+                             (sbcl-agent::query-shell-desktop-model-service session)))
+             (workspace-panel-state (getf (getf desktop-model :panels) :workspace)))
+        (multiple-value-bind (desktop-restore-result desktop-restore-kind desktop-restore-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(desktop/restore :panel-state ',workspace-panel-state))
+             provider
+             session)
+          (declare (ignore desktop-restore-session))
+          (assert-equal :desktop-restore desktop-restore-kind
+                        "desktop/restore should dispatch correctly")
+          (assert-equal :workspace
+                        (getf (getf desktop-restore-result :desktop-model) :active-panel)
+                        "desktop/restore should restore the requested panel")
+          (assert-equal (getf workspace-panel-state :selected-index)
+                        (getf (getf (getf (getf desktop-restore-result :desktop-model) :panels)
+                                    :workspace)
+                              :selected-index)
+                        "desktop/restore should restore workspace selection posture")))
+      (let* ((desktop-model (sbcl-agent::service-response-data
+                             (sbcl-agent::query-shell-desktop-model-service session)))
+             (workspace-restore-action
+               (getf (getf (getf (getf desktop-model :panels)
+                                 :workspace)
+                           :actions)
+                     :restore)))
+        (multiple-value-bind (desktop-action-result desktop-action-kind desktop-action-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(desktop/action ,@workspace-restore-action))
+             provider
+             session)
+          (declare (ignore desktop-action-session))
+          (assert-equal :desktop-action desktop-action-kind
+                        "desktop/action restore should dispatch correctly")
+          (assert-equal :workspace
+                        (getf (getf desktop-action-result :result) :panel-id)
+                        "desktop/action restore should preserve restore panel identity")
+          (assert-equal :workspace
+                        (getf (getf desktop-action-result :desktop-model) :active-panel)
+                        "desktop/action restore should restore the requested panel")))
+      (let* ((desktop-model (sbcl-agent::service-response-data
+                             (sbcl-agent::query-shell-desktop-model-service session)))
+             (desktop-governance-action (getf (getf (getf (getf desktop-model :panels)
+                                                          :governance)
+                                                    :actions)
+                                              :activate)))
+        (multiple-value-bind (desktop-action-result desktop-action-kind desktop-action-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(desktop/action ,@desktop-governance-action))
+             provider
+             session)
+          (declare (ignore desktop-action-session))
+          (assert-equal :desktop-action desktop-action-kind
+                        "desktop/action activate should dispatch correctly")
+          (assert-equal :governance
+                        (getf (getf desktop-action-result :desktop-model) :active-panel)
+                        "desktop/action activate should update the active panel")))
+      (let* ((desktop-model (sbcl-agent::service-response-data
+                             (sbcl-agent::query-shell-desktop-model-service session)))
+             (desktop-governance-action-id
+               (getf (getf (getf (getf (getf desktop-model :panels)
+                                       :governance)
+                                 :actions)
+                           :activate)
+                     :action-id)))
+        (multiple-value-bind (desktop-action-result desktop-action-kind desktop-action-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(desktop/action :action-id ,desktop-governance-action-id))
+             provider
+             session)
+          (declare (ignore desktop-action-session))
+          (assert-equal :desktop-action desktop-action-kind
+                        "desktop/action by action-id should dispatch correctly")
+          (assert-equal desktop-governance-action-id
+                        (getf (getf desktop-action-result :action) :action-id)
+                        "desktop/action should resolve and report the requested action id")
+          (assert-equal :governance
+                        (getf (getf desktop-action-result :desktop-model) :active-panel)
+                        "desktop/action by action-id should activate the selected panel")))
+      (multiple-value-bind (desktop-select-governance-result desktop-select-governance-kind desktop-select-governance-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(desktop/select :panel :governance :index 0))
+           provider
+           session)
+        (declare (ignore desktop-select-governance-session))
+        (assert-equal :desktop-select desktop-select-governance-kind
+                      "desktop/select governance should dispatch correctly")
+        (assert-equal :governance
+                      (getf desktop-select-governance-result :panel-id)
+                      "desktop/select governance should report the selected panel")
+        (assert-equal :governance
+                      (getf (getf desktop-select-governance-result :desktop-model) :active-panel)
+                      "desktop/select governance should make governance the active panel")
+        (assert-true (stringp (getf (getf (getf (getf desktop-select-governance-result :desktop-model) :panels)
+                                                :governance)
+                                      :selected-title))
+                     "desktop/select governance should preserve selected governance title in the desktop model"))
+      (let* ((desktop-model (sbcl-agent::service-response-data
+                             (sbcl-agent::query-shell-desktop-model-service session)))
+             (desktop-governance-open-action (getf (getf (getf (getf desktop-model :panels)
+                                                               :governance)
+                                                         :actions)
+                                                   :open)))
+        (multiple-value-bind (desktop-action-result desktop-action-kind desktop-action-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command
+              `(desktop/action ,@desktop-governance-open-action))
+             provider
+             session)
+          (declare (ignore desktop-action-session))
+          (assert-equal :desktop-action desktop-action-kind
+                        "desktop/action open should dispatch correctly")
+          (assert-equal :governance
+                        (getf (getf desktop-action-result :result) :open-via)
+                        "desktop/action open should preserve the governance open path")))
+      (multiple-value-bind (desktop-select-object-result desktop-select-object-kind desktop-select-object-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(desktop/select :panel :object-browser :kind :work-item :index 0))
+           provider
+           session)
+        (declare (ignore desktop-select-object-session))
+        (assert-equal :desktop-select desktop-select-object-kind
+                      "desktop/select object-browser should dispatch correctly")
+        (assert-equal :object-browser
+                      (getf desktop-select-object-result :panel-id)
+                      "desktop/select object-browser should report the selected panel")
+        (assert-equal :object-browser
+                      (getf (getf desktop-select-object-result :desktop-model) :active-panel)
+                      "desktop/select object-browser should make object-browser the active panel")
+        (assert-equal :work-item
+                      (getf (getf (getf (getf desktop-select-object-result :desktop-model) :panels)
+                                  :object-browser)
+                            :selected-kind)
+                      "desktop/select object-browser should preserve selected kind in the desktop model"))
+      (let ((manual-focus-id (sbcl-agent::agent-session-shell-focus-object-id session)))
+        (assert-true (stringp manual-focus-id)
+                     "desktop/select inspector requires an existing focused object")
+        (multiple-value-bind (desktop-select-inspector-result desktop-select-inspector-kind desktop-select-inspector-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command '(desktop/select :panel :inspector))
+             provider
+             session)
+          (declare (ignore desktop-select-inspector-session))
+          (assert-equal :desktop-select desktop-select-inspector-kind
+                        "desktop/select inspector should dispatch correctly")
+          (assert-equal :inspector
+                        (getf desktop-select-inspector-result :panel-id)
+                        "desktop/select inspector should report the selected panel")
+          (assert-equal :inspector
+                        (getf (getf desktop-select-inspector-result :desktop-model) :active-panel)
+                        "desktop/select inspector should make inspector the active panel")
+          (assert-equal manual-focus-id
+                        (getf (getf desktop-select-inspector-result :desktop-model) :focus-object-id)
+                        "desktop/select inspector should preserve the existing focus object")))
+      (multiple-value-bind (surface-list-result surface-list-kind surface-list-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(surface/list))
+           provider
+           session)
+        (declare (ignore surface-list-session))
+        (assert-equal :surface-list surface-list-kind
+                      "surface/list should dispatch correctly")
+        (assert-true (> (getf surface-list-result :count) 0)
+                     "surface/list should expose execution surfaces")
+        (assert-true (integerp (getf surface-list-result :focus-index))
+                     "surface/list should expose a focused surface index"))
+      (multiple-value-bind (surface-select-result surface-select-kind surface-select-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(surface/select :index 0))
+           provider
+           session)
+        (declare (ignore surface-select-session))
+        (assert-equal :surface-select surface-select-kind
+                      "surface/select should dispatch correctly")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf surface-select-result :focus-object-id)
+                      "surface/select should persist the selected surface focus"))
+      (let* ((surface-focus-before-step (sbcl-agent::agent-session-shell-focus-object-id session))
+             (surface-count (getf (getf workspace-result :execution-surfaces) :count)))
+        (multiple-value-bind (surface-step-result surface-step-kind surface-step-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command '(surface/step :next))
+             provider
+             session)
+          (declare (ignore surface-step-session))
+          (assert-equal :surface-step surface-step-kind
+                        "surface/step should dispatch correctly")
+          (assert-equal :next (getf surface-step-result :direction)
+                        "surface/step should preserve the requested direction")
+          (assert-true (stringp (getf surface-step-result :focus-object-id))
+                       "surface/step should expose a focused surface object id")
+          (when (> surface-count 1)
+            (assert-true (not (string= surface-focus-before-step
+                                       (getf surface-step-result :focus-object-id)))
+                         "surface/step should move focus when multiple surfaces exist"))))
+      (multiple-value-bind (open-result open-kind open-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(open :surface-index 0))
+           provider
+           session)
+        (declare (ignore open-session))
+        (assert-equal :open open-kind
+                      "open should dispatch correctly")
+        (assert-equal :surface (getf open-result :open-via)
+                      "open should report the surface entry path")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf open-result :focus-object-id)
+                      "open should persist the focused object id")
+        (assert-true (member (getf (getf open-result :inspection) :object-kind)
+                             '(:work-item :workflow-record :incident :runtime :turn :execution :compatibility-execution))
+                     "open should land on an inspectable kernel object"))
+      (multiple-value-bind (queue-result queue-kind queue-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(governance/queue))
+           provider
+           session)
+        (declare (ignore queue-session))
+        (assert-equal :governance-queue queue-kind
+                      "governance/queue should dispatch correctly")
+        (assert-true (> (getf queue-result :count) 0)
+                     "governance/queue should report at least one item")
+        (assert-true (member (getf (getf queue-result :top-item) :queue-kind)
+                             '(:approval :blocked-work :incident))
+                     "governance/queue should classify the top item"))
+      (multiple-value-bind (governance-select-result governance-select-kind governance-select-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(governance/select :index 0))
+           provider
+           session)
+        (declare (ignore governance-select-session))
+        (assert-equal :governance-select governance-select-kind
+                      "governance/select should dispatch correctly")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf governance-select-result :focus-object-id)
+                      "governance/select should persist the selected focus object")
+        (assert-true (stringp (getf (getf governance-select-result :selected-item) :title))
+                     "governance/select should return the selected item title"))
+      (multiple-value-bind (open-governance-result open-governance-kind open-governance-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(open :governance-index 0))
+           provider
+           session)
+        (declare (ignore open-governance-session))
+        (assert-equal :open open-governance-kind
+                      "open governance should dispatch correctly")
+        (assert-equal :governance (getf open-governance-result :open-via)
+                      "open governance should report the governance entry path")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf open-governance-result :focus-object-id)
+                      "open governance should persist the selected focus"))
+      (multiple-value-bind (browser-result browser-kind browser-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(object-browser))
+           provider
+           session)
+        (declare (ignore browser-session))
+        (assert-equal :object-browser browser-kind
+                      "object-browser should dispatch correctly")
+        (assert-true (> (getf browser-result :group-count) 0)
+                     "object-browser should expose grouped objects")
+        (assert-true (stringp (getf browser-result :focus-object-id))
+                     "object-browser should expose a focus object id"))
+      (multiple-value-bind (object-select-result object-select-kind object-select-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(object-browser/select :kind :work-item :index 0))
+           provider
+           session)
+        (declare (ignore object-select-session))
+        (assert-equal :object-browser-select object-select-kind
+                      "object-browser/select should dispatch correctly")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf object-select-result :focus-object-id)
+                      "object-browser/select should persist the selected focus object")
+        (assert-true (stringp (getf object-select-result :selected-title))
+                     "object-browser/select should return the selected object title")))
+      (multiple-value-bind (open-object-result open-object-kind open-object-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(open :object-kind :work-item :object-index 0))
+           provider
+           session)
+        (declare (ignore open-object-session))
+        (assert-equal :open open-object-kind
+                      "open object-browser should dispatch correctly")
+        (assert-equal :object-browser (getf open-object-result :open-via)
+                      "open object-browser should report the object-browser entry path")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf open-object-result :focus-object-id)
+                      "open object-browser should persist the selected focus"))
+    (let ((manual-focus-id (sbcl-agent::agent-session-shell-focus-object-id session)))
+      (assert-true (stringp manual-focus-id)
+                   "shell workspace test requires a persisted shell focus before focus/set")
+      (multiple-value-bind (focus-set-result focus-set-kind focus-set-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command
+            `(focus/set ,manual-focus-id))
+           provider
+           session)
+        (declare (ignore focus-set-session))
+        (assert-equal :focus-set focus-set-kind
+                      "focus/set should dispatch correctly")
+        (assert-equal manual-focus-id
+                      (getf focus-set-result :focus-object-id)
+                      "focus/set should preserve the requested focus object"))
+      (multiple-value-bind (focus-show-result focus-show-kind focus-show-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(focus/show))
+           provider
+           session)
+        (declare (ignore focus-show-session))
+        (assert-equal :focus-show focus-show-kind
+                      "focus/show should dispatch correctly")
+        (assert-equal manual-focus-id
+                      (getf focus-show-result :focus-object-id)
+                      "focus/show should return the persisted shell focus"))
+      (multiple-value-bind (inspector-result inspector-kind inspector-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(inspector/show))
+           provider
+           session)
+        (declare (ignore inspector-session))
+        (assert-equal :inspector-show inspector-kind
+                      "inspector/show should dispatch correctly")
+        (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
+                      (getf inspector-result :focus-object-id)
+                      "inspector/show should honor the persisted shell focus")
+        (assert-true (member (getf inspector-result :object-kind)
+                             '(:work-item :workflow-record :incident :runtime :turn :execution :compatibility-execution))
+                     "inspector/show should resolve the focused object through the kernel")))))
+
+(defun platform-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (make-test-session :cwd "/tmp/platform-shell-commands/"))
+         (output-path "/tmp/platform-shell-package.aop"))
+    (when (probe-file output-path)
+      (delete-file output-path))
+    (multiple-value-bind (manifest-result manifest-kind manifest-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/manifest :capabilities '(:proc/run)))
+         provider
+         session)
+      (declare (ignore manifest-session))
+      (assert-equal :platform-manifest manifest-kind
+                    "platform/manifest should dispatch correctly")
+      (assert-equal 1 (getf manifest-result :capability-count)
+                    "platform/manifest should filter the manifest to the requested capability")
+      (assert-equal :proc/run
+                    (getf (first (getf manifest-result :capabilities)) :capability-id)
+                    "platform/manifest should report the requested capability")
+      (assert-true (> (getf manifest-result :workflow-count) 0)
+                   "platform/manifest should expose governed workflow inventory")
+      (assert-true (find :platform-cli/package
+                         (getf manifest-result :sdk-commands)
+                         :key (lambda (entry) (getf entry :command-id))
+                         :test #'eq)
+                   "platform/manifest should expose platform sdk entrypoints"))
+    (multiple-value-bind (package-result package-kind package-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          `(platform/package :output-path ,output-path :package-id "demo-kit" :title "Demo Kit"
+                             :capabilities '(:proc/run :git/status)))
+         provider
+         session)
+      (declare (ignore package-session))
+      (assert-equal :platform-package package-kind
+                    "platform/package should dispatch correctly")
+      (assert-equal "demo-kit" (getf package-result :package-id)
+                    "platform/package should preserve the package id")
+      (assert-true (probe-file output-path)
+                   "platform/package should write the .aop descriptor")
+      (let ((contents (uiop:read-file-string output-path)))
+        (assert-true (search "\"title\":\"Demo Kit\"" contents)
+                     "platform/package should persist the package title")
+        (assert-true (search "\"capability_count\":2" contents)
+                     "platform/package should persist the selected capability set")
+        (assert-true (search "\"workflow_count\"" contents)
+                     "platform/package should persist workflow inventory")
+        (assert-true (search "\"sdk_command_ids\"" contents)
+                     "platform/package should persist sdk command inventory")))
+    (multiple-value-bind (show-result show-kind show-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(platform/show-package ,output-path))
+         provider
+         session)
+      (declare (ignore show-session))
+      (assert-equal :platform-show-package show-kind
+                    "platform/show-package should dispatch correctly")
+      (assert-equal t (getf show-result :valid-p)
+                    "platform/show-package should report a valid package")
+      (assert-equal "demo-kit" (getf show-result :package-id)
+                    "platform/show-package should preserve the package id"))
+    (multiple-value-bind (validate-result validate-kind validate-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(platform/validate-package ,output-path))
+         provider
+         session)
+      (declare (ignore validate-session))
+      (assert-equal :platform-validate-package validate-kind
+                    "platform/validate-package should dispatch correctly")
+      (assert-equal t (getf validate-result :valid-p)
+                    "platform/validate-package should report a valid package"))
+    (multiple-value-bind (import-result import-kind import-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(platform/import-package ,output-path))
+         provider
+         session)
+      (declare (ignore import-session))
+      (assert-equal :platform-import-package import-kind
+                    "platform/import-package should dispatch correctly")
+      (assert-equal 1 (getf import-result :registry-count)
+                    "platform/import-package should register the imported package")
+      (assert-equal "demo-kit"
+                    (getf (getf import-result :package) :package-id)
+                    "platform/import-package should return the imported package summary"))
+    (multiple-value-bind (list-result list-kind list-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/list-packages))
+         provider
+         session)
+      (declare (ignore list-session))
+      (assert-equal :platform-list-packages list-kind
+                    "platform/list-packages should dispatch correctly")
+      (assert-equal 1 (getf list-result :count)
+                    "platform/list-packages should expose imported package count"))
+    (multiple-value-bind (imported-result imported-kind imported-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/show-imported-package "demo-kit"))
+         provider
+         session)
+      (declare (ignore imported-session))
+      (assert-equal :platform-show-imported-package imported-kind
+                    "platform/show-imported-package should dispatch correctly")
+      (assert-equal "demo-kit" (getf imported-result :package-id)
+                    "platform/show-imported-package should return the imported package by id"))
+    (multiple-value-bind (activate-result activate-kind activate-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/activate-package "demo-kit"))
+         provider
+         session)
+      (declare (ignore activate-session))
+      (assert-equal :platform-activate-package activate-kind
+                    "platform/activate-package should dispatch correctly")
+      (assert-equal t (getf (getf activate-result :package) :active-p)
+                    "platform/activate-package should mark the package active"))
+    (multiple-value-bind (active-result active-kind active-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/active-packages))
+         provider
+         session)
+      (declare (ignore active-session))
+      (assert-equal :platform-active-packages active-kind
+                    "platform/active-packages should dispatch correctly")
+      (assert-equal 1 (getf active-result :count)
+                    "platform/active-packages should expose active package count"))
+    (multiple-value-bind (profile-result profile-kind profile-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/profile))
+         provider
+         session)
+      (declare (ignore profile-session))
+      (assert-equal :platform-profile profile-kind
+                    "platform/profile should dispatch correctly")
+      (assert-equal 1 (getf profile-result :capability-count)
+                    "platform/profile should expose the applied active-package capability set"))
+    (multiple-value-bind (deactivate-result deactivate-kind deactivate-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(platform/deactivate-package "demo-kit"))
+         provider
+         session)
+      (declare (ignore deactivate-session))
+      (assert-equal :platform-deactivate-package deactivate-kind
+                    "platform/deactivate-package should dispatch correctly")
+      (assert-equal nil (getf (getf deactivate-result :package) :active-p)
+                    "platform/deactivate-package should clear the active package flag"))
+    (multiple-value-bind (install-result install-kind install-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command `(platform/install-package ,output-path))
+         provider
+         (make-test-session :cwd "/tmp/platform-install-shell-commands/"))
+      (declare (ignore install-session))
+      (assert-equal :platform-install-package install-kind
+                    "platform/install-package should dispatch correctly")
+      (assert-equal t (getf (getf install-result :package) :active-p)
+                    "platform/install-package should activate the imported package in one step"))))
 
 (defun session-summary-prefers-environment-summary-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/describe-session-environment/"))
@@ -6130,14 +7437,21 @@ fi
     (multiple-value-bind (_ stdout stderr)
         (with-captured-output
           (lambda ()
-            (sbcl-agent::print-shell-environment-orientation environment)))
+            (sbcl-agent::print-shell-environment-orientation environment)
+            (sbcl-agent::print-shell-workspace-startup-summary session environment)))
       (declare (ignore _ stderr))
       (assert-true (search "Environment:" stdout)
                    "shell environment orientation should print environment identity first")
       (assert-true (search "Orientation:" stdout)
                    "shell environment orientation should print active thread/runtime context")
       (assert-true (search "Operator posture:" stdout)
-                   "shell environment orientation should print operator posture counts"))))
+                   "shell environment orientation should print operator posture counts")
+      (assert-true (search "Workspace:" stdout)
+                   "shell workspace startup summary should print workspace counts")
+      (assert-true (search "Workspace governance top:" stdout)
+                   "shell workspace startup summary should print governance focus")
+      (assert-true (search "Workspace governance open: (open :governance-index 0)" stdout)
+                   "shell workspace startup summary should print the default governance open handoff"))))
 
 (defun environment-load-rendering-test ()
   (let* ((summary (list :id "environment-load-test"
@@ -6146,8 +7460,10 @@ fi
                                                :quarantined-count 0
                                                :incident-count 2
                                                :open-incident-count 1)))
+         (workspace (list :inspector-focus-object-id "exec-123"))
          (result (list :loaded "/tmp/environment-load.sexp"
-                       :summary summary)))
+                       :summary summary
+                       :workspace workspace)))
     (multiple-value-bind (_ stdout stderr)
         (with-captured-output
           (lambda ()
@@ -6156,7 +7472,9 @@ fi
       (assert-true (search "environment-load>" stdout)
                    "environment-load rendering should print the loaded environment summary")
       (assert-true (search "environment-load-operator>" stdout)
-                   "environment-load rendering should print operator posture for the loaded environment"))))
+                   "environment-load rendering should print operator posture for the loaded environment")
+      (assert-true (search "environment-load-workspace-focus> exec-123" stdout)
+                   "environment-load rendering should print workspace focus posture after load"))))
 
 (defun environment-status-command-test ()
   (let* ((provider (make-test-provider))
@@ -6188,6 +7506,16 @@ fi
                     "environment/status should summarize outstanding approvals")
       (assert-true (listp (getf result :operator-evidence))
                    "environment/status should expose consolidated operator evidence")
+      (assert-true (member :execution-surfaces result)
+                   "environment/status should expose the execution surface field")
+      (assert-true (listp (getf result :execution-surfaces))
+                   "environment/status should expose execution surfaces as a plist payload")
+      (assert-equal 1
+                    (getf (getf result :blocked-work-surfaces) :count)
+                    "environment/status should expose one blocked-work surface in the approval case")
+      (assert-equal 1
+                    (getf (getf result :approval-surfaces) :count)
+                    "environment/status should expose one approval surface in the approval case")
       (assert-equal (getf (getf result :operator-posture) :blocked-count)
                     (getf (getf (getf result :operator-evidence) :posture) :blocked-count)
                     "environment/status operator evidence should align with rendered posture"))))
@@ -6216,7 +7544,10 @@ fi
                     "environment/status should summarize open incidents")
       (assert-equal 1
                     (getf (getf result :operator-posture) :open-incident-count)
-                    "environment/status should carry operator incident posture"))))
+                    "environment/status should carry operator incident posture")
+      (assert-equal 0
+                    (getf (getf result :approval-surfaces) :count)
+                    "environment/status should not invent approval surfaces for incident-only posture"))))
 
 (defun environment-status-blocked-work-summary-test ()
   (let* ((provider (make-test-provider))
@@ -6247,7 +7578,13 @@ fi
                     "environment/status should count operator review blockers")
       (assert-equal 1
                     (getf (getf result :blocked-work) :cold-validation-count)
-                    "environment/status should count cold validation blockers"))))
+                    "environment/status should count cold validation blockers")
+      (assert-equal 3
+                    (getf (getf result :blocked-work-surfaces) :count)
+                    "environment/status should expose all blocked governed-work/workflow surfaces")
+      (assert-equal 1
+                    (getf (getf result :approval-surfaces) :count)
+                    "environment/status should keep the approval subset surface queue separate"))))
 
 (defun runtime-shell-commands-test ()
   (let* ((provider (make-test-provider))
@@ -6597,9 +7934,12 @@ fi
                     "incident/list should dispatch through the shell command surface")
       (assert-equal 1 (length list-result)
                     "failing direct runtime/eval should create one incident")
-      (let ((incident-id (getf (first list-result) :id)))
+      (let* ((incident-summary (first list-result))
+             (incident-id (getf incident-summary :id)))
         (assert-true (stringp incident-id)
                      "incident/list should expose incident ids")
+        (assert-true (member :primary-execution-handle incident-summary :test #'eq)
+                     "incident/list should expose a primary execution handle field")
         (multiple-value-bind (incident-result incident-kind incident-session)
             (sbcl-agent::execute-command
              (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
@@ -6613,6 +7953,11 @@ fi
           (assert-true (search "incident from direct runtime eval"
                                (getf incident-result :condition))
                        "incident/show should expose the runtime condition text")
+          (assert-true (member :primary-execution-handle incident-result :test #'eq)
+                       "incident/show should expose a primary execution handle field")
+          (assert-equal "incident"
+                        (getf (getf incident-result :execution-surface) :surface-kind)
+                        "incident/show should expose the incident execution surface")
           (assert-true (listp (getf incident-result :thread))
                        "incident/show should expose linked thread context")
           (assert-equal (sbcl-agent::agent-session-current-thread-id session)
@@ -7166,8 +8511,22 @@ fi
       (assert-equal :approval-required
                     (getf (getf (getf result :governance) :wait) :why)
                     "review/mutation should expose the governing wait reason")
+      (assert-equal "conversation"
+                    (getf (getf (getf result :turn) :execution-surface) :surface-kind)
+                    "review/mutation should expose the governed turn execution surface")
       (assert-true (listp (getf (getf result :governance) :next-action))
-                   "review/mutation should expose a deterministic next action"))))
+                   "review/mutation should expose a deterministic next action")
+      (assert-true (consp (getf (getf result :turn) :execution-handles))
+                   "review/mutation should expose execution-handle listings for the governed turn")
+      (assert-true (member :primary-execution-handle
+                           (getf (getf result :governance) :work-item))
+                   "review/mutation should advertise the execution-handle field for governed work")
+      (assert-equal "governed-work"
+                    (getf (getf (getf result :governance) :work-item-surface) :surface-kind)
+                    "review/mutation should expose the governed work execution surface")
+      (assert-equal "workflow"
+                    (getf (getf (getf result :governance) :workflow-record-surface) :surface-kind)
+                    "review/mutation should expose the workflow execution surface"))))
 
 (defun mutation-review-cold-validation-test ()
   (let* ((provider (make-instance 'runtime-reload-action-provider))
@@ -7206,6 +8565,9 @@ fi
       (assert-equal :cold-validation-required
                     (getf (getf (getf result :governance) :wait) :why)
                     "review/mutation should make cold validation blockers explicit")
+      (assert-equal "governed-work"
+                    (getf (getf (getf result :governance) :work-item-surface) :surface-kind)
+                    "review/mutation should preserve the governed work surface through cold validation")
       (assert-equal 1
                     (getf (getf result :evidence) :checkpoint-count)
                     "review/mutation should expose captured checkpoint evidence")
@@ -7242,6 +8604,9 @@ fi
       (assert-equal :operator-review-required
                     (getf (getf (getf result :governance) :wait) :why)
                     "review/mutation should expose operator review blockers after incidents")
+      (assert-equal "incident"
+                    (getf (getf (first (getf result :incidents)) :execution-surface) :surface-kind)
+                    "review/mutation should expose compact incident execution surfaces")
       (assert-true (search "runtime incident boom"
                            (getf (first (getf result :incidents)) :condition))
                    "review/mutation should preserve the linked incident condition text"))))

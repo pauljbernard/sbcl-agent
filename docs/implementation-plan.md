@@ -89,6 +89,11 @@ Implemented or substantially in place:
 - governed runtime mutation flows that stop at `:awaiting-cold-validation` until colder evidence is recorded
 - provider requests enriched with compact environment-backed context
 - validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence is visible in the artifact stream
+- a real execution-kernel seam through `src/kernel-core.lisp`, `src/kernel-service.lisp`, and `src/shell-service.lisp`
+- execution-handle-centered inspect/control behavior and execution-native shell commands
+- execution surfaces, shell workspace, governance queue, object browser, inspector, and desktop host model
+- compatibility execution tracking, lifecycle posture, and detached host-process control for the first compatibility backend
+- developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activate, install, and applied profile query
 
 Still incomplete or still planned:
 
@@ -98,6 +103,7 @@ Still incomplete or still planned:
 - richer operation and artifact coverage across all mutating paths
 - deeper cold-start validation and rollback fidelity
 - deeper incident workspace and restart-oriented runtime debugging services
+- a fuller external SDK, package application model, simulation harness, and distribution/update toolchain for the platform layer
 
 ## Delivery Stages
 

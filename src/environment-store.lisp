@@ -395,7 +395,11 @@
                           :if-exists :supersede
                           :if-does-not-exist :create)
     (let ((*print-circle* t)
-          (*print-pretty* t))
+          (*print-pretty* t)
+          (*print-length* nil)
+          (*print-level* nil)
+          (*print-lines* nil)
+          (*print-right-margin* nil))
       (write (serializable-environment-copy environment) :stream stream)))
   path)
 
@@ -415,6 +419,7 @@
                 (serializable-worker-states session))
           (setf (agent-session-workers-tail session)
                 (last (agent-session-workers session)))))
+      (normalize-kernel-execution-registry-for-load environment)
       (rehydrate-environment-derived-state environment)
       (setf (environment-compatibility-session environment)
             (ensure-environment-compatibility-payload

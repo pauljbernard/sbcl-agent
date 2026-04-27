@@ -20,6 +20,8 @@
   transcript
   transcript-tail
   plan
+  shell-focus-object-id
+  shell-active-panel-id
   events
   events-tail
   capability-grants
@@ -58,6 +60,8 @@
    :transcript '()
    :transcript-tail nil
    :plan nil
+   :shell-focus-object-id nil
+   :shell-active-panel-id nil
    :events '()
    :events-tail nil
    :capability-grants '()
@@ -526,6 +530,8 @@
                                         (session-artifact-summary session))
                   :plan (or (bound-session-environment-state-summary environment-summary :plan)
                             (agent-session-plan session))
+                  :shell-focus-object-id (agent-session-shell-focus-object-id session)
+                  :shell-active-panel-id (agent-session-shell-active-panel-id session)
                   :approved-policies (or (and policy-state (getf policy-state :approved-policies))
                                          (session-approved-policies session))
                   :capability-grants (or (and policy-state (getf policy-state :capability-grants))
@@ -610,6 +616,8 @@
    :artifacts (agent-session-artifacts session)
    :transcript nil
    :plan (agent-session-plan session)
+   :shell-focus-object-id (agent-session-shell-focus-object-id session)
+   :shell-active-panel-id (agent-session-shell-active-panel-id session)
    :events (serializable-session-events session)
    :capability-grants (agent-session-capability-grants session)
    :pending-actions (agent-session-pending-actions session)

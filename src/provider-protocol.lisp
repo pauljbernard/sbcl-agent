@@ -247,42 +247,51 @@
                   (eq (getf payload :mode) :mutate))))))
 
 (defun execute-assistant-action (action session &key thread turn operation)
-  (case (assistant-action-type action)
-    (:TOOL
-     (let* ((payload (assistant-action-payload action))
-            (tool-id (or (getf payload :TOOL-ID)
-                         (getf payload :TOOL_ID)))
-            (arguments (or (getf payload :ARGUMENTS)
-                           (getf payload :arguments))))
-       (unless (keywordp tool-id)
-         (error "Assistant tool action requires keyword tool id, got ~S" tool-id))
+  (let ((*runtime-governance-thread* thread)
+        (*runtime-governance-turn* turn)
+        (*runtime-governance-operation* operation))
+    (declare (special *runtime-governance-thread*
+                      *runtime-governance-turn*
+                      *runtime-governance-operation*))
+    (case (assistant-action-type action)
+      (:TOOL
+       (let* ((payload (assistant-action-payload action))
+              (tool-id (or (getf payload :TOOL-ID)
+                           (getf payload :TOOL_ID)))
+              (arguments (or (getf payload :ARGUMENTS)
+                             (getf payload :arguments))))
+         (unless (keywordp tool-id)
+           (error "Assistant tool action requires keyword tool id, got ~S" tool-id))
+         (service-response-data
+          (command-kernel-invoke-service session
+                                         (format nil "Execute staged assistant tool action ~A." tool-id)
+                                         (kernel-tool-capability-id tool-id)
+                                         :payload (list* :tool-id tool-id (or arguments '()))
+                                         :context (list :thread-id (and thread (thread-id thread))
+                                                        :turn-id (and turn (turn-id turn))
+                                                        :operation operation)))))
+      (:PATCH
        (service-response-data
-        (command-invoke-tool-service session
-                                     tool-id
-                                     (or arguments '())
-                                     :thread thread
-                                     :turn turn
-                                     :operation operation))))
-    (:PATCH
-     (service-response-data
-      (command-apply-patch-service session
-                                   (assistant-action-payload action)
-                                   :thread thread
-                                   :turn turn
-                                   :operation operation)))
-    (:EVAL
-     (let* ((payload (assistant-action-payload action))
-            (*runtime-governance-thread* thread)
-            (*runtime-governance-turn* turn)
-            (*runtime-governance-operation* operation))
-       (declare (special *runtime-governance-thread*
-                         *runtime-governance-turn*
-                         *runtime-governance-operation*))
-       (tool-runtime-eval session
-                          :form (parse-eval-action-form payload)
-                          :mutating (mutating-eval-action-p action))))
-    (t
-     (error "Unsupported assistant action type ~S" (assistant-action-type action)))))
+        (command-kernel-invoke-service session
+                                       "Execute a staged assistant patch action."
+                                       :workspace/patch
+                                       :payload (assistant-action-payload action)
+                                       :context (list :thread-id (and thread (thread-id thread))
+                                                      :turn-id (and turn (turn-id turn))
+                                                      :operation operation))))
+      (:EVAL
+       (let ((payload (assistant-action-payload action)))
+         (service-response-data
+          (command-kernel-invoke-service session
+                                         "Execute a staged assistant runtime eval action."
+                                         :runtime/eval
+                                         :payload (list :form (parse-eval-action-form payload)
+                                                        :mutating (mutating-eval-action-p action))
+                                         :context (list :thread-id (and thread (thread-id thread))
+                                                        :turn-id (and turn (turn-id turn))
+                                                        :operation operation)))))
+      (t
+       (error "Unsupported assistant action type ~S" (assistant-action-type action))))))
 
 (defun execute-assistant-action-list (actions session &key thread turn operation)
   (let ((results

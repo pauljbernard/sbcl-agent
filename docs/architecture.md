@@ -13,17 +13,24 @@ Read [Foundation]({{ '/foundation.html' | relative_url }}) first if you have not
 
 It is not the best entry point for understanding why the project exists.
 
+For the governing transition documents, read alongside this page:
+
+- [IntentOS Constitution]({{ '/intentos-constitution.html' | relative_url }})
+- [IntentOS Requirements]({{ '/intentos-requirements.html' | relative_url }})
+- [UX Design System]({{ '/ux-design-system.html' | relative_url }})
+- [Validation Strategy]({{ '/validation-strategy.html' | relative_url }})
+
 ## System Objective
 
 Build a governed, transactional, image-native engineering environment that can inspect and mutate the same running system it is reasoning about while preserving reproducibility, rollback intent, provenance, and operator trust.
 
-The current codebase now sits between two phases:
+The current codebase now sits between three descriptions:
 
 - the original shell-plus-streamed-ask runtime is still supported
-- the conversation-native runtime is partially implemented and now shapes the architecture
-- the next stage is shifting toward an Environment-first model in which runtime, conversation, artifacts, work-items, agents, retrieval, and service-backed UX surfaces live inside one larger persistent world
+- the environment-native runtime is materially implemented and now shapes the architecture
+- the execution-kernel transition is underway, so more behavior now compresses under `invoke`, `inspect`, `control`, execution handles, and execution surfaces
 
-That means the right description of the codebase is neither "prototype shell" nor "finished environment platform." It is an implemented transitional architecture with a clear direction of travel.
+That means the right description of the codebase is neither "prototype shell" nor "finished operating system." It is an implemented transitional architecture with a clear direction of travel.
 
 ## Environment Framing
 
@@ -42,6 +49,12 @@ It should instead be thought of as a persistent symbolic environment. In that fr
 - workflows are one environment behavior
 - agents are inhabitants rather than features
 - artifacts are native objects rather than output formatting details
+
+For the federated employee/contractor operating model, this environment also has a strict repository boundary:
+
+- `RGP` owns global orchestration, policy, assignment routing, and commercial state
+- `sbcl-agent` owns local execution truth and local publication behavior
+- `sbcl-agent-ux` remains a pure client of `sbcl-agent` rather than a direct `RGP` client in the first pass
 
 The current implementation is still transitional, but future architecture should orient around an `Environment` object rather than around the shell session or thread alone.
 
@@ -135,6 +148,14 @@ This prevents conversation history from becoming a second runtime database, and 
 ## Current Runtime Shape
 
 The codebase still exposes one shell-facing session handle, but the internal architecture now spans several real layers. That shell-facing handle is now best understood as a transitional composition root on the path toward a fuller Environment object.
+
+The newer architecture also has a real kernel seam:
+
+- `src/kernel-core.lisp`
+- `src/kernel-service.lisp`
+- `src/shell-service.lisp`
+
+Those modules are not the whole system yet, but they are now the right place to understand the current compression effort.
 
 ### CLI and shell
 
@@ -242,8 +263,81 @@ Concrete service modules now include:
 - `src/rgp-service.lisp`
 - `src/event-service.lisp`
 - `src/retrieval-service.lisp`
+- `src/platform-service.lisp`
 
 `src/service-core.lisp` provides the shared response envelope and metadata contract used by those service modules.
+
+### Execution kernel
+
+The current refactor is compressing the system around a governed execution kernel.
+
+The intended kernel API is:
+
+- `invoke`
+- `inspect`
+- `control`
+
+Current implementation progress already includes:
+
+- kernel-facing invoke paths for shell actions, staged assistant actions, runtime mutation, patches, tool execution, and resumed work
+- execution-handle creation and registry state
+- execution-handle-centered inspect and control paths
+- operator shell commands that can open, inspect, and intervene through execution identity
+- execution-surface derivation on top of governed executions
+
+This is still transitional work, but it is no longer hypothetical architecture.
+
+### Surface model and shell model
+
+The shell is no longer just a REPL plus ad hoc reporting commands.
+
+The current implementation now has:
+
+- execution surfaces
+- a shell workspace model
+- a governance queue
+- an object browser
+- an inspector
+- a desktop host contract
+
+That desktop host contract is exposed through:
+
+- `desktop/show`
+- `desktop/action`
+- `desktop/restore`
+
+`sbcl-agent-ux` is now supposed to host those surfaces directly rather than reconstructing them from unrelated read models.
+
+### Compatibility kernel
+
+Hosted compatibility execution is no longer only a raw process-launch convenience.
+
+The implementation now includes:
+
+- compatibility execution classification
+- compatibility list/detail service surfaces
+- synchronous host-process compatibility execution
+- detachable spawned host-process compatibility execution
+- lifecycle posture, control posture, and runtime-loss acknowledgement for hosted compatibility executions
+
+This is still only the first compatibility backend, but it is already a real kernel-shaped subsystem rather than a purely conceptual one.
+
+### Developer platform
+
+The platform layer is also now real enough to document as implemented work.
+
+Current platform capabilities include:
+
+- platform manifest query
+- `.aop` package export
+- package inspection and validation
+- package import
+- package activation and deactivation
+- active-package queries
+- applied platform profile queries
+- one-step install (`validate + import + activate`)
+
+That means the developer platform is no longer only roadmap prose. It is now an early but concrete contract surface.
 
 `src/execution-service.lisp` is now the important bridge between interaction surfaces and governed execution semantics. It owns shared execution entry points for:
 

@@ -344,11 +344,14 @@
         (task-worker-id task) (or worker-id (task-worker-id task)))
   (append-task-progress-event session task :task-started (task-summary task))
   (append-session-event session :task-started (task-summary task))
-  (append-work-item-image-mutation (find-work-item session (task-work-item-id task))
-                                   (list :kind :task-execution
-                                         :task-id (task-id task)
-                                         :command-kind (task-kind task))
-                                   session)
+  (let ((work-item (and (task-work-item-id task)
+                        (find-work-item session (task-work-item-id task)))))
+    (when work-item
+      (append-work-item-image-mutation work-item
+                                       (list :kind :task-execution
+                                             :task-id (task-id task)
+                                             :command-kind (task-kind task))
+                                       session)))
   (update-work-item-status-from-task session task :mutating)
   (let ((*task-progress-callback* (task-progress-callback session task)))
     (handler-case

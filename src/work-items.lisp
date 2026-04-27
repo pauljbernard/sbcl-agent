@@ -845,10 +845,21 @@
        work-item
        (record-operator-intervention session record kind payload :status status)))))
 
+(defun ensure-work-item-approval-checkpoint (session work-item policy &key reason)
+  (or (latest-work-item-checkpoint work-item)
+      (append-work-item-checkpoint
+       session
+       work-item
+       :validation-baseline (list :approval-requested-p t
+                                  :policy policy
+                                  :reason reason
+                                  :work-item-id (work-item-id work-item)))))
+
 (defun request-work-item-approval (session work-item policy &key reason)
   (let ((record (work-item-workflow-record session work-item)))
     (unless record
       (error "Work-item ~A has no workflow record" (work-item-id work-item)))
+    (ensure-work-item-approval-checkpoint session work-item policy :reason reason)
     (let ((requirement (mark-workflow-record-awaiting-approval session record policy :reason reason)))
       (setf (provenance-record-approval-checkpoints (work-item-provenance work-item))
             (append (provenance-record-approval-checkpoints (work-item-provenance work-item))
@@ -934,6 +945,62 @@
     (refresh-work-item-taint-state work-item)
     (refresh-work-item-pending-validations session work-item)
     work-item))
+
+(defun rollback-work-item (session work-item &key reason note)
+  (let ((record (work-item-workflow-record session work-item)))
+    (unless record
+      (error "Work-item ~A has no workflow record" (work-item-id work-item)))
+    (let ((transaction (current-work-item-transaction work-item))
+          (rollback-point (work-item-rollback-point work-item)))
+      (unless transaction
+        (error "Work-item ~A has no active transaction to roll back" (work-item-id work-item)))
+      (unless rollback-point
+        (error "Work-item ~A has no rollback point" (work-item-id work-item)))
+      (setf (mutation-transaction-state transaction) :rolled-back
+            (mutation-transaction-rollback-status transaction) :rolled-back
+            (mutation-transaction-rollback-detail transaction)
+            (list :reason reason
+                  :note note
+                  :rollback-point rollback-point
+                  :operator-triggered-p t)
+            (mutation-transaction-quarantine-status transaction) nil)
+      (mirror-work-item-operator-intervention
+       work-item
+       (list :kind :rolled-back
+             :timestamp (get-universal-time)
+             :payload (list :reason reason
+                            :note note
+                            :rollback-point rollback-point)))
+      (setf (work-item-status work-item) :rolled-back
+            (work-item-closure-decision work-item) :rolled-back-by-operator
+            (work-item-updated-at work-item) (get-universal-time))
+      (set-work-item-next-action session work-item nil)
+      (set-work-item-resume-payload session work-item nil)
+      (append-work-item-workflow-entry session
+                                       work-item
+                                       :reconcile
+                                       :operator-rolled-back
+                                       (list :reason reason
+                                             :note note
+                                             :rollback-point rollback-point)
+                                       :status :rolled-back)
+      (append-work-item-runtime-observation session
+                                            work-item
+                                            :rollback-completed
+                                            (list :reason reason
+                                                  :note note
+                                                  :rollback-point rollback-point
+                                                  :transaction-id (mutation-transaction-id transaction)))
+      (close-workflow-record session
+                             record
+                             (list :work-item-status :rolled-back
+                                   :closure-decision :rolled-back-by-operator
+                                   :rollback-point rollback-point)
+                             :status :rolled-back
+                             :evidence (work-item-summary work-item))
+      (refresh-work-item-taint-state work-item)
+      (refresh-work-item-pending-validations session work-item)
+      work-item)))
 
 (defun steer-work-item-plan (session work-item &key phase next-step note)
   (let* ((directive (list :phase phase
@@ -1027,6 +1094,23 @@
           (provenance-record-taint-status (work-item-provenance work-item)) (if reasons :tainted :clean)
           (provenance-record-taint-reasons (work-item-provenance work-item)) reasons)
     reasons))
+
+(defun work-item-mutation-block-reasons (work-item)
+  (let ((status (work-item-status work-item))
+        (transaction (current-work-item-transaction work-item))
+        (reasons '()))
+    (when (eq status :awaiting-approval)
+      (push :awaiting-approval reasons))
+    (when (eq status :quarantined)
+      (push :quarantined reasons))
+    (when (eq status :rolled-back)
+      (push :rolled-back reasons))
+    (when (eq status :awaiting-cold-validation)
+      (push :awaiting-cold-validation reasons))
+    (when (and transaction
+               (eq (mutation-transaction-rollback-status transaction) :required))
+      (push :rollback-required reasons))
+    (nreverse (remove-duplicates reasons :test #'eq))))
 
 (defun reconciliation-summary-message (status taint-reasons)
   (let ((base (case status

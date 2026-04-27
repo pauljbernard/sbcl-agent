@@ -844,8 +844,12 @@
          (workflow-record (and work-item
                                (work-item-workflow-record session work-item)))
          (recovery-summary (turn-recovery-summary session turn operation-records))
-         (action-assessment-summary (turn-action-assessment-summary operations)))
+         (action-assessment-summary (turn-action-assessment-summary operations))
+         (execution-handles (kernel-execution-summaries-by-target :turn-id
+                                                                  (turn-id turn))))
     (append (turn-record-summary turn)
+            (list :primary-execution-handle (first execution-handles)
+                  :execution-handles execution-handles)
             (list :thread (and thread (thread-record-summary thread))
                   :user-message (and user-message (message-record-summary user-message))
                   :assistant-message (and assistant-message (message-record-summary assistant-message))
@@ -914,6 +918,16 @@
                          (find-work-item session work-item-id)))
          (workflow-record (and work-item
                                (work-item-workflow-record session work-item)))
+         (work-item-summary (and work-item
+                                 (kernel-enrich-summary-with-executions
+                                  (work-item-summary work-item)
+                                  :work-item-id
+                                  (work-item-id work-item))))
+         (workflow-record-summary (and workflow-record
+                                       (kernel-enrich-summary-with-executions
+                                        (workflow-record-summary workflow-record)
+                                        :workflow-record-id
+                                        (workflow-record-id workflow-record))))
          (wait-report (and work-item
                            (work-item-wait-report session work-item)))
          (runtime-artifacts (remove-if-not (lambda (artifact)
@@ -927,6 +941,8 @@
     (list :turn (list :id resolved-turn-id
                       :status (getf detail :status)
                       :thread-id (getf (getf detail :thread) :id)
+                      :primary-execution-handle (getf detail :primary-execution-handle)
+                      :execution-handles (getf detail :execution-handles)
                       :user-message (getf (getf detail :user-message) :content)
                       :assistant-message (getf (getf detail :assistant-message) :content)
                       :recovery (getf detail :recovery)
@@ -937,10 +953,8 @@
                           :runtime-artifact-count (getf detail-summary :runtime-artifact-count)
                           :operations operations
                           :artifacts artifacts)
-          :governance (list :work-item (and work-item
-                                           (work-item-summary work-item))
-                            :workflow-record (and workflow-record
-                                                  (workflow-record-summary workflow-record))
+          :governance (list :work-item work-item-summary
+                            :workflow-record workflow-record-summary
                             :wait wait-report
                             :next-action (and wait-report (getf wait-report :next-action))
                             :resume-payload (and wait-report (getf wait-report :resume-payload))

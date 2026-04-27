@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent is a real SBCL-native shell, environment-centered runtime, governed workflow substrate, retrieval-and-cognition loop, and service-backed provider/router surface today. It is still evolving, but the system is materially beyond a shell-plus-tools prototype.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent is now a real SBCL-native shell, environment-centered runtime, governed workflow substrate, retrieval-and-cognition loop, execution-kernel refactor, compatibility-execution host, and service-backed provider/router surface. It is still evolving, but it is materially beyond a shell-plus-tools prototype and is now visibly moving toward the IntentOS execution-kernel target.</div>
 
 <div class="quick-links">
   <a class="quick-link" href="{{ '/problem.html' | relative_url }}"><strong>The Problem</strong>Understand why the old model worked, why it now constrains understanding, and why this project exists.</a>
@@ -126,6 +126,58 @@ Then use the roadmap and transition documents as forward-looking context rather 
     <div class="card-title">Streaming Event Model</div>
     <p>The event-native streaming contract that separates visible assistant text from runtime execution and workflow evidence.</p>
   </a>
+  <a class="card" href="{{ '/kernel-invariants.html' | relative_url }}">
+    <div class="card-title">Kernel Invariants</div>
+    <p>The execution-kernel doctrine, three-function API, execution-handle model, and non-bypassable governance rules for IntentOS-oriented refactoring.</p>
+  </a>
+  <a class="card" href="{{ '/intentos-constitution.html' | relative_url }}">
+    <div class="card-title">IntentOS Constitution</div>
+    <p>The governing product and architecture rules for evolving the current runtime and UX into a minimal, governed execution-kernel operating system.</p>
+  </a>
+  <a class="card" href="{{ '/intentos-requirements.html' | relative_url }}">
+    <div class="card-title">IntentOS Requirements</div>
+    <p>The consolidated kernel, governance, UX, compatibility, and platform requirements for the transition to IntentOS.</p>
+  </a>
+  <a class="card" href="{{ '/intentos-feature-specifications.html' | relative_url }}">
+    <div class="card-title">IntentOS Feature Specs</div>
+    <p>The required specification discipline for new features so they reinforce the kernel model, governance model, and shell model.</p>
+  </a>
+  <a class="card" href="{{ '/ux-design-system.html' | relative_url }}">
+    <div class="card-title">UX Design System</div>
+    <p>The structural UX model for evolving sbcl-agent-ux from an application interface into a shell over governed executions.</p>
+  </a>
+  <a class="card" href="{{ '/ux-style-guide.html' | relative_url }}">
+    <div class="card-title">UX Style Guide</div>
+    <p>The visual and interaction style rules that should reinforce inspectability, governance, and execution-centered interaction.</p>
+  </a>
+  <a class="card" href="{{ '/operator-journeys.html' | relative_url }}">
+    <div class="card-title">Operator Journeys</div>
+    <p>The canonical operator journeys that should drive refactoring order, shell behavior, and execution-surface design.</p>
+  </a>
+  <a class="card" href="{{ '/validation-strategy.html' | relative_url }}">
+    <div class="card-title">Validation Strategy</div>
+    <p>The architecture-level validation plan for proving kernel invariants, execution handles, shell coherence, and compatibility containment.</p>
+  </a>
+  <a class="card" href="{{ '/agentos-current-state-gap-analysis.html' | relative_url }}">
+    <div class="card-title">Current-State Gap Analysis</div>
+    <p>A current-state assessment of what sbcl-agent already is, what it is not yet, and the structural gaps between a governed runtime and an operating system.</p>
+  </a>
+  <a class="card" href="{{ '/agentos-target-state-architecture.html' | relative_url }}">
+    <div class="card-title">IntentOS Target Architecture</div>
+    <p>The compressed target model: a governed execution kernel built around invoke, inspect, control, execution handles, compatibility, UX, and platform layers.</p>
+  </a>
+  <a class="card" href="{{ '/agentos-implementation-plan.html' | relative_url }}">
+    <div class="card-title">IntentOS Implementation Plan</div>
+    <p>The phased refactoring plan for moving from the current governed runtime toward a minimal, governed execution-kernel operating system.</p>
+  </a>
+  <a class="card" href="{{ '/rgp-sbcl-agent-event-contract.html' | relative_url }}">
+    <div class="card-title">RGP-sbcl-agent Event Contract</div>
+    <p>The federated event envelope and event-family contract between global orchestration in RGP and local execution truth in sbcl-agent.</p>
+  </a>
+  <a class="card" href="{{ '/evidence-profiles-and-visibility-rules.html' | relative_url }}">
+    <div class="card-title">Evidence Profiles and Visibility Rules</div>
+    <p>The node-side publication, disclosure, and evidence posture rules for employee-operated and contractor-operated execution.</p>
+  </a>
   <a class="card" href="{{ '/migration-plan-thread-runtime.html' | relative_url }}">
     <div class="card-title">Migration Plan</div>
     <p>The compatibility-preserving path from flat session-plus-ask behavior to thread-based conversation orchestration.</p>
@@ -158,6 +210,11 @@ Then use the roadmap and transition documents as forward-looking context rather 
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
 - stable public service interfaces and non-shell JSON CLI surfaces for future UX integration
+- kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming first-class operator references
+- execution surfaces, workspace, governance queue, object browser, and inspector shell models
+- a hostable desktop contract for `sbcl-agent-ux` through `desktop/show`, `desktop/action`, and `desktop/restore`
+- compatibility execution tracking and lifecycle posture for hosted process-style capabilities
+- developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activation, install, and applied-profile inspection
 
 ## Strengths
 
@@ -167,6 +224,8 @@ The current implementation is strongest where the code and the documentation now
 - it gives operators direct access to the runtime they are reasoning about
 - it preserves explicit governance concepts such as approvals, incidents, work-items, and workflow records
 - it already supports durable conversational turns instead of one-shot prompt/response behavior
+- it now has a real execution-kernel seam rather than only service-local mutation rules
+- it now has a thin-host desktop direction instead of requiring a future UX to reconstruct navigation from raw service fragments
 
 ## Weaknesses
 
@@ -176,6 +235,7 @@ The current implementation is also honestly transitional:
 - the environment-native agent model is not yet fully realized
 - cold validation, rollback, and artifact coverage are real but not yet complete across every path
 - some older documents remain deeper and more roadmap-heavy than a new reader should start with
+- the developer platform is now real, but not yet a complete external SDK, simulation, and distribution ecosystem
 
 ## Current Architectural Rule
 
@@ -186,6 +246,12 @@ The codebase is still organized around one ownership rule:
 - workflow owns engineering governance
 
 That rule keeps the system from collapsing chat history, live runtime state, and engineering evidence into one undifferentiated session blob. The new roadmap extends this by placing those domains inside a larger Environment object rather than treating thread or shell state as the architectural center.
+
+The newer compression rule now sits alongside it:
+
+- execution is being normalized under `invoke`
+- execution-backed reads are being normalized under `inspect`
+- intervention is being normalized under `control`
 
 ## Why the Reading Order Matters
 

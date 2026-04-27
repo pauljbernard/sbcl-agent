@@ -1,12 +1,35 @@
-# AgentOS – Target-State Architecture
+# IntentOS – Target-State Architecture
 
 ## Core Definition
 
-AgentOS is a minimal-kernel, execution-handle operating system where every action is a governed execution derived from an intention.
+IntentOS is a minimal, governed execution kernel where every action is a governed execution derived from an intention.
+
+It is microkernel-inspired in discipline, but it is not a traditional microkernel.
+
+Traditional kernels center:
+
+- processes
+- memory
+- files
+- threads
+- hardware-facing resource management
+
+IntentOS instead centers:
+
+- executions
+- authority
+- lifecycle
+- trace
+- governed mutation
+
+That makes the most precise description:
+
+- execution kernel
+- or more fully: minimal, governed execution kernel
 
 ## Architecture Context Diagram
 
-![AgentOS target architecture context diagram](assets/agentos-target-architecture-context-diagram.png)
+![IntentOS target architecture context diagram](assets/intentos-target-architecture-context-diagram.png)
 
 ## Kernel Doctrine
 
@@ -25,6 +48,25 @@ AgentOS is a minimal-kernel, execution-handle operating system where every actio
 8. Policy cannot be bypassed.
 9. Every visible element must be inspectable.
 
+## Kernel Category
+
+IntentOS is closest to a microkernel in structure and to capability-based systems in authority discipline, but its true kernel object is not the process.
+
+Its kernel object is the execution.
+
+That means the correct mapping is:
+
+| Traditional OS | IntentOS |
+| --- | --- |
+| process | execution |
+| file descriptor | execution handle |
+| syscall | `invoke` |
+| read | `inspect` |
+| write / control | `control` |
+| permissions | authority |
+| audit log | trace |
+| transaction | governed mutation |
+
 ## Kernel API
 
 ```lisp
@@ -42,7 +84,7 @@ Equivalent to a Unix file descriptor, but for governed execution.
 ## System Architecture
 
 ```text
-AgentOS
+IntentOS
 ├── Kernel
 │   ├── invoke / inspect / control
 │   ├── execution model
@@ -138,7 +180,7 @@ Every visible element must be inspectable.
 
 ## Packaging Model
 
-`.aop` (AgentOS Package)
+`.aop` (IntentOS Package)
 
 Contains:
 - capabilities
@@ -148,6 +190,6 @@ Contains:
 
 ## Final Statement
 
-AgentOS is an execution-handle OS:
+IntentOS is an execution-kernel operating system:
 
 Every action begins as an intention, becomes a governed execution, and remains inspectable and controllable for its lifetime.

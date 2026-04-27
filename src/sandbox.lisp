@@ -16,6 +16,62 @@
                               :network-enabled-p nil
                               :workspace-write-p nil)))
 
+(defparameter *compatibility-process-registry* (make-hash-table :test #'equal))
+
+(defun make-compatibility-control-token ()
+  (format nil "compat-proc-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun register-compatibility-process (process &key argv cwd)
+  (let ((token (make-compatibility-control-token))
+        (registered-at (get-universal-time)))
+    (setf (gethash token *compatibility-process-registry*)
+          (list :token token
+                :process process
+                :pid (sb-ext:process-pid process)
+                :argv (copy-tree argv)
+                :cwd cwd
+                :registered-at registered-at
+                :final-status nil))
+    (list :token token
+          :registered-at registered-at)))
+
+(defun compatibility-process-record (token)
+  (gethash token *compatibility-process-registry*))
+
+(defun compatibility-process-token-live-p (token)
+  (not (null (compatibility-process-record token))))
+
+(defun compatibility-process-status (token)
+  (let ((record (compatibility-process-record token)))
+    (cond
+      ((null record) :detached)
+      ((getf record :final-status) (getf record :final-status))
+      ((sb-ext:process-alive-p (getf record :process)) :running)
+      (t
+       (let ((exit-code (ignore-errors
+                          (sb-ext:process-exit-code (getf record :process)))))
+         (if (and (integerp exit-code) (zerop exit-code))
+             :completed
+             :failed))))))
+
+(defun compatibility-process-stop (token &key revoke-p)
+  (let* ((record (or (compatibility-process-record token)
+                     (error "Unknown compatibility control token ~A" token)))
+         (process (getf record :process))
+         (signal (if revoke-p 9 15))
+         (status (if revoke-p :revoked :stopped)))
+    (when (and process
+               (sb-ext:process-alive-p process))
+      (sb-ext:process-kill process signal)
+      (sb-ext:process-wait process)
+      (ignore-errors (sb-ext:process-close process)))
+    (setf (getf record :final-status) status)
+    (setf (gethash token *compatibility-process-registry*) record)
+    (list :token token
+          :pid (getf record :pid)
+          :status status
+          :signal signal)))
+
 (defun find-sandbox-profile (id)
   (find id *sandbox-profiles* :key #'sandbox-profile-id))
 
@@ -97,6 +153,36 @@
                           (list :profile :process-run :argv argv :result result))
     result))
 
+(defun sandbox-execute-process-spawn (session argv)
+  (ensure-sandbox-profile :process-run)
+  (unless (and (listp argv) argv)
+    (error ":proc/spawn requires non-empty :argv"))
+  (let* ((process (sb-ext:run-program (first argv)
+                                      (rest argv)
+                                      :search t
+                                      :input nil
+                                      :output nil
+                                      :error nil
+                                      :wait nil
+                                      :directory (agent-session-cwd session)
+                                      :environment (sandbox-worker-environment)))
+         (registration (register-compatibility-process process
+                                                       :argv argv
+                                                       :cwd (agent-session-cwd session)))
+         (token (getf registration :token))
+         (result (list :tool :proc/spawn
+                       :argv argv
+                       :cwd (agent-session-cwd session)
+                       :pid (sb-ext:process-pid process)
+                       :control-token token
+                       :registered-at (getf registration :registered-at)
+                       :status :running
+                       :sandboxed t
+                       :sandbox-profile :process-run)))
+    (append-session-event session :sandbox-exec
+                          (list :profile :process-run :argv argv :result result))
+    result))
+
 (defun sandbox-execute-git (session action &rest arguments)
   (ensure-sandbox-profile :process-run)
   (let ((argv
@@ -161,6 +247,7 @@
                                        :environment (sandbox-worker-environment))))
       (list :tool :proc/run
             :argv argv
+            :cwd cwd
             :stdout (get-output-stream-string stdout)
             :stderr (get-output-stream-string stderr)
             :exit-code (sb-ext:process-exit-code process)

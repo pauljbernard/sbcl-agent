@@ -1,8 +1,8 @@
 # sbcl-agent
 
-`sbcl-agent` is an SBCL-native, image-native, agentic Common Lisp environment.
+`sbcl-agent` is an SBCL-native, image-native, governed execution environment.
 
-It began as a Codex-style shell, but the project has matured into something more specific: a governed environment in which source truth, live runtime truth, and workflow truth are all first-class and explicitly related.
+It began as a Codex-style shell, but the project has matured into something more specific: an execution-kernel-oriented environment in which source truth, live runtime truth, and workflow truth are all first-class and explicitly related.
 
 The point of the project is not to recreate a conventional IDE in Lisp or to wrap an LLM with shell tools. The point is to let humans and agents inspect and mutate the same running system they are reasoning about while preserving approvals, evidence, incidents, reconciliation, and operator trust.
 
@@ -52,8 +52,13 @@ The codebase is real and usable today. It currently provides:
 - a public service boundary plus JSON CLI surfaces that future UX clients can call without scraping shell output
 - structured tools for files, docs, runtime, processes, git, and patches
 - persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
+- kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming the primary operator reference
+- explicit execution surfaces, shell workspace, governance queue, object browser, and inspector models
+- compatibility execution tracking for hosted process-style capabilities
+- a hostable desktop contract consumed by `sbcl-agent-ux`
+- developer-platform manifests and `.aop` package export, validation, import, activation, install, and applied-profile queries
 
-The project is also intentionally transitional. It is moving from a session-centered composition model toward an environment-centered one, so some compatibility structure still exists in the implementation.
+The project is also intentionally transitional. It is moving from a session-centered composition model toward an environment-centered and execution-kernel-oriented one, so some compatibility structure still exists in the implementation.
 
 ## Documentation
 
@@ -110,6 +115,12 @@ The current architecture is still organized around one rule:
 
 That rule still matters, but it now sits inside a larger framing: the shell, REPL, threads, artifacts, work-items, and agents are all becoming inhabitants of a larger `Environment` object rather than independent top-level concepts.
 
+At the same time, the current refactor is compressing the mutation and inspection boundary toward an execution kernel:
+
+- `invoke` is becoming the mandatory execution entry path
+- `inspect` is becoming the primary read path over execution-backed objects
+- `control` is becoming the governed intervention path for approvals, recovery, compatibility lifecycle, and shell-hosted desktop actions
+
 ## Requirements
 
 - SBCL
@@ -131,8 +142,9 @@ The runtime is still serially loaded through `sbcl-agent.asd`, but responsibilit
 Representative files:
 
 - environment kernel: `src/environment-core.lisp`, `src/environment-sync.lisp`, `src/environment-summary.lisp`, `src/environment-compatibility.lisp`, `src/mutation-engine.lisp`, `src/work-items.lisp`, `src/workflow.lisp`
+- execution kernel: `src/kernel-core.lisp`, `src/kernel-service.lisp`, `src/shell-service.lisp`
 - provider boundary: `src/request-snapshot.lisp`, `src/provider-protocol.lisp`, `src/provider-transport.lisp`, `src/provider-transport-curl.lisp`, `src/provider-openai.lisp`
-- service boundary: `src/environment-service.lisp`, `src/conversation-service.lisp`, `src/runtime-service.lisp`, `src/execution-service.lisp`, `src/session-service.lisp`, `src/rgp-service.lisp`, `src/mutation-review-service.lisp`, `src/task-service.lisp`, `src/worker-service.lisp`, `src/workflow-ops-service.lisp`
+- service boundary: `src/environment-service.lisp`, `src/conversation-service.lisp`, `src/runtime-service.lisp`, `src/execution-service.lisp`, `src/session-service.lisp`, `src/rgp-service.lisp`, `src/mutation-review-service.lisp`, `src/task-service.lisp`, `src/worker-service.lisp`, `src/workflow-ops-service.lisp`, `src/platform-service.lisp`
 - operator shell and entrypoints: `src/shell.lisp`, `src/repl.lisp`, `src/main.lisp`, `bin/sbcl-agent`
 - tests: `tests/smoke.lisp`, `tests/provider-context.lisp`, `tests/service-contracts.lisp`, `tests/test-runner.lisp`
 
@@ -256,6 +268,18 @@ Outside the shell, use the JSON CLI:
 - `./bin/sbcl-agent provider use --profile ...`
 
 Those commands expose the same service-backed provider profile, routing, and route-preview surfaces that a future `sbcl-agent-ux` client should call directly.
+
+## Desktop And Platform Direction
+
+`sbcl-agent-ux` is no longer supposed to reconstruct shell behavior from many unrelated service calls.
+
+The current direction is:
+
+- `sbcl-agent` owns the execution kernel, shell workspace, inspector, governance queue, and desktop host contract
+- `sbcl-agent-ux` consumes that host contract through `desktop/show`, `desktop/action`, and `desktop/restore`
+- the platform layer is beginning to expose installable `.aop` package descriptors and applied active-package profiles
+
+That means the docs should now be read as describing a governed execution environment moving toward `IntentOS`, not merely a better shell.
 
 ## Doctor Command
 

@@ -13,6 +13,13 @@ This document is best read after [The Problem]({{ '/problem.html' | relative_url
 
 Those documents explain why the project exists and what conceptual model it is using. This document defines what success should look like given that model.
 
+For the transition from current system to target system, this document should now be read with:
+
+- [sbcl-agent / sbcl-agent-ux Current-State Gap Analysis]({{ '/agentos-current-state-gap-analysis.html' | relative_url }})
+- [IntentOS Target-State Architecture]({{ '/agentos-target-state-architecture.html' | relative_url }})
+- [IntentOS Constitution]({{ '/intentos-constitution.html' | relative_url }})
+- [IntentOS Requirements]({{ '/intentos-requirements.html' | relative_url }})
+
 ## Primary Objective
 
 Build a persistent, image-native, agentic Common Lisp environment that can inspect and mutate the same live system it is reasoning about while preserving operator trust through explicit approvals, durable evidence, and reproducible source-backed outcomes.
@@ -97,6 +104,13 @@ The current ownership rule is:
 
 That rule still matters, but it is no longer the whole architectural story. The next stage should place those domains inside an Environment object that becomes the top-level architectural container.
 
+The current refactor adds a second architectural objective that now needs to be stated explicitly:
+
+- compress execution under `invoke`
+- compress reads under `inspect`
+- compress intervention under `control`
+- make execution handles and execution surfaces the primary operator references
+
 The rule exists to avoid three common failures:
 
 - interaction history becoming an accidental runtime database
@@ -137,16 +151,23 @@ Work-items, validations, checkpoints, approvals, and reconciliations operate as 
 Near-term success means:
 
 - the docs describe the current runtime honestly
+- the docs describe the current execution-kernel transition honestly
 - the docs explain the problem before the architecture
 - the shell and docs use one consistent vocabulary
 - conversation primitives are documented as implemented, not just planned
+- `sbcl-agent-ux` is described as a host over shell and desktop contracts rather than as an unrelated client
+- the current platform/package lifecycle is described as implemented work rather than only as future intent
 - strengths and weaknesses are stated explicitly
 - the roadmap clearly distinguishes what is live from what is still forthcoming
 
 Longer-term success means:
 
 - a concrete Environment object in the codebase
+- a non-bypassable execution-kernel boundary
 - runtime-native tools for governed image inspection and mutation
+- a first-class shell over execution surfaces
+- compatibility-backed hosted executions treated as governed executions rather than raw process launches
+- a consumable developer platform with package, profile, and SDK semantics
 - richer artifact coverage across mutating workflows
 - stronger crash recovery and resumability
 - clearer workflow linkage for conversational and agent-driven engineering work

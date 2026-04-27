@@ -9,6 +9,7 @@
   (format t "                     Providers: mock, openai-compatible, anthropic, gemini/google, lm-studio, meta-compatible~%")
   (format t "  exec <cmd...>      Run a shell command from the current directory.~%")
   (format t "  provider <subcmd>  Query or mutate provider profiles and routing as JSON service envelopes.~%")
+(format t "  platform <subcmd>  Query developer-platform manifests and export/inspect/validate/import/install/activate/list/profile .aop package descriptors.~%")
   (format t "  rgp <subcommand>   Execute non-interactive governed runtime operations for RGP.~%")
   (format t "  doctor             Print runtime and configuration diagnostics.~%")
   (format t "  help               Show this message.~%"))
@@ -47,6 +48,16 @@
   fast-model
   api-base
   intents)
+
+(defstruct platform-options
+  subcommand
+  environment-path
+  working-directory
+  input-path
+  output-path
+  package-id
+  title
+  capabilities)
 
 (defun normalize-arguments (arguments)
   (if (and arguments (string= (first arguments) "--"))
@@ -169,6 +180,57 @@
                            :fast-model fast-model
                            :api-base api-base
                            :intents intents)))
+
+(defun parse-platform-arguments (arguments)
+  (let ((subcommand (first arguments))
+        (remaining (rest arguments))
+        (environment-path nil)
+        (working-directory nil)
+        (input-path nil)
+        (output-path nil)
+        (package-id nil)
+        (title nil)
+        (capabilities '()))
+    (unless subcommand
+      (error "platform requires a subcommand"))
+    (loop while remaining
+          for argument = (pop remaining)
+          do (cond
+               ((string= argument "--environment")
+                (setf environment-path (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--cwd")
+                    (string= argument "--working-directory"))
+                (setf working-directory (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--input")
+                    (string= argument "--path"))
+                (setf input-path (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--output")
+                    (string= argument "--output-path"))
+                (setf output-path (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--package-id")
+                (setf package-id (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--title")
+                (setf title (require-option-value argument remaining))
+                (pop remaining))
+               ((or (string= argument "--capability")
+                    (string= argument "--capabilities"))
+                (push (parse-rgp-keyword (require-option-value argument remaining)) capabilities)
+                (pop remaining))
+               (t
+                (error "Unknown platform option ~A" argument))))
+    (make-platform-options :subcommand subcommand
+                           :environment-path environment-path
+                           :working-directory working-directory
+                           :input-path input-path
+                           :output-path output-path
+                           :package-id package-id
+                           :title title
+                           :capabilities (nreverse capabilities))))
 
 (defun parse-rgp-arguments (arguments)
   (let ((subcommand (first arguments))
@@ -326,6 +388,13 @@
      (service-response-data (query-rgp-show-service session environment)))
     0))
 
+(defun rgp-command-workspace (options)
+  (let* ((environment (load-or-create-rgp-environment options))
+         (session (environment-session environment)))
+    (write-rgp-result
+     (service-response-data (query-rgp-workspace-service session environment)))
+    0))
+
 (defun rgp-command-export (options)
   (let ((environment (load-or-create-rgp-environment options))
         (session nil)
@@ -401,6 +470,8 @@
        (rgp-command-bind options))
       ((string= subcommand "show")
        (rgp-command-show options))
+      ((string= subcommand "workspace")
+       (rgp-command-workspace options))
       ((string= subcommand "export")
        (rgp-command-export options))
       ((string= subcommand "artifacts")
@@ -491,6 +562,169 @@
       (t
        (error "Unknown provider subcommand ~A" subcommand)))))
 
+(defun load-or-create-platform-environment (options &optional config)
+  (let* ((environment-path (platform-options-environment-path options))
+         (active-config (or config (load-config)))
+         (working-directory (or (platform-options-working-directory options)
+                                (config-working-directory active-config))))
+    (when environment-path
+      (ensure-rgp-path-parent environment-path))
+    (let ((environment (if (and environment-path (probe-file environment-path))
+                           (load-environment environment-path)
+                           (make-default-environment :storage-root working-directory))))
+      (setf *current-environment* environment)
+      (or (environment-session environment)
+          (bind-session-to-environment (make-default-session :cwd working-directory)
+                                       environment))
+      environment)))
+
+(defun persist-platform-environment (environment options)
+  (let ((environment-path (platform-options-environment-path options)))
+    (when environment-path
+      (save-environment environment environment-path)))
+  environment)
+
+(defun platform-command-manifest (options environment)
+  (write-service-result
+   (query-platform-manifest-service :capability-ids (platform-options-capabilities options)
+                                    :environment environment
+                                    :session (environment-session environment)))
+  0)
+
+(defun platform-command-package (options environment)
+  (write-service-result
+   (command-platform-package-service (platform-options-output-path options)
+                                     :package-id (platform-options-package-id options)
+                                     :title (platform-options-title options)
+                                     :capability-ids (platform-options-capabilities options)
+                                     :environment environment
+                                     :session (environment-session environment)))
+  0)
+
+(defun platform-command-show (options environment)
+  (unless (platform-options-input-path options)
+    (error "platform show requires --input"))
+  (write-service-result
+   (query-platform-package-service (platform-options-input-path options)
+                                   :environment environment
+                                   :session (environment-session environment)))
+  0)
+
+(defun platform-command-validate (options environment)
+  (unless (platform-options-input-path options)
+    (error "platform validate requires --input"))
+  (write-service-result
+   (command-platform-validate-package-service (platform-options-input-path options)
+                                              :environment environment
+                                              :session (environment-session environment)))
+  0)
+
+(defun platform-command-import (options environment)
+  (unless (platform-options-input-path options)
+    (error "platform import requires --input"))
+  (let ((response
+          (command-platform-import-package-service (platform-options-input-path options)
+                                                   :environment environment
+                                                   :session (environment-session environment))))
+    (persist-platform-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun platform-command-list (options environment)
+  (declare (ignore options))
+  (write-service-result
+   (query-platform-package-registry-service :environment environment
+                                            :session (environment-session environment)))
+  0)
+
+(defun platform-command-show-imported (options environment)
+  (unless (platform-options-package-id options)
+    (error "platform show-imported requires --package-id"))
+  (write-service-result
+   (query-platform-imported-package-service (platform-options-package-id options)
+                                            :environment environment
+                                            :session (environment-session environment)))
+  0)
+
+(defun platform-command-activate (options environment)
+  (unless (platform-options-package-id options)
+    (error "platform activate requires --package-id"))
+  (let ((response
+          (command-platform-activate-package-service (platform-options-package-id options)
+                                                     :environment environment
+                                                     :session (environment-session environment))))
+    (persist-platform-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun platform-command-deactivate (options environment)
+  (unless (platform-options-package-id options)
+    (error "platform deactivate requires --package-id"))
+  (let ((response
+          (command-platform-deactivate-package-service (platform-options-package-id options)
+                                                       :environment environment
+                                                       :session (environment-session environment))))
+    (persist-platform-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun platform-command-active (options environment)
+  (declare (ignore options))
+  (write-service-result
+   (query-platform-active-packages-service :environment environment
+                                           :session (environment-session environment)))
+  0)
+
+(defun platform-command-profile (options environment)
+  (declare (ignore options))
+  (write-service-result
+   (query-platform-profile-service :environment environment
+                                   :session (environment-session environment)))
+  0)
+
+(defun platform-command-install (options environment)
+  (unless (platform-options-input-path options)
+    (error "platform install requires --input"))
+  (let ((response
+          (command-platform-install-package-service (platform-options-input-path options)
+                                                    :environment environment
+                                                    :session (environment-session environment))))
+    (persist-platform-environment environment options)
+    (write-service-result response))
+  0)
+
+(defun platform-command (config arguments)
+  (let* ((options (parse-platform-arguments arguments))
+         (subcommand (string-downcase (platform-options-subcommand options)))
+         (environment (load-or-create-platform-environment options config)))
+    (cond
+      ((string= subcommand "manifest")
+       (platform-command-manifest options environment))
+      ((string= subcommand "package")
+       (platform-command-package options environment))
+      ((string= subcommand "show")
+       (platform-command-show options environment))
+      ((string= subcommand "validate")
+       (platform-command-validate options environment))
+      ((string= subcommand "import")
+       (platform-command-import options environment))
+      ((string= subcommand "list")
+       (platform-command-list options environment))
+      ((string= subcommand "show-imported")
+       (platform-command-show-imported options environment))
+      ((string= subcommand "activate")
+       (platform-command-activate options environment))
+      ((string= subcommand "deactivate")
+       (platform-command-deactivate options environment))
+      ((string= subcommand "active")
+       (platform-command-active options environment))
+      ((string= subcommand "profile")
+       (platform-command-profile options environment))
+      ((string= subcommand "install")
+       (platform-command-install options environment))
+      (t
+       (error "Unknown platform subcommand ~A" subcommand)))))
+
 (defun session-for-chat-config (config)
   (configure-retrieval-ranking-mode (config-retrieval-ranking-mode config))
   (let ((environment (or *current-environment*
@@ -517,62 +751,123 @@
                                (query-environment-summary-service environment)))
          (session-summary (service-response-data
                            (query-session-summary-service session)))
+         (task-summaries (service-response-data
+                          (query-task-list-service session)))
+         (worker-summaries (service-response-data
+                            (query-worker-list-service session)))
          (artifact-summary (getf environment-summary :artifact-summary))
          (replay-groups (service-response-data
                          (query-replay-groups-service session)))
          (image-reconciliations (service-response-data
                                  (query-image-reconciliations-service session))))
-    (format t "Runtime: SBCL~%")
-    (format t "Environment id: ~A~%" (environment-id environment))
-    (format t "Provider: ~A~%" (config-provider config))
-    (format t "Model: ~A~%" (config-model config))
-    (format t "Fast model: ~A~%" (config-fast-model config))
-    (let ((provider-profile (getf environment-summary :provider-profile)))
-      (format t "Active provider profile: ~A~%"
-              (or (getf provider-profile :active-profile-name) "<none>"))
-      (format t "Provider profiles configured: ~D~%"
-              (or (getf provider-profile :profile-count) 0)))
-    (format t "Retrieval ranking mode: ~A~%" (config-retrieval-ranking-mode config))
-    (format t "Working directory: ~A~%" (config-working-directory config))
-    (format t "Shell package: ~A~%" (package-name *shell-package*))
-    (format t "Session id: ~A~%" (agent-session-id session))
-    (format t "Active runtime id: ~A~%" (environment-active-runtime-id environment))
-    (format t "Environment events: ~D~%" (getf environment-summary :event-count))
-    (format t "Session plan: ~A~%" (or (getf session-summary :plan) "<none>"))
-    (format t "Pending assistant actions: ~D~%" (or (getf session-summary :pending-action-count) 0))
-    (format t "Queued tasks: ~D~%" (count :queued (agent-session-tasks session) :key #'task-status))
-    (format t "Work items: ~D~%" (getf environment-summary :work-item-count))
-    (format t "Artifacts: ~D~%" (getf environment-summary :artifact-count))
-    (format t "Artifact evidence: ~S~%" artifact-summary)
-    (format t "Workflow records: ~D~%" (getf (getf environment-summary :workflow-state) :workflow-record-count))
-    (let ((wait-summary (getf session-summary :wait-summary))
-          (operator-status (getf environment-summary :operator-status))
-          (incident-summary (getf environment-summary :incident-summary))
-          (active-worker-count (or (getf session-summary :active-worker-count) 0)))
-      (format t "Blocked work items: ~D~%" (getf wait-summary :blocked-count))
-      (format t "Blocked summary: ~S~%" (getf wait-summary :by-reason))
-      (format t "Operator status: ready=~D blocked=~D quarantined=~D image-only=~D durable=~D incidents=~D open-incidents=~D~%"
-              (getf operator-status :ready-count)
-              (getf operator-status :blocked-count)
-              (getf operator-status :quarantined-count)
-              (getf operator-status :image-only-count)
-              (getf operator-status :durable-count)
-              (getf operator-status :incident-count)
-              (getf operator-status :open-incident-count))
-      (format t "Incidents: total=~D open=~D~%"
-              (getf incident-summary :count)
-              (getf incident-summary :open-count))
-      (format t "Validator replay groups: ~D~%" (length replay-groups))
-      (format t "Image reconciliations: ~D~%" (length image-reconciliations))
-      (format t "Active workers: ~D~%" active-worker-count))
-    (format t "Approved policies: ~S~%" (getf session-summary :approved-policies))
-    (format t "Capability grants: ~S~%" (getf session-summary :capability-grants))
-    (format t "Sandbox profiles: ~S~%" (mapcar #'sandbox-profile-id *sandbox-profiles*))
-    (format t "Git tools registered: ~:[no~;yes~]~%"
-            (and (find-tool :git/status) (find-tool :git/commit)))
-    (format t "API base configured: ~:[no~;yes~]~%" (not (null (config-api-base config))))
-    (format t "API key present: ~:[no~;yes~]~%" (config-api-key-present-p config))
-    0))
+    (labels ((render-open-handoff (label command)
+               (when command
+                 (format t "~A: ~A~%" label command)))
+             (surface-open-command (surface)
+               (let ((execution-id (and surface (getf surface :execution-id))))
+                 (when execution-id
+                   (format nil "(open :execution-id ~S)" execution-id))))
+             (doctor-object-open-command (object-kind)
+               (format nil "(open :object-kind ~S :object-index 0)" object-kind))
+             (doctor-governance-open-command ()
+               "(open :governance-index 0)"))
+      (format t "Runtime: SBCL~%")
+      (format t "Environment id: ~A~%" (environment-id environment))
+      (format t "Provider: ~A~%" (config-provider config))
+      (format t "Model: ~A~%" (config-model config))
+      (format t "Fast model: ~A~%" (config-fast-model config))
+      (let ((provider-profile (getf environment-summary :provider-profile)))
+        (format t "Active provider profile: ~A~%"
+                (or (getf provider-profile :active-profile-name) "<none>"))
+        (format t "Provider profiles configured: ~D~%"
+                (or (getf provider-profile :profile-count) 0)))
+      (format t "Retrieval ranking mode: ~A~%" (config-retrieval-ranking-mode config))
+      (format t "Working directory: ~A~%" (config-working-directory config))
+      (format t "Shell package: ~A~%" (package-name *shell-package*))
+      (format t "Session id: ~A~%" (agent-session-id session))
+      (format t "Active runtime id: ~A~%" (environment-active-runtime-id environment))
+      (format t "Environment events: ~D~%" (getf environment-summary :event-count))
+      (format t "Session plan: ~A~%" (or (getf session-summary :plan) "<none>"))
+      (format t "Pending assistant actions: ~D~%" (or (getf session-summary :pending-action-count) 0))
+      (format t "Queued tasks: ~D~%" (count :queued (agent-session-tasks session) :key #'task-status))
+      (format t "Work items: ~D~%" (getf environment-summary :work-item-count))
+      (format t "Artifacts: ~D~%" (getf environment-summary :artifact-count))
+      (format t "Artifact evidence: ~S~%" artifact-summary)
+      (format t "Workflow records: ~D~%"
+              (getf (getf environment-summary :workflow-state) :workflow-record-count))
+      (let ((wait-summary (getf session-summary :wait-summary))
+            (operator-status (getf environment-summary :operator-status))
+            (incident-summary (getf environment-summary :incident-summary))
+            (active-worker-count (or (getf session-summary :active-worker-count) 0))
+            (blocked-surfaces (getf session-summary :blocked-work-surfaces))
+            (approval-surfaces (getf session-summary :approval-surfaces))
+            (task-top-surface (and task-summaries
+                                   (getf (first task-summaries) :execution-surface)))
+            (worker-top-surface (and worker-summaries
+                                     (getf (first worker-summaries) :execution-surface))))
+        (format t "Blocked work items: ~D~%" (getf wait-summary :blocked-count))
+        (format t "Blocked summary: ~S~%" (getf wait-summary :by-reason))
+        (format t "Blocked surfaces: ~D~%" (or (getf blocked-surfaces :count) 0))
+        (when (getf blocked-surfaces :top-surface)
+          (let ((surface (getf blocked-surfaces :top-surface)))
+            (format t "Blocked top surface: kind=~A status=~A exec=~A~%"
+                    (or (getf surface :surface-kind) :none)
+                    (or (getf surface :status) :unknown)
+                    (or (getf surface :execution-id) :none))
+            (render-open-handoff "Blocked open"
+                                 (or (surface-open-command surface)
+                                     (doctor-governance-open-command)))))
+        (format t "Approval surfaces: ~D~%" (or (getf approval-surfaces :count) 0))
+        (when (getf approval-surfaces :top-surface)
+          (let ((surface (getf approval-surfaces :top-surface)))
+            (format t "Approval top surface: kind=~A status=~A exec=~A~%"
+                    (or (getf surface :surface-kind) :none)
+                    (or (getf surface :status) :unknown)
+                    (or (getf surface :execution-id) :none))
+            (render-open-handoff "Approval open"
+                                 (or (surface-open-command surface)
+                                     (doctor-governance-open-command)))))
+        (format t "Operator status: ready=~D blocked=~D quarantined=~D image-only=~D durable=~D incidents=~D open-incidents=~D~%"
+                (getf operator-status :ready-count)
+                (getf operator-status :blocked-count)
+                (getf operator-status :quarantined-count)
+                (getf operator-status :image-only-count)
+                (getf operator-status :durable-count)
+                (getf operator-status :incident-count)
+                (getf operator-status :open-incident-count))
+        (format t "Incidents: total=~D open=~D~%"
+                (getf incident-summary :count)
+                (getf incident-summary :open-count))
+        (format t "Validator replay groups: ~D~%" (length replay-groups))
+        (format t "Image reconciliations: ~D~%" (length image-reconciliations))
+        (format t "Active workers: ~D~%" active-worker-count)
+        (format t "Task surfaces: ~D~%" (length (or task-summaries '())))
+        (when task-top-surface
+          (format t "Task top surface: kind=~A status=~A exec=~A~%"
+                  (or (getf task-top-surface :surface-kind) :none)
+                  (or (getf task-top-surface :status) :unknown)
+                  (or (getf task-top-surface :execution-id) :none))
+          (render-open-handoff "Task open"
+                               (or (surface-open-command task-top-surface)
+                                   (doctor-object-open-command :task))))
+        (format t "Worker surfaces: ~D~%" (length (or worker-summaries '())))
+        (when worker-top-surface
+          (format t "Worker top surface: kind=~A status=~A exec=~A~%"
+                  (or (getf worker-top-surface :surface-kind) :none)
+                  (or (getf worker-top-surface :status) :unknown)
+                  (or (getf worker-top-surface :execution-id) :none))
+          (render-open-handoff "Worker open"
+                               (or (surface-open-command worker-top-surface)
+                                   (doctor-object-open-command :worker)))))
+      (format t "Approved policies: ~S~%" (getf session-summary :approved-policies))
+      (format t "Capability grants: ~S~%" (getf session-summary :capability-grants))
+      (format t "Sandbox profiles: ~S~%" (mapcar #'sandbox-profile-id *sandbox-profiles*))
+      (format t "Git tools registered: ~:[no~;yes~]~%"
+              (and (find-tool :git/status) (find-tool :git/commit)))
+      (format t "API base configured: ~:[no~;yes~]~%"
+              (not (null (config-api-base config))))
+      (format t "API key present: ~:[no~;yes~]~%" (config-api-key-present-p config))
+      0)))
 
 (defun exec-command (arguments)
   (unless arguments
@@ -597,6 +892,8 @@
        (doctor-command config))
       ((string= command "provider")
        (provider-command config (rest arguments)))
+      ((string= command "platform")
+       (platform-command config (rest arguments)))
       ((string= command "rgp")
        (rgp-command config (rest arguments)))
       ((string= command "chat")

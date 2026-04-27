@@ -596,11 +596,93 @@
                                                                   :read-model :environment-summary-v1
                                                                   :environment active-environment))))
 
+(defun blocked-work-item-summary-p (summary)
+  (or (member (getf summary :status)
+              '(:awaiting-approval :quarantined :awaiting-cold-validation
+                :failed :rolled-back)
+              :test #'eq)
+      (member (getf summary :why)
+              '(:approval-required :cold-validation-required
+                :pending-validation :operator-review-required)
+              :test #'eq)))
+
+(defun approval-work-item-summary-p (summary)
+  (or (eq (getf summary :status) :awaiting-approval)
+      (eq (getf summary :why) :approval-required)))
+
+(defun compact-work-item-surface-summary (session summary &optional environment)
+  (let* ((work-item-id (or (getf summary :id)
+                           (getf summary :work-item-id)))
+         (work-item (and session
+                         work-item-id
+                         (find-work-item session work-item-id)))
+         (title (or (getf summary :goal)
+                    (and work-item (work-item-goal work-item))
+                    "Governed work item"))
+         (status (or (getf summary :status)
+                     (and work-item (work-item-status work-item))
+                     :blocked))
+         (handles (kernel-execution-summaries-by-target :work-item-id
+                                                        work-item-id
+                                                        environment))
+         (surface (or (primary-execution-surface-summary session
+                                                         handles
+                                                         :environment environment)
+                      (list :surface-id (format nil "surface-work-item-~A" work-item-id)
+                            :surface-kind "governed-work"
+                            :attention-rank 1
+                            :execution-id nil
+                            :title title
+                            :status status
+                            :object-kind "work-item"
+                            :work-item-id work-item-id
+                            :primary-execution-handle (first handles)))))
+    (compact-execution-surface-summary surface)))
+
+(defun compact-work-item-surfaces-data (session summaries filter &optional environment)
+  (let* ((items (mapcar (lambda (summary)
+                          (compact-work-item-surface-summary session summary environment))
+                        summaries))
+         (top-surface (first items)))
+    (list :count (length items)
+          :top-surface top-surface
+          :items items
+          :filter filter)))
+
 (defun query-environment-status-service (&optional environment)
-  (let ((active-environment (ensure-environment environment)))
+  (let* ((active-environment (ensure-environment environment))
+         (session (environment-session active-environment))
+         (base-status (environment-status active-environment))
+         (execution-surfaces (and session
+                                  (service-response-data
+                                   (query-execution-surfaces-service
+                                    session
+                                    :environment active-environment))))
+         (blocked-work-items (remove-if-not #'blocked-work-item-summary-p
+                                            (or (getf (getf base-status :blocked-work) :items)
+                                                '())))
+         (approval-work-items (remove-if-not #'approval-work-item-summary-p
+                                             blocked-work-items))
+         (status-data (append base-status
+                              (list :execution-surfaces
+                                    (and execution-surfaces
+                                         (compact-execution-surfaces-data
+                                          execution-surfaces))
+                                    :blocked-work-surfaces
+                                    (compact-work-item-surfaces-data
+                                     session
+                                     blocked-work-items
+                                     '(:queue :blocked-work)
+                                     active-environment)
+                                    :approval-surfaces
+                                    (compact-work-item-surfaces-data
+                                     session
+                                     approval-work-items
+                                     '(:queue :approvals)
+                                     active-environment)))))
     (make-service-query-response :environment
                                  :status
-                                 (environment-status active-environment)
+                                 status-data
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :environment-status-v1
                                                                   :environment active-environment))))

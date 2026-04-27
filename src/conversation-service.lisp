@@ -53,10 +53,15 @@
                                                                 :thread-id thread-id)))
 
 (defun query-conversation-turn-detail-service (session &optional turn-id)
-  (make-service-query-response :conversation
-                               :turn-detail
-                               (turn-detail session turn-id)
-                               :metadata (make-service-metadata :authority :environment
-                                                                :read-model :turn-detail-v1
-                                                                :session session
-                                                                :turn-id turn-id)))
+  (let* ((detail (turn-detail session turn-id))
+         (surface (compact-execution-surface-summary
+                   (primary-execution-surface-summary session
+                                                     (getf detail :execution-handles)))))
+    (make-service-query-response :conversation
+                                 :turn-detail
+                                 (append detail
+                                         (list :execution-surface surface))
+                                 :metadata (make-service-metadata :authority :environment
+                                                                  :read-model :turn-detail-v1
+                                                                  :session session
+                                                                  :turn-id turn-id))))

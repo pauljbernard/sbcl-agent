@@ -465,34 +465,71 @@
                                          completed-turn)))))
 
 (defun command-invoke-tool-service (session tool-id tool-args &key thread turn operation)
-  (make-service-command-response :execution
-                                 :tool
-                                 (let ((*runtime-governance-thread* thread)
-                                       (*runtime-governance-turn* turn)
-                                       (*runtime-governance-operation* operation))
-                                   (declare (special *runtime-governance-thread*
-                                                     *runtime-governance-turn*
-                                                     *runtime-governance-operation*))
-                                   (apply #'invoke-tool tool-id session tool-args))
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :tool-execution-v1
-                                                                  :session session
-                                                                  :thread-id (and thread (thread-id thread))
-                                                                  :turn-id (and turn (turn-id turn)))))
+  (let* ((base-compatibility-target (tool-compatibility-target tool-id session tool-args))
+         (result (let ((*runtime-governance-thread* thread)
+                       (*runtime-governance-turn* turn)
+                       (*runtime-governance-operation* operation))
+                   (declare (special *runtime-governance-thread*
+                                     *runtime-governance-turn*
+                                     *runtime-governance-operation*))
+                   (apply #'invoke-tool tool-id session tool-args)))
+         (compatibility-target
+           (and base-compatibility-target
+                (append (copy-list base-compatibility-target)
+                        (when (getf result :control-token)
+                          (list :control-token (getf result :control-token)))
+                        (when (getf result :pid)
+                          (list :pid (getf result :pid)))
+                        (when (getf result :registered-at)
+                          (list :registered-at (getf result :registered-at)))
+                        (when (getf result :status)
+                          (list :status (getf result :status)
+                                :last-observed-status (getf result :status)
+                                :last-status-change-at (get-universal-time)))
+                        (when (eq tool-id :proc/spawn)
+                          (list :execution-mode :detached)))))
+         (payload (if compatibility-target
+                      (append (copy-list result)
+                              (list :compatibility-target compatibility-target))
+                      result)))
+    (kernelize-service-command-response
+     (make-service-command-response :execution
+                                    :tool
+                                    payload
+                                    :metadata (make-service-metadata :authority :environment
+                                                                     :command-model :tool-execution-v1
+                                                                     :session session
+                                                                     :thread-id (and thread (thread-id thread))
+                                                                     :turn-id (and turn (turn-id turn))))
+   :session session
+   :intention (format nil "Invoke tool ~A." tool-id)
+   :capability (kernel-tool-capability-id tool-id)
+   :authority :environment
+   :context (list :thread-id (and thread (thread-id thread))
+                  :turn-id (and turn (turn-id turn))
+                  :tool-arguments tool-args))))
 
 (defun command-apply-patch-service (session operations &key thread turn operation)
-  (make-service-command-response :execution
-                                 :patch
-                                 (apply-patch-operations session
-                                                         operations
-                                                         :thread thread
-                                                         :turn turn
-                                                         :operation operation)
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :patch-execution-v1
-                                                                  :session session
-                                                                  :thread-id (and thread (thread-id thread))
-                                                                  :turn-id (and turn (turn-id turn)))))
+  (kernelize-service-command-response
+   (make-service-command-response :execution
+                                  :patch
+                                  (apply-patch-operations session
+                                                          operations
+                                                          :thread thread
+                                                          :turn turn
+                                                          :operation operation)
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :command-model :patch-execution-v1
+                                                                   :session session
+                                                                   :thread-id (and thread (thread-id thread))
+                                                                   :turn-id (and turn (turn-id turn))))
+   :session session
+   :intention "Apply a governed patch to the workspace."
+   :capability :workspace/patch
+   :authority :workspace-write
+   :context (list :thread-id (and thread (thread-id thread))
+                  :turn-id (and turn (turn-id turn))
+                  :operation operation)))
 
 (defun command-conversation-execution-service (session provider prompt options
                                                 &key (source :say) (operator-mode :conversation))
@@ -501,13 +538,21 @@
         (let* ((task-form (execution-task-form source prompt options))
                (command (normalize-form-command task-form))
                (task (enqueue-task session command :payload task-form)))
-          (make-service-command-response :execution
-                                         source
-                                         (list :queued-task (task-summary task)
-                                               :enqueued-p t)
-                                         :metadata (make-service-metadata :authority :environment
-                                                                          :command-model :conversation-execution-v1
-                                                                          :session session)))
+          (kernelize-service-command-response
+           (make-service-command-response :execution
+                                          source
+                                          (list :queued-task (task-summary task)
+                                                :enqueued-p t)
+                                          :metadata (make-service-metadata :authority :environment
+                                                                           :command-model :conversation-execution-v1
+                                                                           :session session))
+           :session session
+           :intention prompt
+           :capability (ecase source
+                         (:ask :conversation/ask)
+                         (:say :conversation/say))
+           :authority operator-mode
+           :context (list :enqueue-p t :operator-mode operator-mode)))
         (let ((direct-runtime-eval (resolve-conversation-runtime-eval-form session prompt)))
           (if direct-runtime-eval
               (let ((result (run-direct-conversation-runtime-eval session
@@ -516,16 +561,22 @@
                                                                   (getf direct-runtime-eval :reason)
                                                                   :source source
                                                                   :operator-mode operator-mode)))
-                (make-service-command-response :execution
-                                               source
-                                               result
-                                               :metadata (make-service-metadata :authority :environment
-                                                                                :command-model :conversation-execution-v1
-                                                                                :session session
-                                                                                :thread-id (getf (getf result :thread) :id)
-                                                                                :turn-id (getf (getf result :turn) :id)
-                                                                                :runtime-id (default-runtime-id)
-                                                                                :policy-id :runtime-eval-safe)))
+                (kernelize-service-command-response
+                 (make-service-command-response :execution
+                                                source
+                                                result
+                                                :metadata (make-service-metadata :authority :environment
+                                                                                 :command-model :conversation-execution-v1
+                                                                                 :session session
+                                                                                 :thread-id (getf (getf result :thread) :id)
+                                                                                 :turn-id (getf (getf result :turn) :id)
+                                                                                 :runtime-id (default-runtime-id)
+                                                                                 :policy-id :runtime-eval-safe))
+                 :session session
+                 :intention prompt
+                 :capability :runtime/eval
+                 :authority operator-mode
+                 :constraints (list :direct-runtime-eval-p t :policy-id :runtime-eval-safe)))
               (let* ((stream-p (or (and (option-present-p options :stream)
                                         (plist-value options :stream nil))
                                    *default-ask-streaming*
@@ -536,28 +587,44 @@
                                                    :stream-p stream-p
                                                    :source source
                                                    :operator-mode operator-mode)))
-                (make-service-command-response :execution
-                                               source
-                                               result
-                                               :metadata (make-service-metadata :authority :environment
-                                                                                :command-model :conversation-execution-v1
-                                                                                :session session
-                                                                                :thread-id (getf (getf result :thread) :id)
-                                                                                :turn-id (getf (getf result :turn) :id)))))))))
+                (kernelize-service-command-response
+                 (make-service-command-response :execution
+                                                source
+                                                result
+                                                :metadata (make-service-metadata :authority :environment
+                                                                                 :command-model :conversation-execution-v1
+                                                                                 :session session
+                                                                                 :thread-id (getf (getf result :thread) :id)
+                                                                                 :turn-id (getf (getf result :turn) :id)))
+                 :session session
+                 :intention prompt
+                 :capability (ecase source
+                               (:ask :conversation/ask)
+                               (:say :conversation/say))
+                 :authority operator-mode
+                 :context (list :stream-p stream-p :operator-mode operator-mode))))))))
 
 (defun command-execute-assistant-action-service (session action &key thread turn operation)
-  (make-service-command-response :execution
-                                 :assistant-action
-                                 (execute-assistant-action action
-                                                          session
-                                                          :thread thread
-                                                          :turn turn
-                                                          :operation operation)
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :assistant-action-execution-v1
-                                                                  :session session
-                                                                  :thread-id (and thread (thread-id thread))
-                                                                  :turn-id (and turn (turn-id turn)))))
+  (kernelize-service-command-response
+   (make-service-command-response :execution
+                                  :assistant-action
+                                  (execute-assistant-action action
+                                                           session
+                                                           :thread thread
+                                                           :turn turn
+                                                           :operation operation)
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :command-model :assistant-action-execution-v1
+                                                                   :session session
+                                                                   :thread-id (and thread (thread-id thread))
+                                                                   :turn-id (and turn (turn-id turn))))
+   :session session
+   :intention "Execute a staged assistant action."
+   :capability :assistant/action
+   :authority :environment
+   :context (list :thread-id (and thread (thread-id thread))
+                  :turn-id (and turn (turn-id turn))
+                  :operation operation)))
 
 (defun command-execute-pending-actions-service (session &key thread turn operation)
   (let ((actions (agent-session-pending-actions session)))
@@ -569,11 +636,19 @@
                                                   :turn turn
                                                   :operation operation)))
       (clear-pending-actions session)
-      (make-service-command-response :execution
-                                     :pending-actions
-                                     results
-                                     :metadata (make-service-metadata :authority :environment
-                                                                      :command-model :assistant-action-execution-v1
-                                                                      :session session
-                                                                      :thread-id (and thread (thread-id thread))
-                                                                      :turn-id (and turn (turn-id turn)))))))
+      (kernelize-service-command-response
+       (make-service-command-response :execution
+                                      :pending-actions
+                                      results
+                                      :metadata (make-service-metadata :authority :environment
+                                                                       :command-model :assistant-action-execution-v1
+                                                                       :session session
+                                                                       :thread-id (and thread (thread-id thread))
+                                                                       :turn-id (and turn (turn-id turn))))
+       :session session
+       :intention "Execute all currently staged pending actions."
+       :capability :assistant/pending-actions
+       :authority :environment
+       :context (list :thread-id (and thread (thread-id thread))
+                      :turn-id (and turn (turn-id turn))
+                      :operation operation)))))

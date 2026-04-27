@@ -79,34 +79,50 @@
                                                                 :runtime-id (default-runtime-id))))
 
 (defun command-runtime-set-package-service (session package-name)
-  (make-service-command-response :runtime
-                                 :set-package
-                                 (tool-runtime-set-package session :package package-name)
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :runtime-command-v1
-                                                                  :session session
-                                                                  :runtime-id (default-runtime-id)
-                                                                  :policy-id :runtime-package-switch)))
+  (kernelize-service-command-response
+   (make-service-command-response :runtime
+                                  :set-package
+                                  (tool-runtime-set-package session :package package-name)
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :command-model :runtime-command-v1
+                                                                   :session session
+                                                                   :runtime-id (default-runtime-id)
+                                                                   :policy-id :runtime-package-switch))
+   :session session
+   :intention (format nil "Set the active runtime package to ~A." package-name)
+   :capability :runtime/set-package
+   :authority :runtime))
 
 (defun command-runtime-eval-service (session form-or-source &key package mutating)
-  (make-service-command-response :runtime
-                                 :eval
-                                 (tool-runtime-eval session
-                                                    :form form-or-source
-                                                    :package package
-                                                    :mutating mutating)
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :runtime-command-v1
-                                                                  :session session
-                                                                  :runtime-id (default-runtime-id)
-                                                                  :policy-id (runtime-eval-policy-id mutating))))
+  (kernelize-service-command-response
+   (make-service-command-response :runtime
+                                  :eval
+                                  (tool-runtime-eval session
+                                                     :form form-or-source
+                                                     :package package
+                                                     :mutating mutating)
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :command-model :runtime-command-v1
+                                                                   :session session
+                                                                   :runtime-id (default-runtime-id)
+                                                                   :policy-id (runtime-eval-policy-id mutating)))
+   :session session
+   :intention (format nil "Evaluate ~A in the live runtime.~@[ Package: ~A.~]" form-or-source package)
+   :capability :runtime/eval
+   :authority (if mutating :governed-runtime :runtime)
+   :constraints (list :mutating mutating :package package)))
 
 (defun command-runtime-reload-file-service (session path)
-  (make-service-command-response :runtime
-                                 :reload-file
-                                 (tool-runtime-reload-file session :path path)
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :command-model :runtime-command-v1
-                                                                  :session session
-                                                                  :runtime-id (default-runtime-id)
-                                                                  :policy-id :runtime-reload)))
+  (kernelize-service-command-response
+   (make-service-command-response :runtime
+                                  :reload-file
+                                  (tool-runtime-reload-file session :path path)
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :command-model :runtime-command-v1
+                                                                   :session session
+                                                                   :runtime-id (default-runtime-id)
+                                                                   :policy-id :runtime-reload))
+   :session session
+   :intention (format nil "Reload ~A into the live runtime." path)
+   :capability :runtime/reload-file
+   :authority :governed-runtime))

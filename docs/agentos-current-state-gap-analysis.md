@@ -1,10 +1,14 @@
-# sbcl-agent / sbcl-agent-ux – Current-State Architecture Assessment
+# sbcl-agent / sbcl-agent-ux – Historical Baseline Architecture Assessment
 
-## Current-State Architecture Diagram
+## Historical Baseline Diagram
 
-![sbcl-agent / sbcl-agent-ux current-state architecture diagram](assets/sbcl-agent-current-state-architecture-diagram.png)
+![sbcl-agent / sbcl-agent-ux historical baseline architecture diagram](assets/sbcl-agent-current-state-architecture-diagram.png)
 
 ## Executive Summary
+
+This page is now historical context, not the authoritative description of the current implementation.
+
+Use [IntentOS Target Architecture]({{ '/agentos-target-state-architecture.html' | relative_url }}) as the primary current-state architecture reference. This page remains useful because it shows the older baseline that the implementation program was refactoring away from.
 
 The current system consists of:
 
@@ -19,7 +23,7 @@ sbcl-agent-ux
   → application-level interface
 ```
 
-This now represents an implemented execution-kernel environment and hosted UX rather than an advanced runtime that is still missing its architectural center.
+That baseline has since been materially superseded. The repository now represents an implemented execution-kernel environment and hosted UX rather than an advanced runtime that is still missing its architectural center.
 
 The earlier target-state gap program is now closed at the accepted architecture level. The right remaining questions are:
 - how realistic the runtime backends are

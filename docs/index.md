@@ -35,22 +35,22 @@ If you are new to the project, read in this order:
 
 Then use the roadmap and transition documents as enhancement and evolution context rather than as explanations of still-missing core architecture.
 
-## Current And Target Architecture
+## Historical Baseline And Current Target
 
-The transition is easiest to understand if you look at the current and target architecture in sequence:
+The historical transition is easiest to understand if you look at the older baseline diagram next to the accepted target architecture that now describes the implemented system:
 
 <div class="card-grid">
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html">
-    <div class="card-title">Current-State Architecture</div>
-    <p>The current governed-runtime and desktop-host shape of `sbcl-agent` and `sbcl-agent-ux`.</p>
-    <img src="https://pauljbernard.github.io/sbcl-agent/assets/sbcl-agent-current-state-architecture-diagram.png" alt="Current-state architecture diagram for sbcl-agent and sbcl-agent-ux" style="display: block; width: 100%; height: auto;">
+    <div class="card-title">Historical Baseline Architecture</div>
+    <p>The earlier pre-closure baseline used to explain what `sbcl-agent` and `sbcl-agent-ux` looked like before the target architecture was substantially implemented.</p>
+    <img src="https://pauljbernard.github.io/sbcl-agent/assets/sbcl-agent-current-state-architecture-diagram.png" alt="Historical baseline architecture diagram for sbcl-agent and sbcl-agent-ux" style="display: block; width: 100%; height: auto;">
   </a>
 </div>
 
 <div class="card-grid">
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
     <div class="card-title">IntentOS Target Architecture</div>
-    <p>The target execution-kernel architecture with `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers.</p>
+    <p>The execution-kernel architecture that now serves as the authoritative description of the implemented system: `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers.</p>
     <img src="https://pauljbernard.github.io/sbcl-agent/assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram" style="display: block; width: 100%; height: auto;">
   </a>
 </div>
@@ -179,8 +179,8 @@ The transition is easiest to understand if you look at the current and target ar
     <p>The architecture-level validation plan for proving kernel invariants, execution handles, shell coherence, and compatibility containment.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html">
-    <div class="card-title">Current-State Gap Analysis</div>
-    <p>A current-state architecture assessment of the implemented runtime, shell, UX host, compatibility, and platform layers, plus the remaining enhancement tracks beyond target-architecture closure.</p>
+    <div class="card-title">Historical Baseline Assessment</div>
+    <p>The older baseline diagram and the accompanying explanation of how that baseline maps to the enhancement and hardening questions that remain after target-architecture closure.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
     <div class="card-title">IntentOS Target Architecture</div>

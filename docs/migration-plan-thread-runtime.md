@@ -105,7 +105,7 @@ Remaining:
 
 ### Phase 4. Governed runtime operations
 
-Status: materially implemented, still expandable
+Status: implemented, still expandable
 
 Target:
 

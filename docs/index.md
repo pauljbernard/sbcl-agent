@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent is now a real SBCL-native shell, environment-centered runtime, governed workflow substrate, retrieval-and-cognition loop, execution-kernel refactor, compatibility-execution host, and service-backed provider/router surface. It is still evolving, but it is materially beyond a shell-plus-tools prototype and is now visibly moving toward the IntentOS execution-kernel target.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent now has the accepted IntentOS target architecture in code: an SBCL-native execution kernel with <code>invoke</code>, <code>inspect</code>, and <code>control</code>; governed execution handles and execution surfaces; a compatibility kernel with Linux app manifests, lifecycle, and display bridging; a shell/desktop host contract; and a real developer-platform package layer. The current program is now enhancement, hardening, and backend evolution rather than target-architecture gap closure.</div>
 
 <div class="quick-links">
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/problem.html"><strong>The Problem</strong>Understand why the old model worked, why it now constrains understanding, and why this project exists.</a>
@@ -33,7 +33,7 @@ If you are new to the project, read in this order:
 8. [User Guide](https://pauljbernard.github.io/sbcl-agent/user-guide.html)
 9. [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html)
 
-Then use the roadmap and transition documents as forward-looking context rather than entry points.
+Then use the roadmap and transition documents as enhancement and evolution context rather than as explanations of still-missing core architecture.
 
 ## Current And Target Architecture
 
@@ -180,7 +180,7 @@ The transition is easiest to understand if you look at the current and target ar
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html">
     <div class="card-title">Current-State Gap Analysis</div>
-    <p>A current-state assessment of what sbcl-agent already is, what it is not yet, and the structural gaps between a governed runtime and an operating system.</p>
+    <p>A current-state architecture assessment of the implemented runtime, shell, UX host, compatibility, and platform layers, plus the remaining enhancement tracks beyond target-architecture closure.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
     <div class="card-title">IntentOS Target Architecture</div>
@@ -188,7 +188,7 @@ The transition is easiest to understand if you look at the current and target ar
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-implementation-plan.html">
     <div class="card-title">IntentOS Implementation Plan</div>
-    <p>The phased refactoring plan for moving from the current governed runtime toward a minimal, governed execution-kernel operating system.</p>
+    <p>The completed architecture program and the remaining enhancement tracks beyond initial target-state attainment.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/rgp-sbcl-agent-event-contract.html">
     <div class="card-title">RGP-sbcl-agent Event Contract</div>
@@ -229,11 +229,11 @@ The transition is easiest to understand if you look at the current and target ar
 - direct Lisp control, conversation, and governed workflow as coexisting interaction modes
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
-- stable public service interfaces and non-shell JSON CLI surfaces for future UX integration
+- stable public service interfaces and non-shell JSON CLI surfaces for shell, desktop, and external clients
 - kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming first-class operator references
 - execution surfaces, workspace, governance queue, object browser, and inspector shell models
 - a hostable desktop contract for `sbcl-agent-ux` through `desktop/show`, `desktop/action`, and `desktop/restore`
-- compatibility execution tracking and lifecycle posture for hosted process-style capabilities
+- compatibility execution tracking and lifecycle posture for Linux app and tool-backed governed executions
 - developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activation, install, and applied-profile inspection
 
 ## Strengths
@@ -245,17 +245,17 @@ The current implementation is strongest where the code and the documentation now
 - it preserves explicit governance concepts such as approvals, incidents, work-items, and workflow records
 - it already supports durable conversational turns instead of one-shot prompt/response behavior
 - it now has a real execution-kernel seam rather than only service-local mutation rules
-- it now has a thin-host desktop direction instead of requiring a future UX to reconstruct navigation from raw service fragments
+- it now has a thin-host desktop model that `sbcl-agent-ux` consumes directly through the shell desktop contract
 
 ## Weaknesses
 
 The current implementation is also honestly transitional:
 
 - some compatibility-session structure still exists alongside the stronger environment model
-- the environment-native agent model is not yet fully realized
-- cold validation, rollback, and artifact coverage are real but not yet complete across every path
+- the environment-native agent model is still shallower than the runtime, workflow, and compatibility layers
+- alternative runtime backends, richer artifact coverage, and broader external SDK/distribution depth remain enhancement work
 - some older documents remain deeper and more roadmap-heavy than a new reader should start with
-- the developer platform is now real, but not yet a complete external SDK, simulation, and distribution ecosystem
+- some documentation and docs-build infrastructure still needs cleanup to match the current repository state
 
 ## Current Architectural Rule
 

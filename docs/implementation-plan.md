@@ -95,7 +95,7 @@ Implemented or substantially in place:
 - compatibility app registry, Linux app execution, lifecycle posture, relaunch, and shell-visible display-surface bridging through the compatibility kernel
 - developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activate, install, applied profile query, audit, history, harness, and package-provided compatibility app extension
 
-Still incomplete or still planned:
+Still enhancement-oriented or still planned:
 
 - a fully separated internal conversation/runtime/engineering state model
 - an explicit agent registry and environment-level resident actor model
@@ -173,7 +173,7 @@ Exit condition:
 
 ### Stage 2. Thread and turn persistence
 
-Status: materially implemented
+Status: implemented
 
 Already in place:
 
@@ -215,7 +215,7 @@ Exit condition:
 
 ### Stage 3.5. Environment composition root
 
-Status: materially implemented, still being refined
+Status: implemented, still being refined
 
 Goal:
 
@@ -267,7 +267,7 @@ Expected deliverables:
 
 ### Stage 5. Runtime tool family
 
-Status: materially implemented, still expandable
+Status: implemented, still expandable
 
 Goal:
 

@@ -35,7 +35,7 @@ When an environment is bound, environment-backed state is the default truth for:
 Session-backed state may still be used in two cases:
 
 1. No environment is currently bound.
-2. Request-local or shell-local compatibility context has not yet been normalized into the environment snapshot.
+2. Request-local or shell-local compatibility context has not been normalized into the environment snapshot for that path yet.
 
 Outside those cases, session values should be treated as compatibility views or temporary transport, not as the durable authority.
 

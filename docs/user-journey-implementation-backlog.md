@@ -1,16 +1,16 @@
 ---
 layout: default
-title: User Journey Implementation Backlog
-hero_title: User Journey Implementation Backlog
-hero_text: A prioritized, executable backlog derived from the user-journey gap matrix and aligned to the environment-first architecture.
+title: User Journey Enhancement Backlog
+hero_title: User Journey Enhancement Backlog
+hero_text: A prioritized, executable enhancement backlog derived from the user-journey matrix and aligned to the now-implemented environment-first architecture.
 eyebrow: Execution
 permalink: /user-journey-implementation-backlog.html
-description: Prioritized epics, file targets, acceptance criteria, and iteration order for closing the highest-value user-journey gaps.
+description: Prioritized epics, file targets, acceptance criteria, and iteration order for improving the highest-value user journeys after target-architecture attainment.
 ---
 
 ## Purpose
 
-This document converts the [User Journey Gap Matrix]({{ '/user-journey-gap-matrix.html' | relative_url }}) into an implementation backlog that can be executed incrementally.
+This document converts the [User Journey Gap Matrix]({{ '/user-journey-gap-matrix.html' | relative_url }}) into an enhancement backlog that can be executed incrementally.
 
 It is intentionally narrower than the full [Implementation Plan]({{ '/implementation-plan.html' | relative_url }}). The implementation plan describes the whole program. This backlog describes the next user-journey-driven slice of work.
 
@@ -26,7 +26,7 @@ The backlog follows five rules:
 
 ## Priority Order
 
-The current execution order should be:
+The current enhancement order should be:
 
 1. Environment Orientation Surface
 2. Mutation Closure Surface
@@ -35,13 +35,13 @@ The current execution order should be:
 5. Uniform Artifact Surfacing
 6. Environment-First Composition Tightening
 
-Agent-mode work should remain deferred until the first four backlog items are materially implemented.
+Agent-mode work should remain deferred until the first four backlog items are materially advanced.
 
 ## Epic 1. Environment Orientation Surface
 
 ### User Journey Problem
 
-The user can enter the system, but they do not yet land in a clearly legible environment state. The experience still feels like “starting a tool” rather than “entering a world.”
+The user can enter the system and now lands in a meaningfully legible environment state. The remaining issue is that the experience can still feel more command-centric than world-centric.
 
 ### Goal
 
@@ -84,7 +84,7 @@ Deliver one default orientation surface that answers:
 
 ### User Journey Problem
 
-Governed mutation is rigorous but still too architecture-dependent for the operator. The user often needs to combine turn, incident, work-item, and wait-state views mentally.
+Governed mutation is rigorous and trustworthy, but still more architecture-dependent than ideal from the operator point of view. The user often needs to combine turn, incident, work-item, and wait-state views mentally.
 
 ### Goal
 
@@ -126,7 +126,7 @@ Provide one mutation-review surface that explains:
 
 ### User Journey Problem
 
-The runtime is live and governable, but symbolic navigation is still thinner than the long-term Common Lisp environment vision requires.
+The runtime is live and governable, but symbolic navigation is still thinner than the long-term Common Lisp environment vision implies.
 
 ### Goal
 
@@ -208,7 +208,7 @@ Expand incidents into richer runtime recovery workspaces that support understand
 
 ### User Journey Problem
 
-Artifact generation is improving, but still strongest in thread-bound and conversation-bound paths.
+Artifact generation is improving, but is still strongest in thread-bound and conversation-bound paths.
 
 ### Goal
 
@@ -244,11 +244,11 @@ Broaden artifact surfacing so important evidence is visible regardless of how th
 
 ### User Journey Problem
 
-Persistence and orientation are good, but the internal architecture still often thinks through `agent-session` first and `environment` second.
+Persistence and orientation are good, but some internal paths still think through `agent-session` first and `environment` second.
 
 ### Goal
 
-Keep compatibility, but continue reducing the gap between the documented center of gravity and the implemented one.
+Keep compatibility, but continue reducing the gap between the documented center of gravity and the operator and adapter experience.
 
 ### Likely Files
 
@@ -328,7 +328,7 @@ The reason is architectural discipline: the environment must become legible and 
 
 ## Practical Use
 
-This backlog should be used as the planning filter for the next implementation phase.
+This backlog should be used as the planning filter for the next enhancement phase.
 
 When evaluating a proposed change, ask:
 

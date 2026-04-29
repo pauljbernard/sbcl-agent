@@ -2,7 +2,7 @@
 layout: default
 title: Kernel and Services Iteration Plan
 hero_title: Kernel and Services Iteration Plan
-hero_text: A two-track execution plan for consolidating the environment kernel while extracting secure public service interfaces for future UX.
+hero_text: A historical two-track execution plan for consolidating the environment kernel and extracting the service boundary now used by shell and desktop clients.
 eyebrow: Execution
 permalink: /roadmap/kernel-and-services-iteration-plan.html
 description: Iterative execution plan for kernel consolidation and public service interface extraction in sbcl-agent.
@@ -14,7 +14,7 @@ This plan revises the current roadmap into two coordinated tracks:
 - kernel consolidation
 - public service interface extraction
 
-The goal is not just architectural cleanliness. The goal is to make the current governed runtime easier to maintain while creating the right stable boundary for future presentation-tier development tooling.
+The goal is not just architectural cleanliness. The goal is to make the governed runtime easier to maintain while creating the stable boundary now used by the shell and `sbcl-agent-ux`.
 
 ## Target Architecture
 
@@ -28,7 +28,7 @@ The environment kernel owns durable truth and invariants.
 
 The service layer exposes secure, stable, governed interfaces over that kernel.
 
-The shell and future UX surfaces become clients of the same service contracts.
+The shell and desktop-host surfaces become clients of the same service contracts.
 
 ## Track A. Kernel Consolidation
 
@@ -86,7 +86,7 @@ Track A goals:
 
 Track B goals:
 
-- define the public service interface boundary for future UX
+- define the public service interface boundary for shell and desktop hosts
 
 Deliverables:
 
@@ -97,7 +97,7 @@ Deliverables:
 Acceptance criteria:
 
 - contributors can identify durable state authority without reading tests
-- contributors can identify where future UX should integrate without coupling to shell internals
+- contributors can identify where presentation clients should integrate without coupling to shell internals
 
 Status:
 
@@ -294,7 +294,7 @@ Track A goals:
 Track B goals:
 
 - make the shell a client of the service layer
-- define event/subscription surface needed for future UX
+- define event/subscription surface needed for presentation clients
 
 Deliverables:
 
@@ -304,7 +304,7 @@ Deliverables:
 Acceptance criteria:
 
 - shell is no longer the hidden privileged center
-- future presentation-tier work has a clear supported integration path
+- presentation-tier work has a clear supported integration path
 
 Status:
 

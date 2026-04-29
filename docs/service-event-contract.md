@@ -51,7 +51,7 @@ Clients should:
 3. poll again with `after-cursor`
 4. render only newly returned events
 
-This gives the future UX a polling-friendly contract now while leaving room for push subscriptions later.
+This gives current clients a polling-friendly contract now while leaving room for push subscriptions later.
 
 ## Filter Rule
 

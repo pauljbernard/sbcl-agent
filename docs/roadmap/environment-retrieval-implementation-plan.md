@@ -9,7 +9,7 @@ description: Implementation roadmap for environment-native retrieval in sbcl-age
 ---
 ## Purpose
 
-This plan turns the environment-retrieval architecture into an executable sequence that does not destabilize the current turn and governance runtime.
+This plan records the environment-retrieval execution program that produced the current retrieval substrate and now serves as the enhancement guide for deeper retrieval quality work.
 
 The plan assumes two constraints:
 
@@ -30,7 +30,7 @@ The target request path becomes:
 
 ## Proposed Modules
 
-The implementation can be staged behind these modules:
+The implementation was staged behind these modules:
 
 - `src/retrieval-intent.lisp`
 - `src/retrieval-plan.lisp`
@@ -39,7 +39,7 @@ The implementation can be staged behind these modules:
 - `src/retrieval-ranking.lisp`
 - `src/retrieval-provider-context.lisp`
 
-The first iterations do not need all of them, but this is the shape to grow toward.
+This remains the shape to grow within as retrieval quality, ranking, and dossier expansion continue to improve.
 
 ## Iteration 1. Retrieval Architecture Lock
 
@@ -223,7 +223,7 @@ Status:
 
 ## Retrieval Domains For Early Delivery
 
-The first dossier iterations should prioritize these reads:
+The first dossier iterations prioritized these reads, and they remain the core retrieval domains today:
 
 1. conversation thread detail
 2. current turn detail
@@ -237,9 +237,9 @@ The first dossier iterations should prioritize these reads:
 
 That order preserves the current strengths of the system while extending the agent toward environment-native reasoning.
 
-## Decision Gates
+## Remaining Decision Gates
 
-These gates should be resolved before implementation crosses them.
+These gates are no longer blockers to first implementation. They are the main quality and cost-control decisions that still matter as retrieval evolves.
 
 ### Gate A. Mid-Turn Expansion
 
@@ -248,9 +248,9 @@ Decision:
 - allow only pre-prompt retrieval in the first release
 - or allow the agent to request additional dossier expansion during a turn
 
-Recommendation:
+Current posture:
 
-- start with pre-prompt retrieval only
+- pre-prompt retrieval is the default path today
 
 Reason:
 
@@ -263,9 +263,9 @@ Decision:
 - add semantic ranking immediately
 - or delay it until symbolic and structural retrieval are stable
 
-Recommendation:
+Current posture:
 
-- delay semantic ranking
+- semantic ranking is present, but symbolic and structural retrieval remain primary
 
 Reason:
 

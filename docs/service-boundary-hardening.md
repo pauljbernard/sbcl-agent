@@ -2,7 +2,7 @@
 layout: default
 title: Service Boundary Hardening
 hero_title: Service Boundary Hardening
-hero_text: Public service responses now expose a consistent governance and binding metadata contract for future UX clients.
+hero_text: Public service responses now expose a consistent governance and binding metadata contract for shell, desktop, and external clients.
 eyebrow: Architecture
 permalink: /service-boundary-hardening.html
 description: Hardening rules for service metadata, authority binding, and policy visibility in sbcl-agent.
@@ -53,4 +53,4 @@ This is especially important for:
 
 Shell-facing payloads may remain compatibility-shaped while the service response metadata becomes stricter and more uniform.
 
-That preserves operator behavior while improving the future presentation boundary.
+That preserves operator behavior while improving the active presentation boundary.

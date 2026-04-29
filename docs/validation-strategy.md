@@ -12,13 +12,7 @@ description: Validation strategy for the transition from sbcl-agent to IntentOS.
 
 ## Purpose
 
-This strategy defines how the project should test and validate the transition from:
-
-- `sbcl-agent / sbcl-agent-ux` current state
-
-to:
-
-- `IntentOS` target state
+This strategy defines how the project should validate and sustain the now-implemented IntentOS target architecture in `sbcl-agent` and `sbcl-agent-ux`, while guiding enhancement work that deepens backend realism, forensic depth, UX coherence, and platform confidence.
 
 ## Validation Thesis
 
@@ -113,9 +107,10 @@ It is validated when:
 
 The next validation work should track:
 
-1. current-state behavioral integrity
-2. kernel invocation coverage
-3. execution-handle read/write coverage
-4. shell/object coherence
+1. current-state behavioral integrity and full-suite stability
+2. kernel invariant sustainment
+3. backend-realism and compatibility containment
+4. shell / desktop / UX contract coherence
+5. platform and QA evidence governance
 
-That order preserves current value while tightening the architecture.
+That order preserves a green architecture while tightening the confidence model around it.

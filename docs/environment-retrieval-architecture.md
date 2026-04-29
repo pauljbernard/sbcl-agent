@@ -17,7 +17,7 @@ This note now describes both the implemented first pass and the remaining archit
 
 - the environment becomes searchable context for the agent
 - retrieval becomes a governed subsystem rather than ad hoc prompt stuffing
-- the agent and future UX both use the same service-native read surface
+- the agent and presentation clients both use the same service-native read surface
 
 ## Current State
 
@@ -339,5 +339,5 @@ Several of the original decisions have now moved from open design to implemented
 
 1. Should retrieval remain mostly provider-preprompt, or should the agent be allowed to request deeper dossier expansion mid-turn more aggressively?
 2. How far should semantic ranking go beyond the current symbolic and structural bias before it starts hurting precision?
-3. How should retrieval, cognition, and prior-outcome reuse be exposed to future UX surfaces without leaking internal implementation details?
+3. How should retrieval, cognition, and prior-outcome reuse be exposed to presentation surfaces such as `sbcl-agent-ux` without leaking internal implementation details?
 4. How much automatic post-mutation retrieval should happen before follow-up reasoning becomes too expensive or redundant?

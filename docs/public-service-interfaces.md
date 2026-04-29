@@ -2,14 +2,14 @@
 layout: default
 title: Public Service Interfaces
 hero_title: Public Service Interfaces
-hero_text: Future UX should be built on stable, governed service contracts over the environment kernel rather than on shell internals.
+hero_text: The shell, sbcl-agent-ux, and external clients should all use stable, governed service contracts over the environment kernel rather than shell internals.
 eyebrow: Architecture
 permalink: /public-service-interfaces.html
 description: Public service interface boundary for secure presentation-tier development tooling in sbcl-agent.
 ---
 ## Purpose
 
-The repository now needs an explicit architectural boundary between the environment kernel and future presentation tiers.
+The repository now has an explicit architectural boundary between the environment kernel and presentation tiers.
 
 That boundary is the public service interface layer.
 
@@ -123,7 +123,7 @@ The provider configuration and routing surface is now also exposed through stabl
 - `command-environment-provider-routing-service`
 - `query-environment-provider-route-service`
 
-That matters for the future UX because provider selection is no longer just a shell concern. The service boundary now exposes:
+That matters for `sbcl-agent-ux` and any later presentation tier because provider selection is no longer just a shell concern. The service boundary now exposes:
 
 - configured provider profiles
 - active provider profile
@@ -133,7 +133,7 @@ That matters for the future UX because provider selection is no longer just a sh
 - prompt-aware route preview without mutating last-route state
 - ranked provider candidates with routing reasons
 
-That is important for the presentation tier because a UX should be able to let an engineer inspect and steer provider choice in real time without depending on shell-only command strings or hidden session internals.
+That is important for presentation tiers because a UX should be able to let an engineer inspect and steer provider choice in real time without depending on shell-only command strings or hidden session internals.
 
 That execution family matters because it is now the shared mutation and interaction entry surface for:
 
@@ -174,7 +174,7 @@ That includes:
 - audit evidence
 - mutation authorization
 
-The future UX should never be trusted to enforce the real rules on its own.
+No presentation tier, including `sbcl-agent-ux`, should be trusted to enforce the real rules on its own.
 
 ## Eventing Rule
 
@@ -219,7 +219,7 @@ After the latest cleanup, the shell still owns a few things, but they are primar
 
 Those are acceptable shell-specific responsibilities. Governed execution semantics no longer need to live there.
 
-Some CLI entry surfaces still need the same treatment, but the shell itself is no longer the primary privileged execution path it used to be.
+Some CLI entry surfaces still need cleanup, but the shell itself is no longer the primary privileged execution path it used to be.
 
 ## Definition Of Success
 

@@ -49,7 +49,7 @@ The codebase is real and usable today. It currently provides:
 - a shared turn runner for both `ask` and `say`
 - approval-aware turn orchestration and resumed-turn follow-up
 - pre-prompt environment retrieval, cognition bundles, validation planning, and prior-outcome reuse in the default agent loop
-- a public service boundary plus JSON CLI surfaces that future UX clients can call without scraping shell output
+- a public service boundary plus JSON CLI surfaces that shell, desktop, and external clients can call without scraping shell output
 - structured tools for files, docs, runtime, processes, git, and patches
 - persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
 - kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming the primary operator reference
@@ -279,7 +279,7 @@ The current direction is:
 - `sbcl-agent-ux` consumes that host contract through `desktop/show`, `desktop/action`, and `desktop/restore`
 - the platform layer is beginning to expose installable `.aop` package descriptors and applied active-package profiles
 
-That means the docs should now be read as describing a governed execution environment moving toward `IntentOS`, not merely a better shell.
+That means the docs should now be read as describing a governed execution environment that already satisfies the accepted `IntentOS` target architecture, with current work focused on enhancement, hardening, and backend evolution rather than target-architecture gap closure.
 
 ## Doctor Command
 
@@ -321,4 +321,4 @@ Local workflows:
 ./bin/serve-docs
 ```
 
-`./bin/install-docs-deps` installs the pinned Bundler and Jekyll gems into the repository-local `vendor/gems` path and prefers Homebrew Ruby when available, which avoids the usual macOS system-Ruby permission and version mismatch problems. The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in `.github/workflows/docs.yml` and republishes automatically when docs-related changes land on `main`.
+The generated site is written to `docs/_site/` and is ignored by git. GitHub Pages deployment is defined in `.github/workflows/docs.yml`.

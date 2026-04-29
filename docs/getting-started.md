@@ -83,6 +83,6 @@ The current implementation is best approached as:
 
 - a real SBCL-native shell you can use now
 - a conversation runtime with durable threads and turns
-- a governed workflow substrate that is still moving toward a fuller environment-native architecture
+- a governed execution environment with kernel, workflow, compatibility, and desktop-host layers already in place
 
 If you want the detailed command reference, continue to [User Guide]({{ '/user-guide.html' | relative_url }}).

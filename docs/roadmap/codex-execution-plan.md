@@ -24,10 +24,10 @@ The plan assumes the current codebase already provides:
 
 The plan began from a point where the Environment architecture did not yet exist in code. That is no longer true: the repository now has a concrete Environment object, save/load support, projected environment events, and environment-oriented shell commands. The remaining work is to deepen and normalize that architecture rather than introduce it from scratch.
 
-The execution framing has now been tightened further. The next stage should be read through two coordinated tracks:
+The execution framing was later tightened further. The next stage should be read through two coordinated tracks:
 
 - kernel consolidation
-- public service interface extraction for future presentation-tier tooling
+- public service interface extraction for shell, desktop, and external presentation tooling
 
 The concrete iteration tracker for that two-track program now lives in [Kernel and Services Iteration Plan]({{ '/roadmap/kernel-and-services-iteration-plan.html' | relative_url }}).
 
@@ -641,7 +641,7 @@ This order matters because:
 
 ## Definition of Done for the Vision Pivot
 
-The environment-first pivot can be considered materially implemented when all of the following are true:
+The environment-first pivot can be considered implemented when all of the following are true:
 
 - the code has a real Environment object
 - runtime, conversation, workflow, artifact, and agent domains are explicit inside it

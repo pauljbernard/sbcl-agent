@@ -24,13 +24,13 @@ For the governing transition documents, read alongside this page:
 
 Build a governed, transactional, image-native engineering environment that can inspect and mutate the same running system it is reasoning about while preserving reproducibility, rollback intent, provenance, and operator trust.
 
-The current codebase now sits between three descriptions:
+The current codebase now sits at a different point than the earlier transition documents described:
 
-- the original shell-plus-streamed-ask runtime is still supported
-- the environment-native runtime is materially implemented and now shapes the architecture
-- the execution-kernel transition is underway, so more behavior now compresses under `invoke`, `inspect`, `control`, execution handles, and execution surfaces
+- the original shell-plus-streamed-ask runtime is still supported as an operator surface
+- the environment-native runtime is implemented and now shapes the architecture
+- the execution-kernel contract is implemented, with `invoke`, `inspect`, `control`, execution handles, and execution surfaces as first-class system structure
 
-That means the right description of the codebase is neither "prototype shell" nor "finished operating system." It is an implemented transitional architecture with a clear direction of travel.
+That means the right description of the codebase is no longer "prototype shell" and no longer "kernel transition underway" in the earlier sense. It is an implemented execution-kernel environment with active enhancement and hardening work still in progress.
 
 ## Environment Framing
 
@@ -56,7 +56,7 @@ For the federated employee/contractor operating model, this environment also has
 - `sbcl-agent` owns local execution truth and local publication behavior
 - `sbcl-agent-ux` remains a pure client of `sbcl-agent` rather than a direct `RGP` client in the first pass
 
-The current implementation is still transitional, but future architecture should orient around an `Environment` object rather than around the shell session or thread alone.
+The current implementation is environment-oriented now. Remaining transitional structure exists mainly at compatibility and persistence boundaries, not at the level of the primary architectural center of gravity.
 
 ## Preserve Capabilities, Discard Metaphors
 
@@ -349,11 +349,11 @@ That means the developer platform is no longer only roadmap prose. It is now an 
 - provider stream event capture needed by turn execution
 - retrieval-aware pre-prompt context assembly
 
-That means the shell is no longer the semantic owner of those paths, and assistant action execution no longer bypasses the same public execution boundary that a future UX or service tier would need to use.
+That means the shell is no longer the semantic owner of those paths, and assistant action execution no longer bypasses the same public execution boundary that `sbcl-agent-ux` and other service clients use.
 
 The shell now delegates most operator-visible paths through that boundary while preserving compatibility output shapes where needed.
 
-The non-interactive CLI is increasingly participating in that same service boundary. RGP was the first concrete example, and the provider CLI now exposes service-backed `show`, `route`, `preview`, `routing`, `configure`, and `use` operations as JSON envelopes for future presentation-tier clients.
+The non-interactive CLI is increasingly participating in that same service boundary. RGP was the first concrete example, and the provider CLI now exposes service-backed `show`, `route`, `preview`, `routing`, `configure`, and `use` operations as JSON envelopes for desktop and external clients.
 
 ### Transitional session composition root
 

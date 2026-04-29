@@ -5,9 +5,10 @@ on:
     branches: ["main"]
     paths:
       - "docs/**"
-      - "Gemfile"
       - ".github/workflows/docs.yml"
+      - "bin/install-docs-deps"
       - "bin/build-docs"
+      - "bin/serve-docs"
   workflow_dispatch:
 
 permissions:
@@ -30,7 +31,9 @@ jobs:
         uses: ruby/setup-ruby@v1
         with:
           ruby-version: "3.2"
-          bundler-cache: true
+
+      - name: Install docs dependencies
+        run: ./bin/install-docs-deps
 
       - name: Build site
         run: ./bin/build-docs

@@ -15,15 +15,15 @@ if [[ -d "$LOCAL_GEM_ROOT" ]]; then
   export PATH="$LOCAL_GEM_ROOT/bin:$PATH"
 fi
 
-if ! command -v bundle >/dev/null 2>&1; then
-  echo "bundle is required to build the docs site" >&2
+if ! command -v jekyll >/dev/null 2>&1; then
+  echo "jekyll is required to build the docs site" >&2
   exit 1
 fi
 
 cd "$ROOT_DIR"
-if ! bundle check >/dev/null 2>&1; then
+if ! gem list -i jekyll >/dev/null 2>&1; then
   echo "docs dependencies are not installed; run: ./bin/install-docs-deps" >&2
   exit 1
 fi
 
-bundle exec jekyll build --source docs --destination docs/_site
+jekyll build --source docs --destination docs/_site

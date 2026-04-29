@@ -94,9 +94,9 @@ Today the codebase already has real safety-relevant strengths:
 
 The current implementation is still weak in places the docs should acknowledge honestly:
 
-- the architecture is transitional, so some compatibility paths still exist
+- some compatibility and persistence adapter paths still exist
 - deeper cold-start validation and rollback fidelity are not complete
 - operation coverage and artifact coverage are stronger than before but not yet universal
-- the future environment-native agent model is directionally clear but not fully delivered
+- the environment-native agent model is shallower than the runtime, workflow, and compatibility layers
 
 The right documentation stance is not to hide these weaknesses. It is to show how the existing design addresses them and where the remaining gaps are.

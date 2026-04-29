@@ -15,13 +15,13 @@ This page is the detailed operator reference. It assumes you already understand 
 
 ## What You Can Do Today
 
-`sbcl-agent` currently supports several styles of interaction inside one evolving environment:
+`sbcl-agent` currently supports several styles of interaction inside one environment:
 
 - REPL-style operation, where you type Lisp forms or shell commands and get results immediately
 - conversation-style operation, where you work in durable threads and turns using `(say ...)`
 - workflow-style operation, where governed work-items, validations, approvals, and reconciliations remain visible and inspectable
 
-These styles share the same provider, tool, session, policy, task, and workflow layers. The newer roadmap reframes them as coexisting modes inside a larger Environment architecture rather than as separate products.
+These styles share the same provider, tool, session, policy, task, workflow, and execution-kernel layers. They should now be understood as coexisting modes inside one implemented Environment architecture rather than as separate products.
 
 ## Installation Expectations
 
@@ -230,7 +230,7 @@ Provider orientation is also now environment-backed. Use:
 - `(provider/routing :manual)`
 - `(provider/route)`
 
-These commands let the operator inspect and steer the same provider-profile and routing model that the future UX should consume through the non-shell CLI or service boundary.
+These commands let the operator inspect and steer the same provider-profile and routing model that `sbcl-agent-ux` and any other client can consume through the non-shell CLI or service boundary.
 
 The non-shell equivalents are:
 
@@ -241,7 +241,7 @@ The non-shell equivalents are:
 - `./bin/sbcl-agent provider configure --profile ... --provider ... --model ...`
 - `./bin/sbcl-agent provider use --profile ...`
 
-Those commands exist so provider control is not trapped behind shell-only forms when future UX and service clients need the same behavior.
+Those commands exist so provider control is not trapped behind shell-only forms when desktop and service clients need the same behavior.
 
 If a turn pauses for approval, `turn/status` tells you why and `turn/resume` continues it after the relevant approval or staged-action execution step is satisfied. A resumed turn may also trigger a provider follow-up run so the turn can finish with a fresh assistant message instead of stopping at raw action execution.
 

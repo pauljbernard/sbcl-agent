@@ -17,7 +17,7 @@ Today, that environment is implemented as a real Common Lisp runtime with:
 - direct runtime inspection and evaluation
 - durable conversation objects such as threads, turns, operations, and artifacts
 - governed workflow records, work-items, approvals, incidents, and reconciliation paths
-- an explicit `environment` object that is becoming the primary container for those domains
+- an explicit `environment` object that is now the primary architectural container for those domains, with compatibility-session structure retained only where transitional adapters still exist
 
 ## What the System Is Not
 
@@ -26,9 +26,9 @@ It is not best understood as:
 - a chatbot with tools
 - a thin wrapper around an LLM API
 - a conventional IDE recreated in Lisp
-- a finished production platform with all environment-native services already complete
+- a finished external ecosystem with every enhancement and backend variation already complete
 
-The codebase is mature enough to demonstrate the model and support real operator flows. It is not yet at the endpoint implied by the roadmap.
+The codebase is mature enough to demonstrate the model, support real operator flows, and satisfy the accepted target architecture. What remains is enhancement, hardening, and ecosystem depth rather than unresolved core architecture.
 
 ## Runtime as Substrate
 
@@ -100,8 +100,8 @@ That is why workflow records, incidents, approvals, and artifacts exist as nativ
 
 The present system should be understood as:
 
-- implemented enough to operate as a real shell, provider runtime, conversation runtime, and governed workflow substrate
-- architecturally transitional because `agent-session` compatibility still exists alongside the stronger `environment` model
-- directionally clear about the move from session-centered composition toward environment-centered composition
+- implemented enough to operate as a real shell, provider runtime, conversation runtime, compatibility kernel, desktop host, and governed workflow substrate
+- architecturally environment-first, with `agent-session` compatibility retained only where adapter and persistence bridges still exist
+- beyond target-architecture gap closure, with current work focused on enhancement, hardening, QA depth, and backend realism
 
-That maturity level should shape how the docs speak about the project: concrete about what exists, explicit about what is transitional, and careful not to present roadmap material as already delivered.
+That maturity level should shape how the docs speak about the project: concrete about what exists, explicit about what remains transitional, and careful to separate completed architecture from enhancement work.

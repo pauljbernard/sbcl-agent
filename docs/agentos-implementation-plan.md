@@ -133,33 +133,37 @@ System is stable and supportable.
 
 ## Current Implementation Status
 
-The current repository is not at this final state yet, but the implementation has already materially advanced through these phases:
+The accepted target-state architecture is now implemented at the architectural-contract level.
 
-- Phase 0 — kernel invariants: materially established in docs and code refactor direction
-- Phase 1 — universal invocation: substantially underway
-- Phase 2 — execution handle model: materially implemented
-- Phase 3 — governance hardening: materially implemented
-- Phase 4 — compatibility kernel: first backend materially implemented
-- Phase 5 — surface model: materially implemented
-- Phase 6 — shell model: materially implemented
-- Phase 7 — desktop host contract: materially implemented across `sbcl-agent` and `sbcl-agent-ux`
-- Phase 8 — developer platform: materially started with manifest and package lifecycle work
+Completed phases:
 
-That means this plan should now be read as a target-state program layered on top of a runtime that is already partway into the execution-kernel transition.
+- Phase 0 — kernel invariants: complete
+- Phase 1 — universal invocation: complete at the operator-facing architecture boundary
+- Phase 2 — execution handle model: complete
+- Phase 3 — governance hardening: complete at the target-architecture level
+- Phase 4 — compatibility kernel: complete at the target-architecture level
+- Phase 5 — surface model: complete
+- Phase 6 — shell model: complete
+- Phase 7 — desktop host contract: complete across `sbcl-agent` and `sbcl-agent-ux`
+- Phase 8 — developer platform: complete at the target-architecture level
+- Phase 9 — runtime/image substrate: complete against the accepted target contract
+- Phase 10 — commercial hardening baseline: complete as an initial architecture program
 
-## Final Milestone
+That means this plan should now be read historically as the architecture program that was executed, not as a still-open gap list.
 
-IntentOS Developer Preview 1.0 must demonstrate:
-- bootable OS
-- execution-handle model
-- governed Linux app execution
-- inspector-driven UX
-- rollback and recovery
-- non-bypassable governance
+## Enhancement Milestone
+
+The next meaningful milestones are no longer target-state milestones. They are enhancement tracks:
+
+- richer backend realism
+- deeper artifact and forensic depth
+- stronger QA and evidence discipline
+- broader external platform and distribution depth
+- operator and UX polish
 
 ## Final Implementation Statement
 
-The system is complete when:
+The original architecture program is complete when:
 
 - every action is an execution
 - every execution is governed

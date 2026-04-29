@@ -37,11 +37,18 @@ Observed wall-clock baseline on this machine:
 
 ## Current Test Architecture
 
-The repository currently uses one primary test system:
+The repository still relies heavily on `tests/smoke.lisp` as the largest single test file, but the test program is no longer just one undifferentiated smoke harness.
 
-- `tests/smoke.lisp`
+The current test program now includes:
 
-That file contains a large mixed suite covering:
+- a categorized catalog in `tests/test-runner.lisp`
+- focused category execution through `./bin/run-test-category`
+- named harnesses through `./bin/run-test-harness`
+- JSON and Markdown result reporting
+- evidence-index generation for the current test program
+- the broader suite in `tests/smoke.lisp`, `tests/service-contracts.lisp`, `tests/retrieval.lisp`, `tests/evals.lisp`, and support files
+
+The smoke suite still contains a large mixed body of tests covering:
 
 - helper and parser tests
 - command normalization tests
@@ -52,7 +59,7 @@ That file contains a large mixed suite covering:
 - incident and runtime governance tests
 - tool integration tests
 
-This gives the project broad behavioral coverage, but it also means the suite is still organized mostly as a monolithic smoke-and-regression harness rather than as clearly separated unit, functional, and performance layers.
+This gives the project broad behavioral coverage. The remaining limitation is not a total lack of structure, but that the deepest test inventory still lives in large Lisp files rather than in a fully decomposed directory-per-layer layout.
 
 ## Measured Coverage
 
@@ -135,16 +142,16 @@ That is why files like `commands.lisp`, `provider-protocol.lisp`, and many helpe
 
 ### Current Weaknesses
 
-The unit layer is still under-structured.
+The unit layer is still under-structured relative to the newer program wrapper.
 
-- There is no separate unit-test package or file layout.
-- Unit tests are mixed into the smoke suite rather than clearly isolated.
+- There is no fully separate unit-test file tree.
+- Many unit-style tests are still mixed into the larger smoke suite rather than fully isolated.
 - Thin boundary files are covered mostly as a side effect of functional flows.
 - Some policy and shell branches are only covered indirectly, which makes failures harder to localize.
 
 ### Assessment
 
-Unit coverage quality is good in aggregate, but the suite organization does not yet make the unit layer easy to reason about or extend. The code is more rigorously tested than the repository structure makes obvious.
+Unit coverage quality is good in aggregate, and the categorized runner/reporting layer makes it easier to reason about than before. The remaining issue is that the underlying test inventory is still not decomposed as cleanly as the reporting layer now is.
 
 ## Functional Coverage Assessment
 
@@ -228,7 +235,7 @@ During this assessment, the test harness exposed two stability issues:
 The temp-directory collision issue has been hardened in the current test file by switching several helpers to `mktemp`-backed directory creation. The broader lesson remains:
 
 - the current suite is reliable in serial execution
-- the current suite is not yet designed as a parallel-safe test harness
+- the current suite is still best treated as serial, even though orchestration and temp-path stability are materially better than before
 
 ## Overall Quality Judgment
 
@@ -243,16 +250,16 @@ The main positive conclusions are:
 The main gaps are:
 
 - shell and policy still need stronger direct branch coverage
-- unit and functional tests are not clearly separated in structure
+- the reporting and harness layer is clearer than before, but unit and functional tests are still not fully separated in file structure
 - wrapper modules look weaker in coverage reports because they are tested mostly indirectly
-- performance coverage is largely absent as a formal discipline
+- performance coverage still needs richer workload breadth
 - the suite is still best treated as serial, not parallel
 
 ## Recommended Next Steps
 
 ### Priority 1
 
-Split the current smoke suite into explicit layers:
+Continue decomposing the current smoke-heavy inventory into explicit layers:
 
 - `tests/unit/*.lisp`
 - `tests/functional/*.lisp`

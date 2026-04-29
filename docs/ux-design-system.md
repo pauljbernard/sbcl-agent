@@ -99,9 +99,9 @@ The object browser exists to navigate durable system objects, not merely content
 
 Today:
 
-- `sbcl-agent-ux` is still application-shaped
-- some execution posture is visible
-- some object switching is still workspace-owned rather than execution-owned
+- `sbcl-agent-ux` is a host over the shell desktop contract
+- execution posture, display posture, and desktop actions are visible through that host contract
+- some renderer-owned workspace taxonomy and presentation semantics still deserve simplification
 
 Target:
 

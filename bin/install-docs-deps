@@ -23,15 +23,14 @@ if ! command -v gem >/dev/null 2>&1; then
   exit 1
 fi
 
-if ! command -v bundle >/dev/null 2>&1; then
-  echo "bundler is required to install docs dependencies" >&2
-  exit 1
-fi
-
 cd "$ROOT_DIR"
 
-if ! bundle _2.5.23_ -v >/dev/null 2>&1; then
-  gem install bundler:2.5.23
-fi
-
-bundle _2.5.23_ install
+gem install --no-document \
+  'base64' \
+  'bigdecimal' \
+  'csv' \
+  'jekyll:~> 4.3' \
+  'jekyll-sass-converter:~> 2.2' \
+  'minima:~> 2.5' \
+  'webrick:~> 1.8' \
+  'ffi:< 1.17'

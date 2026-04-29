@@ -59,8 +59,8 @@ Present in code now:
 Still transitional:
 
 - the top-level mutable state is still partly organized through `agent-session`, but environment-owned summaries, events, artifacts, workflow state, agent state, and provider context now carry much more of the system’s operational truth than earlier transitional versions
-- event flow is more structured than before but not yet fully separated from every legacy path
-- runtime and workflow operations are not yet uniformly exposed as first-class conversation operations
+- event flow is more structured than before, though some legacy paths still need cleanup
+- runtime and workflow operations are now materially exposed through the shared execution and service boundary, with remaining work focused on consistency and polish
 
 That maturity statement matters. The conversation subsystem is real and usable now, but it is still part of a broader architectural migration rather than a finished isolated product.
 
@@ -171,7 +171,7 @@ Recommended state model:
 - `:failed`
 - `:cancelled`
 
-The current implementation covers the most important early states and approval-aware completion flow, even though the full lifecycle remains a target for refinement.
+The current implementation covers the most important lifecycle and approval-aware completion states, with remaining work focused on refinement rather than first implementation.
 
 ## Turn Orchestrator Responsibilities
 

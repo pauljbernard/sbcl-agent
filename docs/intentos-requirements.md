@@ -12,7 +12,7 @@ description: Consolidated requirements for IntentOS-oriented refactoring.
 
 ## Scope
 
-These requirements define what must become true as the current `sbcl-agent / sbcl-agent-ux` system is refactored toward `IntentOS`.
+These requirements define what must remain true as the current `sbcl-agent / sbcl-agent-ux` system sustains and extends the accepted `IntentOS` target architecture.
 
 They are intentionally grouped by architectural concern rather than by implementation file.
 
@@ -26,7 +26,7 @@ The system must provide a minimal authoritative execution-kernel surface:
 
 Requirements:
 
-- all native execution must enter through `invoke`
+- all native governed execution must enter through `invoke`
 - all governed state must be inspectable through `inspect`
 - intervention paths must normalize through `control`
 - no competing top-level execution API may bypass kernel rules
@@ -123,7 +123,7 @@ Requirements:
 
 ## Acceptance Discipline
 
-No major refactor is complete unless it can identify:
+No major refactor or enhancement is complete unless it can identify:
 
 - which requirement set it advances
 - which current-state deficiency it reduces

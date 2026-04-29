@@ -32,11 +32,11 @@ The current implementation already succeeds as:
 - a governed conversation runtime
 - a workflow-aware engineering shell
 
-It does not yet fully succeed as:
+It is still improving in one main area:
 
-- a single coherent computational habitat whose environment model is the unquestioned center of every operator and agent journey
+- making the environment feel like the unquestioned center of every operator and agent journey, not just the correct underlying architecture
 
-That means the project has crossed the threshold from tool to environment both structurally and increasingly operationally, but not yet completely in product feel or long-range capability breadth.
+That means the project has crossed the threshold from tool to environment structurally and operationally. The remaining work is product feel, operator smoothness, and breadth of habitat-like interaction.
 
 ## Matrix
 
@@ -51,7 +51,7 @@ That means the project has crossed the threshold from tool to environment both s
 | Artifact and evidence review | Strongly aligned with artifact-first and governance-first goals | Moderate to strong | Artifact surfacing is best in thread-bound paths and less uniform elsewhere | Broaden artifact emission so validation, reconciliation, and governed outcomes are uniformly visible across all mutating paths |
 | Runtime introspection and live-image navigation | Strongly aligned with the vision’s preservation of classic Lisp powers | Moderate | The user can act in the live image, but symbolic navigation is still thinner than the long-term vision implies | Build a capability layer for richer package, symbol, method, object, and source/image navigation |
 | Environment-as-habitat experience | Strongly aligned with the roadmap vision and environment-first architecture | Moderate to strong | Environment identity, events, posture, artifacts, workflow, and provider context are now real operational primitives, but the interaction style is still more command-and-summary than habitat-like | Build richer environment-native overviews, runtime workspaces, and actor-oriented flows on top of the now-stable environment core |
-| Agent / multi-actor participation | Strongly aligned with the long-term vision | Not yet implemented as a first-class journey | No resident governed actor model is present yet | Delay full agent-mode work until environment identity and operator world-model are stronger, then add explicit actor identity, scope, and subscriptions |
+| Agent / multi-actor participation | Strongly aligned with the long-term vision | Roadmap-only | No resident governed actor model is present yet | Delay full agent-mode work until environment identity and operator world-model are stronger, then add explicit actor identity, scope, and subscriptions |
 
 ## Detailed Notes By Journey
 
@@ -63,7 +63,7 @@ Current strength:
 - `doctor` provides meaningful runtime and governance diagnostics
 - shell entry is direct and workable
 
-Current gap:
+Current enhancement focus:
 
 - the user now arrives into a legible environment state
 - the remaining gap is less orientation and more depth of environment-native flow
@@ -80,10 +80,10 @@ Current strength:
 - direct evaluation remains intact
 - the newer architecture extends the REPL rather than replacing it
 
-Current gap:
+Current enhancement focus:
 
 - semantic runtime guidance is still limited relative to the vision
-- the project preserves the REPL but has not yet fully translated classic Lisp environment powers into environment-native services
+- the project preserves the REPL but still has room to translate more classic Lisp environment powers into environment-native services
 
 ### 3. Conversation-Native Inspection
 
@@ -92,7 +92,7 @@ Current strength:
 - conversation is durable and inspectable through threads, turns, operations, and artifacts
 - `ask` and `say` now share one turn runner
 
-Current gap:
+Current enhancement focus:
 
 - the user still needs to know which inspection command to issue next
 - the system is structurally conversation-native but not yet fluid enough to feel like conversational habitation
@@ -104,7 +104,7 @@ Current strength:
 - this is the most successful journey in the whole system
 - approvals, work-items, checkpoints, validation state, and cold-validation semantics are real, not cosmetic
 
-Current gap:
+Current enhancement focus:
 
 - the journey is more rigorous than intuitive
 - the architecture preserves trust, but the operator still needs better synthesized guidance during closure
@@ -117,7 +117,7 @@ Current strength:
 - failure is linked to turn, operation, work-item, and workflow
 - interrupted in-flight state is normalized honestly on reload
 
-Current gap:
+Current enhancement focus:
 
 - incident handling is good as evidence but still shallow as a runtime debugging experience
 - restart-oriented workflows and deeper runtime inspection are still missing
@@ -129,7 +129,7 @@ Current strength:
 - the system already behaves more like an environment than a disposable CLI here
 - thread, artifact, workflow, and interruption state survive restarts
 
-Current gap:
+Current enhancement focus:
 
 - persistence is implemented and now largely environment-centered, but the compatibility bridge still shapes some internal flows
 
@@ -140,9 +140,9 @@ Current strength:
 - artifacts now represent more than file outputs
 - incidents, validations, reconciliations, and runtime operations can surface as evidence
 
-Current gap:
+Current enhancement focus:
 
-- artifact generation is still path-dependent
+- artifact generation is still somewhat path-dependent
 - the evidence story is strongest when conversation and workflow are already tightly bound
 
 ### 8. Environment-As-Habitat
@@ -152,7 +152,7 @@ Current strength:
 - the codebase now contains enough native entities to justify the vision
 - environment, runtime, thread, operation, artifact, and work-item all exist in real form
 
-Current gap:
+Current enhancement focus:
 
 - the operator still usually experiences the system through shell-era command metaphors
 - the world model is documented more strongly than it is felt
@@ -163,7 +163,7 @@ Current strength:
 
 - the architectural direction is clear enough that future agent work can be designed coherently
 
-Current gap:
+Current enhancement focus:
 
 - there is no true resident actor journey yet
 - that is acceptable for now, but it should remain explicitly roadmap-only until the environment center of gravity is stronger

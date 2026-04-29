@@ -1,4 +1,4 @@
-# sbcl-agent / sbcl-agent-ux – Current-State Gap Analysis
+# sbcl-agent / sbcl-agent-ux – Current-State Architecture Assessment
 
 ## Current-State Architecture Diagram
 
@@ -19,16 +19,15 @@ sbcl-agent-ux
   → application-level interface
 ```
 
-This represents a highly advanced agent runtime, but not yet an operating system.
+This now represents an implemented execution-kernel environment and hosted UX rather than an advanced runtime that is still missing its architectural center.
 
-The primary gap is not capability. It is the absence of:
-- a minimal kernel contract
-- a unified execution abstraction
-- a compatibility subsystem at OS-grade rigor
-- a system-level UX
-- a developer platform
+The earlier target-state gap program is now closed at the accepted architecture level. The right remaining questions are:
+- how realistic the runtime backends are
+- how deep the forensic and artifact model is
+- how strong the QA and evidence discipline is
+- how ergonomic the operator surfaces are
 
-## Gap 1: Absence of Minimal Kernel Contract
+## Architecture Assessment 1: Minimal Kernel Contract
 
 Current system exposes multiple top-level primitives:
 
@@ -42,92 +41,72 @@ Current system exposes multiple top-level primitives:
 - policy
 - approval
 
-These are not compressed into a single invariant execution model.
+These are now compressed under a real execution-kernel contract.
 
-Missing:
-- single execution abstraction
-- single invocation path
-- strict lifecycle model
-- non-bypassable kernel boundary
+Current state:
+- single execution abstraction: present through execution handles
+- single invocation path: present for the governed operator surface through `invoke`
+- lifecycle model: present
+- non-bypassable kernel boundary: present at the accepted target level
 
-Impact:
-- model complexity increases with features
-- no stable mental model for developers
-- governance inconsistencies emerge
+Remaining work:
+- deeper backend realism
+- broader forensic and artifact detail
 
-## Gap 2: Linux Compatibility Is Not a Kernel
+## Architecture Assessment 2: Compatibility Kernel
 
-Current Linux and tool execution is effectively:
+Current Linux and tool execution is now a real compatibility subsystem:
 
-```text
-process execution
-```
-
-Required:
-
-```text
-compatibility kernel
-```
-
-Missing:
-- Linux application manifest model
-- sandbox abstraction (process/container/microVM)
-- filesystem scoping
-- network policy enforcement
-- display mediation
-- inspector integration
+- Linux application manifests
+- backend abstraction
+- filesystem/network/display posture
 - lifecycle governance
+- relaunch and control
+- shell and desktop visibility
 
-Impact:
+Remaining work:
 
-Without this, the system collapses into `Linux + agent wrapper`.
+- more backend diversity beyond the currently implemented governed backends
+- richer isolation models where needed
 
-## Gap 3: UX Is Application-Level, Not System-Level
+## Architecture Assessment 3: UX Kernel
 
-Current UX:
-
-```text
-sbcl-agent-ux (Electron application)
-```
-
-Required:
+Current UX now consists of:
 
 ```text
-IntentOS Shell (system interface)
+IntentOS-style shell desktop contract
+  + sbcl-agent-ux as a host over that contract
 ```
 
-Missing:
-- workspace model
-- execution surface model
-- inspector-first UX
-- governance visibility
-- object browser
-- system image awareness
+Current state:
+- workspace model: present
+- execution surfaces: present
+- inspector: present
+- governance visibility: present
+- object browser: present
+- display lane: present
 
-Impact:
-- system remains tool-like instead of OS-like
-- no unified user interaction model
+Remaining work:
+- more polish and presentation refinement
+- broader component and journey coverage in the UX repo
 
-## Gap 4: No Developer Platform
+## Architecture Assessment 4: Developer Platform
 
-The system lacks a consumable platform model.
+The system now has a real platform model:
 
-Missing:
-- SDK
-- capability manifest standard
-- packaging format
-- testing harness
-- simulation environment
-- distribution model
-- update and versioning strategy
+- manifest and package format
+- import / install / activate lifecycle
+- applied platform profiles
+- audit and history
+- compatibility app extension through packages
+- test and harness surfaces
 
-Impact:
-- no ecosystem formation
-- no external adoption
-- no commercial viability
+Remaining work:
+- deeper external SDK/distribution breadth
+- broader ecosystem tooling
 
-## Final Gap Statement
+## Final Assessment Statement
 
-The system does not lack sophistication.
+The system no longer lacks compression, invariants, or a formal operating-system-style execution boundary at the accepted target level.
 
-It lacks compression, invariants, and a formal operating system boundary.
+The remaining work is enhancement and hardening, not unresolved target-architecture closure.

@@ -14,7 +14,7 @@ description: Positioning statement for the next stage of the SBCL agent project.
 
 The project has reached a point where its direction needs to be named clearly.
 
-It is no longer accurate to think of the system as a shell with agent features attached. It is also no longer sufficient to describe it as a Common Lisp development environment in the ordinary sense. If its architectural logic is followed seriously, the project is moving toward something closer to a live computational environment: a persistent symbolic world in which code, runtime state, tools, workflows, artifacts, humans, and agents coexist as first-class participants.
+It is no longer accurate to think of the system as a shell with agent features attached. It is also no longer sufficient to describe it as a Common Lisp development environment in the ordinary sense. If its architectural logic is followed seriously, the project becomes something closer to a live computational environment: a persistent symbolic world in which code, runtime state, tools, workflows, artifacts, humans, and agents coexist as first-class participants.
 
 That distinction matters.
 
@@ -54,7 +54,7 @@ It contains not only source code and tools, but also runtime state, active proce
 
 This is the category that best fits the project’s current trajectory.
 
-The system is moving toward an environment in which:
+The system is aiming at an environment in which:
 
 * the live Lisp image is first-class
 * conversational interaction is first-class

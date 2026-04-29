@@ -186,7 +186,7 @@
   (let* ((config (sbcl-agent::make-config :provider "mock"
                                           :model "gpt-5"
                                           :working-directory "/tmp/"))
-         (existing (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (existing (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (let ((sbcl-agent::*current-session* existing)
           (sbcl-agent::*current-environment* (sbcl-agent::make-default-environment :session existing)))
       (assert-true (eq existing (sbcl-agent::session-for-chat-config config))
@@ -2324,7 +2324,7 @@ fi
    "parse-ask-arguments should reject odd keyword option lists"))
 
 (defun turn-orchestrator-run-coverage-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (thread (sbcl-agent::current-thread session))
          (progress '()))
     (let ((sbcl-agent::*task-progress-callback*
@@ -2353,7 +2353,7 @@ fi
                       "run-say-turn-sync should stage non-immediate actions")))
     (assert-true (find :say-response progress :key #'first)
                  "run-say-turn-sync should emit say-response progress"))
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (thread (sbcl-agent::current-thread session))
          (result (sbcl-agent::run-say-turn-streaming
                   (make-instance 'mixed-action-provider)
@@ -2375,7 +2375,7 @@ fi
                        (sbcl-agent::agent-session-events session)
                        :key #'sbcl-agent::event-kind)
                  "run-say-turn-streaming should log provider stream events"))
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (result (sbcl-agent::run-say-turn
                   (make-instance 'mixed-action-provider)
                   session
@@ -2424,7 +2424,7 @@ fi
                  :cached t)))
       (assert-true (getf diff :cached)
                    "sandbox-execute-git should preserve the cached diff flag"))))
-  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let ((session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (assert-signals-error
      (lambda ()
        (sbcl-agent::sandbox-worker-command "not-a-command" session '()))
@@ -3512,7 +3512,7 @@ fi
 
 (defun say-mixed-action-operations-test ()
   (let ((provider (make-instance 'mixed-action-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
         (command (sbcl-agent::normalize-form-command '(say "execute and inspect"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -3544,7 +3544,7 @@ fi
 
 (defun say-patch-action-approval-test ()
   (let ((provider (make-instance 'patch-action-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
         (command (sbcl-agent::normalize-form-command '(say "prepare patch"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -3583,7 +3583,7 @@ fi
 
 (defun say-patch-action-deferred-by-incident-test ()
   (let ((provider (make-instance 'patch-action-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
         (command (sbcl-agent::normalize-form-command '(say "prepare patch while incidents remain open"))))
     (sbcl-agent::create-incident session
                                  :test
@@ -3622,7 +3622,7 @@ fi
 
 (defun say-weakly-grounded-patch-deferred-test ()
   (let ((provider (make-instance 'weak-grounding-patch-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
         (command (sbcl-agent::normalize-form-command '(say "What happened earlier with that prior incident?"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -3683,7 +3683,7 @@ fi
                      "weakly grounded mutation proposals should emit a dedicated deferral event")))))
 
 (defun strategy-governed-mutation-deferred-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (response (sbcl-agent::make-assistant-response
                     :message "Propose a patch."
                     :actions (list (sbcl-agent::make-assistant-action
@@ -3754,7 +3754,7 @@ fi
 
 (defun say-mutating-eval-approval-test ()
   (let ((provider (make-instance 'mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
         (command (sbcl-agent::normalize-form-command '(say "mutate runtime state"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -3940,7 +3940,7 @@ fi
 
 (defun streaming-ask-dispatch-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :stream t))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -3975,7 +3975,7 @@ fi
 
 (defun default-streaming-ask-dispatch-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))))
     (let ((sbcl-agent::*default-ask-streaming* t))
       (multiple-value-bind (result kind updated-session)
@@ -3993,7 +3993,7 @@ fi
       (run-command-with-input "./bin/sbcl-agent"
                               '("chat" "-i" "--provider" "mock" "--model" "gpt-5")
                               (concatenate 'string "(ask \"ping\")" (string #\Newline))
-                              :directory #P"/Volumes/data/development/sbcl-agent/")
+                              :directory (uiop:ensure-directory-pathname (current-workspace-root)))
     (declare (ignore stderr))
     (assert-equal 0 exit-code
                   "chat -i should exit cleanly after stdin closes")
@@ -4006,7 +4006,7 @@ fi
 
 (defun ask-enqueue-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -4021,7 +4021,7 @@ fi
 
 (defun queued-ask-worker-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
      provider
@@ -4057,7 +4057,7 @@ fi
 
 (defun describe-task-progress-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
@@ -4086,7 +4086,7 @@ fi
 
 (defun monitor-task-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp" :enqueue t))
@@ -4143,7 +4143,7 @@ fi
 
 (defun task-queue-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4187,7 +4187,7 @@ fi
 
 (defun task-run-next-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -4212,7 +4212,7 @@ fi
 
 (defun task-cancel-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4230,7 +4230,7 @@ fi
 
 (defun worker-flow-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -4293,7 +4293,7 @@ fi
 
 (defun worker-introspection-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (start-result start-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(start-worker))
@@ -4356,7 +4356,7 @@ fi
 
 (defun work-item-creation-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (declare (ignore provider))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4374,7 +4374,7 @@ fi
 
 (defun work-item-persistence-test ()
   (let* ((path #P"/tmp/sbcl-agent-work-item-session.sexp")
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      (make-test-provider)
@@ -4388,7 +4388,7 @@ fi
                     "loaded work-item should preserve status"))))
 
 (defun work-item-checkpoint-test ()
-  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let ((session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      (make-test-provider)
@@ -4402,7 +4402,7 @@ fi
 
 (defun work-item-shell-commands-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4460,7 +4460,7 @@ fi
 
 (defun work-item-plan-shell-commands-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4537,7 +4537,7 @@ fi
 
 (defun work-item-validation-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -4559,7 +4559,7 @@ fi
 
 (defun work-item-failure-validation-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "missing-file.lisp")))
      provider
@@ -4590,7 +4590,7 @@ fi
 
 (defun work-item-provenance-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -4614,7 +4614,7 @@ fi
 
 (defun work-item-provenance-shell-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4636,7 +4636,7 @@ fi
                      "describe-work-item should expose provenance detail")))))
 
 (defun work-item-taint-reconciliation-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Synthetic taint check" :transaction-scope :test)))
     (sbcl-agent::append-work-item-image-mutation work-item
                                                  (list :kind :synthetic-runtime-patch
@@ -4670,7 +4670,7 @@ fi
                    "live validation should carry taint when run against tainted image state"))))
 
 (defun validation-and-reconciliation-event-correlation-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Validation event correlation" :transaction-scope :test)))
     (sbcl-agent::update-work-item-validation-results
      session
@@ -4701,7 +4701,7 @@ fi
 
 (defun work-item-taint-shell-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Synthetic shell taint check" :transaction-scope :test)))
     (sbcl-agent::append-work-item-image-mutation work-item
                                                  (list :kind :synthetic-runtime-patch
@@ -4735,7 +4735,7 @@ fi
                    "describe-work-item should expose reconciliation taint reasons"))))
 
 (defun workflow-record-creation-test ()
-  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let ((session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      (make-test-provider)
@@ -4756,7 +4756,7 @@ fi
 (defun workflow-record-persistence-test ()
   (let* ((path #P"/tmp/sbcl-agent-workflow-session.sexp")
          (provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -4777,7 +4777,7 @@ fi
 
 (defun workflow-record-shell-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (enqueue-result enqueue-kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
@@ -4849,7 +4849,7 @@ fi
                         "workflow detail should expose the governed execution surface"))))))
 
 (defun workflow-record-approval-state-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Approval check" :transaction-scope :test))
          (record (first (sbcl-agent::agent-session-workflow-records session))))
     (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
@@ -4868,7 +4868,7 @@ fi
 
 (defun execution-shell-commands-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Execution shell command check" :transaction-scope :test))
          (approval-response (sbcl-agent::command-request-work-item-approval-service session
                                                                                     (sbcl-agent::work-item-id work-item)
@@ -5441,7 +5441,7 @@ fi
                                                                :session session))))
 
 (defun workflow-record-quarantine-resume-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Quarantine check" :transaction-scope :test))
          (record (first (sbcl-agent::agent-session-workflow-records session))))
     (sbcl-agent::quarantine-work-item session work-item "Needs operator review")
@@ -5467,7 +5467,7 @@ fi
     (assert-true (> (length (sbcl-agent::workflow-record-operator-interventions record)) 1)
                  "quarantine and resume should both record operator interventions"))
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Execution-native quarantine" :transaction-scope :test))
          (approval-response (sbcl-agent::command-request-work-item-approval-service session
                                                                                     (sbcl-agent::work-item-id work-item)
@@ -5504,7 +5504,7 @@ fi
                     "execution-native resume should update workflow record state"))))
 
 (defun workflow-milestone-event-correlation-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Workflow milestone events" :transaction-scope :test))
          (record (first (sbcl-agent::agent-session-workflow-records session))))
     (sbcl-agent::quarantine-work-item session work-item "Needs operator review")
@@ -5537,7 +5537,7 @@ fi
 
 (defun workflow-record-operator-shell-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Operator shell check" :transaction-scope :test)))
     (multiple-value-bind (approval-result approval-kind updated-session)
         (sbcl-agent::execute-command
@@ -5585,7 +5585,7 @@ fi
                       "workflow detail should expose resume count")))))
 
 (defun work-item-wait-report-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Wait report check" :transaction-scope :test)))
     (let ((report (sbcl-agent::work-item-wait-report session work-item)))
       (assert-equal :pending-validation
@@ -5605,7 +5605,7 @@ fi
       (assert-true (equal :await-approval
                           (getf (getf report :next-action) :type))
                    "approval-gated work should expose a resumable next action"))
-    (let* ((runtime-session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+    (let* ((runtime-session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
            (provider (make-test-provider)))
       (sbcl-agent::execute-command
        (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
@@ -5629,7 +5629,7 @@ fi
 
 (defun why-waiting-shell-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Why waiting shell check" :transaction-scope :test)))
     (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
     (multiple-value-bind (result kind updated-session)
@@ -5675,7 +5675,7 @@ fi
                       "why-waiting should preserve execution-surface posture when resolving execution ids")))))
 
 (defun workflow-record-resume-payload-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Resume payload check" :transaction-scope :test))
          (record (first (sbcl-agent::agent-session-workflow-records session))))
     (sbcl-agent::request-work-item-approval session work-item :process-run :reason "Need process execution")
@@ -5687,7 +5687,7 @@ fi
                   "work-item resume payload should stay aligned with the workflow record")))
 
 (defun session-wait-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-a (sbcl-agent::create-work-item session "Approval blocked" :transaction-scope :test))
          (work-b (sbcl-agent::create-work-item session "Validation pending" :transaction-scope :test))
          (provider (make-test-provider)))
@@ -5738,7 +5738,7 @@ fi
 
 
 (defun checkpoint-linked-resume-payload-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Checkpoint link check" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((payload (sbcl-agent::work-item-resume-payload work-item)))
@@ -5749,7 +5749,7 @@ fi
                     "resume payload should point at the latest checkpoint"))))
 
 (defun validator-action-plan-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Validator action check" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((actions (sbcl-agent::work-item-validator-actions work-item)))
@@ -5760,7 +5760,7 @@ fi
 
 
 (defun transaction-replay-id-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Replay id check" :transaction-scope :test))
          (transaction (first (sbcl-agent::work-item-transactions work-item))))
     (assert-true (stringp (sbcl-agent::mutation-transaction-replay-id transaction))
@@ -5769,7 +5769,7 @@ fi
                  "transaction replay ids should use the txn prefix")))
 
 (defun validator-task-records-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Validator record check" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((records (sbcl-agent::work-item-validator-tasks work-item)))
@@ -5783,7 +5783,7 @@ fi
 
 (defun list-replay-groups-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "List replay groups" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let* ((records (sbcl-agent::work-item-validator-tasks work-item))
@@ -5819,7 +5819,7 @@ fi
 
 (defun list-image-reconciliations-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "List reconciliations" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
     (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
@@ -5850,7 +5850,7 @@ fi
                     "image reconciliation summaries should prefer environment-backed workflow state when bound"))))
 
 (defun replay-validator-set-mixed-status-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Replay mixed status" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let* ((live (first (sbcl-agent::work-item-validator-tasks work-item)))
@@ -5870,7 +5870,7 @@ fi
                     "mixed replay should allow cold validation to fail"))))
 
 (defun session-replay-group-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Replay group summary" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let* ((records (sbcl-agent::work-item-validator-tasks work-item))
@@ -5883,7 +5883,7 @@ fi
                       "session replay group summary should count grouped validator tasks")))))
 
 (defun session-image-reconciliation-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Reconciliation summary" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
     (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
@@ -5895,7 +5895,7 @@ fi
                     "session image reconciliation summary should preserve reconciliation status"))))
 
 (defun doctor-command-replay-and-reconciliation-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (config (sbcl-agent::load-config))
          (stdout (make-string-output-stream))
          (work-item (sbcl-agent::create-work-item session "Doctor replay summary" :transaction-scope :test)))
@@ -5914,7 +5914,7 @@ fi
 
 (defun replay-validator-set-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Replay validator set shell" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let* ((replay-id (sbcl-agent::validator-task-record-replay-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
@@ -5932,7 +5932,7 @@ fi
                      "replaying one validator set should leave cold validation pending when replay ids are per validator")))))
 
 (defun validator-failure-status-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Validator failure" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((validator-id (sbcl-agent::validator-task-record-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
@@ -5945,7 +5945,7 @@ fi
                     "validator task record should preserve failed status"))))
 
 (defun image-reconciliation-record-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Image reconciliation record" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
     (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Attached source patch")
@@ -5957,7 +5957,7 @@ fi
 
 (defun replay-validator-task-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Replay validator shell" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((validator-id (sbcl-agent::validator-task-record-id (first (sbcl-agent::work-item-validator-tasks work-item)))))
@@ -5981,7 +5981,7 @@ fi
 
 (defun reconcile-image-only-source-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Image-only reconcile shell" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
     (multiple-value-bind (result kind updated-session)
@@ -6003,7 +6003,7 @@ fi
                    "reconciling image-only work should create a reconciliation artifact"))))
 
 (defun image-only-outcome-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Image only check" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Experimental live patch")
     (assert-equal :image-only
@@ -6017,7 +6017,7 @@ fi
                     "operator status should count image-only work items"))))
 
 (defun operator-status-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (ready (sbcl-agent::create-work-item session "Ready item" :transaction-scope :test))
          (blocked (sbcl-agent::create-work-item session "Blocked item" :transaction-scope :test))
          (quarantined (sbcl-agent::create-work-item session "Quarantined item" :transaction-scope :test)))
@@ -6039,7 +6039,7 @@ fi
 
 (defun operator-status-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::request-work-item-approval session
                                             (sbcl-agent::create-work-item session "Operator tool blocked" :transaction-scope :test)
                                             :process-run
@@ -6061,7 +6061,7 @@ fi
                     "operator status tool should expose image-only count"))))
 
 (defun doctor-command-wait-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (config (sbcl-agent::load-config))
          (stdout (make-string-output-stream)))
     (setf sbcl-agent::*current-session* session)
@@ -6095,7 +6095,7 @@ fi
 
 (defun doctor-command-task-worker-surface-summary-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (config (sbcl-agent::load-config))
          (stdout (make-string-output-stream)))
     (setf sbcl-agent::*current-session* session)
@@ -6128,7 +6128,7 @@ fi
 (defun task-persistence-test ()
   (let* ((provider (make-test-provider))
          (path "/tmp/sbcl-agent-task-session.sexp")
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(enqueue-task '(tool :fs/read :path "src/main.lisp")))
      provider
@@ -6149,7 +6149,7 @@ fi
                    "loaded session should mark persisted workers as not running"))))
 (defun assistant-action-proposal-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (response (sbcl-agent::send-prompt provider "please read src/main.lisp" session)))
     (assert-equal 1 (length (sbcl-agent::assistant-response-actions response))
                   "mock provider should propose one read action")
@@ -6159,7 +6159,7 @@ fi
 
 (defun assistant-action-staging-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -6175,7 +6175,7 @@ fi
 
 (defun assistant-mixed-action-ask-test ()
   (let* ((provider (make-instance 'mixed-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(ask "execute and inspect"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -6199,7 +6199,7 @@ fi
 
 (defun assistant-action-execution-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(ask "please read src/main.lisp"))
      provider
@@ -6973,9 +6973,9 @@ fi
 
 (defun incident-environment-event-projection-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (environment (sbcl-agent::make-default-environment
-                       :storage-root "/Volumes/data/development/sbcl-agent/"
+                       :storage-root (current-workspace-root)
                        :session session)))
     (sbcl-agent::bind-session-to-environment session environment)
     (assert-signals-error
@@ -7340,7 +7340,7 @@ fi
 
 (defun turn-status-approval-summary-test ()
   (let* ((provider (make-instance 'patch-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare patch"))
      provider
@@ -7375,7 +7375,7 @@ fi
 
 (defun turn-resume-approval-flow-test ()
   (let* ((provider (make-instance 'patch-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare patch"))
      provider
@@ -7463,7 +7463,7 @@ fi
 
 (defun turn-resume-isolates-pending-actions-by-turn-test ()
   (let* ((provider (make-instance 'patch-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare first patch"))
      provider
@@ -7524,7 +7524,7 @@ fi
 
 (defun turn-resume-provider-followup-test ()
   (let* ((provider (make-instance 'followup-patch-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
      provider
@@ -7575,7 +7575,7 @@ fi
 
 (defun turn-resume-validation-first-followup-test ()
   (let* ((provider (make-instance 'followup-validation-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "mutate runtime then follow up"))
      provider
@@ -8873,7 +8873,7 @@ fi
 
 (defun environment-status-command-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (blocked (sbcl-agent::create-work-item session "Blocked status item" :transaction-scope :test)))
     (sbcl-agent::request-work-item-approval session blocked :process-run :reason "Need process approval")
     (multiple-value-bind (result kind updated-session)
@@ -8917,7 +8917,7 @@ fi
 
 (defun environment-status-incident-summary-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (assert-signals-error
      (lambda ()
        (sbcl-agent::execute-command
@@ -8946,7 +8946,7 @@ fi
 
 (defun environment-status-blocked-work-summary-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (approval-item (sbcl-agent::create-work-item session "Approval item" :transaction-scope :test))
          (review-item (sbcl-agent::create-work-item session "Review item" :transaction-scope :test))
          (cold-item (sbcl-agent::create-work-item session "Cold item" :transaction-scope :test)))
@@ -9095,7 +9095,7 @@ fi
 
 (defun runtime-find-definition-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(runtime/find-definition "runtime-find-definition-test"))
@@ -9114,7 +9114,7 @@ fi
 
 (defun runtime-methods-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(runtime/methods "PRINT-OBJECT" :package "COMMON-LISP"))
@@ -9370,7 +9370,7 @@ fi
 
 (defun turn-resume-runtime-incident-quarantine-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
      provider
@@ -9451,7 +9451,7 @@ fi
 
 (defun incident-workspace-runtime-context-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
      provider
@@ -9485,7 +9485,7 @@ fi
 
 (defun incident-recommended-recovery-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
      provider
@@ -9523,7 +9523,7 @@ fi
 
 (defun incident-recovery-artifact-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
      provider
@@ -9551,7 +9551,7 @@ fi
 
 (defun incident-aware-session-and-environment-summary-test ()
   (let ((provider (make-test-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (assert-signals-error
      (lambda ()
        (sbcl-agent::execute-command
@@ -9586,7 +9586,7 @@ fi
                       "provider-session-summary should carry open incident totals")))))
 
 (defun non-thread-validation-artifact-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Non-thread validation artifact" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
     (let ((validator-id (sbcl-agent::validator-task-record-id
@@ -9604,9 +9604,9 @@ fi
                      "non-thread validation artifacts should still anchor into the session evidence stream")))))
 
 (defun environment-level-evidence-summary-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (environment (sbcl-agent::make-default-environment
-                       :storage-root "/Volumes/data/development/sbcl-agent/"
+                       :storage-root (current-workspace-root)
                        :session session))
          (work-item (sbcl-agent::create-work-item session "Environment evidence summary" :transaction-scope :test)))
     (sbcl-agent::append-work-item-checkpoint session work-item)
@@ -9753,7 +9753,7 @@ fi
                       "session-artifact-summary should resolve through environment-native artifact state")))))
 
 (defun reconciliation-artifact-coverage-test ()
-  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (work-item (sbcl-agent::create-work-item session "Reconciliation artifact coverage" :transaction-scope :test)))
     (sbcl-agent::mark-work-item-image-only session work-item :reason "Coverage image-only")
     (sbcl-agent::reconcile-image-only-work-item-to-source session work-item "Coverage source patch")
@@ -9768,7 +9768,7 @@ fi
 
 (defun turn-resume-mutating-runtime-eval-turn-evidence-test ()
   (let ((provider (make-instance 'mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "mutate runtime state through conversation"))
      provider
@@ -9819,7 +9819,7 @@ fi
 
 (defun turn-resume-runtime-reload-turn-evidence-test ()
   (let* ((provider (make-instance 'runtime-reload-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
     (ensure-directories-exist path)
     (with-open-file (stream path
@@ -9886,7 +9886,7 @@ fi
 
 (defun mutation-review-command-test ()
   (let* ((provider (make-instance 'patch-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare patch"))
      provider
@@ -9926,7 +9926,7 @@ fi
 
 (defun mutation-review-cold-validation-test ()
   (let* ((provider (make-instance 'runtime-reload-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
     (ensure-directories-exist path)
     (with-open-file (stream path
@@ -9973,7 +9973,7 @@ fi
 
 (defun mutation-review-incident-linked-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))
-        (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+        (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "trigger a failing governed runtime mutation"))
      provider
@@ -10048,7 +10048,7 @@ fi
          (path (format nil "/tmp/sbcl-agent-turn-recovery-~D-~D.sexp"
                        (get-universal-time)
                        (random 1000000)))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(say "prepare patch"))
      provider
@@ -10171,7 +10171,7 @@ fi
 
 (defun session-summary-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::update-session-plan session "Inspect runtime state")
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command
@@ -10210,7 +10210,7 @@ fi
 
 (defun session-events-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::update-session-plan session "Inspect events")
     (sbcl-agent::append-transcript-entry session :user "hello")
     (multiple-value-bind (result kind updated-session)
@@ -10257,7 +10257,7 @@ fi
 
 (defun docs-read-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "architecture.md"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -10269,7 +10269,7 @@ fi
 
 (defun docs-read-path-escape-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(tool :docs/read :path "../README.md"))))
     (assert-signals-error
      (lambda () (sbcl-agent::execute-command command provider session))
@@ -10278,7 +10278,7 @@ fi
 
 (defun fs-read-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "src/main.lisp"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
@@ -10290,7 +10290,7 @@ fi
 
 (defun fs-read-path-escape-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (command (sbcl-agent::normalize-form-command '(tool :fs/read :path "../README.md"))))
     (assert-signals-error
      (lambda () (sbcl-agent::execute-command command provider session))
@@ -10308,7 +10308,7 @@ fi
 
 (defun approve-and-run-tool-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :process-run)) provider session)
     (multiple-value-bind (result kind updated-session)
@@ -10485,7 +10485,7 @@ fi
 
 (defun patch-path-escape-test ()
   (let* ((provider (make-test-provider))
-         (session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (patch-command '(patch ((:write "../escape.txt" "patched")))))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :workspace-write)) provider session)

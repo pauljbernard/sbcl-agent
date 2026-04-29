@@ -1180,7 +1180,7 @@
                      (sbcl-agent::work-item-workflow-record validation-session work-item))
                     "kernel control complete-validations should close the workflow record"))
 
-    (let ((self-mod-session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/")))
+    (let ((self-mod-session (make-test-session :cwd (current-workspace-root))))
       (sbcl-agent::approve-policy self-mod-session :workspace-write)
       (sbcl-agent::approve-policy self-mod-session :runtime-reload)
       (sbcl-agent::approve-policy self-mod-session :runtime-eval-mutate)
@@ -2999,7 +2999,7 @@
                        "platform package validate service should expose incompatible desktop host contract requirements")))))
 
 (defun execution-service-contract-test ()
-  (let ((session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+  (let ((session (make-test-session :cwd (current-workspace-root)))
         (provider (make-test-provider)))
     (let ((ask-response (sbcl-agent::command-conversation-execution-service session
                                                                             provider
@@ -3059,7 +3059,7 @@
 
 (defun interaction-state-boundary-service-contract-test ()
   (labels ((assert-non-mutating-turn (prompt expected-mode)
-             (let* ((session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+             (let* ((session (make-test-session :cwd (current-workspace-root)))
                     (provider (make-test-provider))
                     (decision (sbcl-agent::classify-interaction-decision prompt))
                     (response (sbcl-agent::command-conversation-execution-service session
@@ -3105,7 +3105,7 @@
                               :inspect)
     (assert-non-mutating-turn "What would you change to fix this failure before implementing anything?"
                               :prepare)
-    (let* ((session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+    (let* ((session (make-test-session :cwd (current-workspace-root)))
            (provider (make-instance 'mutating-eval-provider))
            (prompt "Implement the fix by mutating runtime state.")
            (decision (sbcl-agent::classify-interaction-decision prompt))
@@ -3151,7 +3151,7 @@
                (assert-equal 0
                              (length (sbcl-agent::agent-session-work-items session))
                              (format nil "~A should not create governed work-items" message)))))
-    (let* ((conversation-session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+    (let* ((conversation-session (make-test-session :cwd (current-workspace-root)))
            (conversation-provider (make-test-provider))
            (conversation-response
              (sbcl-agent::command-conversation-execution-service
@@ -3171,7 +3171,7 @@
         (assert-equal 2
                       (length (getf detail :messages))
                       "conversation-only scenario should retain a simple user/assistant turn history")))
-    (let* ((prepare-session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+    (let* ((prepare-session (make-test-session :cwd (current-workspace-root)))
            (prepare-provider (make-test-provider))
            (prepare-response
              (sbcl-agent::command-conversation-execution-service
@@ -3209,7 +3209,7 @@
         (assert-equal 1
                       (length (sbcl-agent::agent-session-work-items prepare-session))
                       "explicit confirmation should create one governed work-item")))
-    (let* ((mutation-session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))
+    (let* ((mutation-session (make-test-session :cwd (current-workspace-root)))
            (mutation-provider (make-instance 'followup-patch-provider))
            (mutation-response
              (sbcl-agent::command-conversation-execution-service

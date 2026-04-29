@@ -1665,7 +1665,7 @@ fi
     (assert-equal "HELP"
                   (symbol-name (first (sbcl-agent::read-shell-form (sbcl-agent::make-default-session))))
                   "read-shell-form should read one form from query io"))
-  (let ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/")))
+  (let ((session (make-test-session)))
     (assert-signals-error
      (lambda ()
        (sbcl-agent::execute-tool-command nil session))

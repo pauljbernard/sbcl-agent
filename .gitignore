@@ -5,6 +5,9 @@ tmp/generated.txt
 tmp/shell-helper.txt
 tmp/followup-generated.txt
 *.key
+# Local docs/Jekyll tooling should not be tracked.
+Gemfile
+Gemfile.lock
 .bundle/
 .gem/
 .asdf-cache/

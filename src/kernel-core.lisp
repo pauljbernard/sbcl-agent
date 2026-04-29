@@ -337,6 +337,5 @@
     (when handle
       (store-kernel-execution-handle handle active-environment)
       (setf metadata (kernel-plist-put metadata :execution-id (getf handle :execution-id)))
-      (setf metadata (kernel-plist-put metadata :execution-handle handle))
       (setf (getf response :metadata) metadata))
     response))

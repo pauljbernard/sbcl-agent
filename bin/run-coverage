@@ -8,5 +8,8 @@ ASDF_CACHE_DIR="$PROJECT_DIR/.asdf-cache/"
 mkdir -p "$ASDF_CACHE_DIR"
 
 exec env \
+  XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/common-lisp-cache}" \
   ASDF_OUTPUT_TRANSLATIONS="$ASDF_CACHE_DIR:$ASDF_CACHE_DIR" \
-  sbcl --script "$PROJECT_DIR/scripts/run-coverage.lisp"
+  sbcl --dynamic-space-size 4096 \
+       --non-interactive \
+       --load "$PROJECT_DIR/scripts/run-coverage.lisp"

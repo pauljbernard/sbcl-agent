@@ -1,12 +1,25 @@
 (in-package #:sbcl-agent)
 
-(defun mutation-review-surface-summary (session execution-handles)
-  (compact-execution-surface-summary
-   (primary-execution-surface-summary session execution-handles)))
+(defun mutation-review-surface-summary (session execution-handles &key preferred-surface-kind)
+  (let ((surfaces (remove nil
+                          (mapcar (lambda (summary)
+                                    (let ((execution-id (getf summary :execution-id)))
+                                      (and execution-id
+                                           (query-execution-surface-by-id session execution-id))))
+                                  (or execution-handles '())))))
+    (compact-execution-surface-summary
+     (if preferred-surface-kind
+         (find preferred-surface-kind surfaces
+               :key (lambda (surface)
+                      (getf surface :surface-kind))
+               :test #'string=)
+         (or (first surfaces)
+             (primary-execution-surface-summary session execution-handles))))))
 
 (defun mutation-review-turn-surface-summary (session turn)
   (or (mutation-review-surface-summary session
-                                      (getf turn :execution-handles))
+                                      (getf turn :execution-handles)
+                                      :preferred-surface-kind "conversation")
       (compact-execution-surface-summary
        (list :surface-id (format nil "surface-turn-~A" (getf turn :id))
              :surface-kind "conversation"
@@ -20,7 +33,8 @@
 
 (defun mutation-review-work-item-surface-summary (session work-item)
   (or (mutation-review-surface-summary session
-                                      (getf work-item :execution-handles))
+                                      (getf work-item :execution-handles)
+                                      :preferred-surface-kind "governed-work")
       (compact-execution-surface-summary
        (list :surface-id (format nil "surface-work-item-~A" (getf work-item :id))
              :surface-kind "governed-work"
@@ -36,7 +50,8 @@
 
 (defun mutation-review-workflow-surface-summary (session workflow-record)
   (or (mutation-review-surface-summary session
-                                      (getf workflow-record :execution-handles))
+                                      (getf workflow-record :execution-handles)
+                                      :preferred-surface-kind "workflow")
       (compact-execution-surface-summary
        (list :surface-id (format nil "surface-workflow-~A" (getf workflow-record :id))
              :surface-kind "workflow"

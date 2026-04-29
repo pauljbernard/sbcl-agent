@@ -4,6 +4,7 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
 exec env XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/common-lisp-cache}" \
-  sbcl --non-interactive \
+  sbcl --dynamic-space-size 4096 \
+       --non-interactive \
        --load "${PROJECT_DIR}/scripts/run-test-harness.lisp" \
        -- "$@"

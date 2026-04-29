@@ -499,25 +499,28 @@
          (category (catalog-case-category case))
          (thunk (catalog-case-thunk case))
          (started (get-internal-real-time)))
-    (handler-case
-        (progn
-          (funcall thunk)
-          (let ((duration (/ (- (get-internal-real-time) started)
-                             internal-time-units-per-second)))
-            (format t "PASS [~(~A~)] ~A~%" category name)
-            (list :name name
-                  :category category
-                  :status :passed
-                  :duration-seconds duration)))
-      (error (condition)
-        (let ((duration (/ (- (get-internal-real-time) started)
-                           internal-time-units-per-second)))
-          (format t "FAIL [~(~A~)] ~A~%" category name)
-          (list :name name
-                :category category
-                :status :failed
-                :duration-seconds duration
-                :error (princ-to-string condition)))))))
+    (unwind-protect
+         (handler-case
+             (progn
+               (funcall thunk)
+               (let ((duration (/ (- (get-internal-real-time) started)
+                                  internal-time-units-per-second)))
+                 (format t "PASS [~(~A~)] ~A~%" category name)
+                 (list :name name
+                       :category category
+                       :status :passed
+                       :duration-seconds duration)))
+           (error (condition)
+             (let ((duration (/ (- (get-internal-real-time) started)
+                                internal-time-units-per-second)))
+               (format t "FAIL [~(~A~)] ~A~%" category name)
+               (list :name name
+                     :category category
+                     :status :failed
+                     :duration-seconds duration
+                     :error (princ-to-string condition)))))
+      (ignore-errors
+        (sb-ext:gc :full t)))))
 
 (defun summarize-test-results (results)
   (let* ((total (length results))

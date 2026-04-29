@@ -1,15 +1,12 @@
-#!/usr/bin/env -S sbcl --script
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-(defparameter *script-path*
-  (or *load-truename* *compile-file-truename* (truename *default-pathname-defaults*)))
-
-(defparameter *project-dir*
-  (make-pathname :directory (butlast (pathname-directory *script-path*))
-                 :name nil
-                 :type nil
-                 :defaults *script-path*))
-
-(require :asdf)
-(load (merge-pathnames #P"sbcl-agent.asd" *project-dir*))
-(asdf:test-system :sbcl-agent)
-(sb-ext:exit :code 0)
+exec env XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/common-lisp-cache}" \
+  sbcl --dynamic-space-size 4096 \
+       --non-interactive \
+       --eval '(require :asdf)' \
+       --load "${PROJECT_DIR}/sbcl-agent.asd" \
+       --eval '(asdf:test-system :sbcl-agent)' \
+       --eval '(sb-ext:exit :code 0)'

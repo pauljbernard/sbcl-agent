@@ -1,12 +1,9 @@
-#!/usr/bin/env -S sbcl --script
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
 
-(defparameter *script-path*
-  (or *load-truename* *compile-file-truename* (truename *default-pathname-defaults*)))
-
-(defparameter *project-dir*
-  (make-pathname :directory (butlast (pathname-directory *script-path*))
-                 :name nil
-                 :type nil
-                 :defaults *script-path*))
-
-(load (merge-pathnames #P"scripts/run-evals.lisp" *project-dir*))
+exec env XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/common-lisp-cache}" \
+  sbcl --dynamic-space-size 4096 \
+       --non-interactive \
+       --load "${PROJECT_DIR}/scripts/run-evals.lisp"

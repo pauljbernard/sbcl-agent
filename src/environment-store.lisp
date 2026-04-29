@@ -395,7 +395,10 @@
                           :if-exists :supersede
                           :if-does-not-exist :create)
     (let ((*print-circle* t)
-          (*print-pretty* t)
+          ;; Environment snapshots can contain deeply connected session/kernal
+          ;; state. Write them readably enough for `read`, but avoid the
+          ;; pretty-printer's recursive structure walk.
+          (*print-pretty* nil)
           (*print-length* nil)
           (*print-level* nil)
           (*print-lines* nil)

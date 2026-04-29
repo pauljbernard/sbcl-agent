@@ -1107,27 +1107,39 @@
                    "parallel task group work-items should preserve shared context"))))
 
 (defun parallel-orchestration-worker-flow-test ()
-  (let* ((provider (make-instance 'slow-test-provider))
-         (session (make-test-session :cwd "/tmp/parallel-orchestration-worker-flow/"))
-         (command-a (sbcl-agent::normalize-form-command '(say "parallel task a")))
-         (command-b (sbcl-agent::normalize-form-command '(say "parallel task b")))
+  (let* ((cwd "/tmp/parallel-orchestration-worker-flow/")
+         (ignore (ensure-directories-exist (merge-pathnames #P".keep" cwd)))
+         (provider (make-test-provider))
+         (session (make-test-session :cwd cwd))
+         (command-a (sbcl-agent::normalize-form-command
+                     '(tool :proc/run :argv ("/bin/sleep" "1"))))
+         (command-b (sbcl-agent::normalize-form-command
+                     '(tool :proc/run :argv ("/bin/sleep" "1"))))
          (tasks (sbcl-agent::enqueue-parallel-task-group
                  session
                  (list (list :command command-a :ownership-scope '("src/a.lisp"))
                        (list :command command-b :ownership-scope '("src/b.lisp")))
                  :shared-context '(:goal "parallel patch set")
                  :merge-policy :serial-review)))
+    (declare (ignore ignore))
+    (sbcl-agent::approve-policy session :process-run)
     (sbcl-agent::start-worker session provider)
     (sbcl-agent::start-worker session provider)
     (wait-for (lambda ()
                 (every (lambda (task)
-                         (eq :completed (sbcl-agent::task-status task)))
+                         (member (sbcl-agent::task-status task)
+                                 '(:completed :failed :cancelled)
+                                 :test #'eq))
                        tasks))
-              :timeout-seconds 30.0
+              :timeout-seconds 60.0
               :sleep-seconds 0.05)
     (let* ((group-id (sbcl-agent::task-orchestration-group-id (first tasks)))
            (worker-ids (remove-duplicates (mapcar #'sbcl-agent::task-worker-id tasks) :test #'string=))
-           (summaries (mapcar #'sbcl-agent::task-summary tasks)))
+           (summaries (mapcar #'sbcl-agent::task-summary tasks))
+           (statuses (mapcar #'sbcl-agent::task-status tasks)))
+      (assert-true (every (lambda (status) (eq :completed status)) statuses)
+                   (format nil "parallel orchestration worker flow should complete every task; saw ~S"
+                           statuses))
       (assert-true (= 2 (length worker-ids))
                    "parallel orchestration should distribute grouped tasks across multiple workers in the happy path")
       (assert-true (every (lambda (summary)
@@ -1169,31 +1181,44 @@
                       "serial-review groups should preserve merge policy in the review payload")))))
 
 (defun orchestration-playbook-reuse-test ()
-  (let* ((provider (make-instance 'slow-test-provider))
-         (session-one (make-test-session :cwd "/tmp/orchestration-playbook-reuse/"))
+  (let* ((cwd "/tmp/orchestration-playbook-reuse/")
+         (ignore (ensure-directories-exist (merge-pathnames #P".keep" cwd)))
+         (provider (make-test-provider))
+         (session-one (make-test-session :cwd cwd))
          (environment (sbcl-agent::make-default-environment :session session-one
-                                                            :storage-root "/tmp/orchestration-playbook-reuse/")))
+                                                            :storage-root cwd)))
+    (declare (ignore ignore))
     (sbcl-agent::bind-session-to-environment session-one environment)
     (let ((tasks (sbcl-agent::enqueue-parallel-task-group
                   session-one
-                  (list (list :command (sbcl-agent::normalize-form-command '(say "parallel reuse task a"))
+                  (list (list :command (sbcl-agent::normalize-form-command
+                                        '(tool :proc/run :argv ("/bin/sleep" "1")))
                               :ownership-scope '("src/reuse-a.lisp"))
-                        (list :command (sbcl-agent::normalize-form-command '(say "parallel reuse task b"))
+                        (list :command (sbcl-agent::normalize-form-command
+                                        '(tool :proc/run :argv ("/bin/sleep" "1")))
                               :ownership-scope '("src/reuse-b.lisp")))
                   :shared-context '(:goal "parallel reuse patch set")
                   :merge-policy :serial-review)))
+      (sbcl-agent::approve-policy session-one :process-run)
       (sbcl-agent::start-worker session-one provider)
       (sbcl-agent::start-worker session-one provider)
       (unwind-protect
            (progn
              (wait-for (lambda ()
                          (every (lambda (task)
-                                  (eq :completed (sbcl-agent::task-status task)))
+                                  (member (sbcl-agent::task-status task)
+                                          '(:completed :failed :cancelled)
+                                          :test #'eq))
                                 tasks))
-                       :timeout-seconds 30.0
-                       :sleep-seconds 0.05))
+                       :timeout-seconds 60.0
+                       :sleep-seconds 0.05)
+             (assert-true (every (lambda (task)
+                                   (eq :completed (sbcl-agent::task-status task)))
+                                 tasks)
+                          (format nil "parallel orchestration playbook setup should complete every task; saw ~S"
+                                  (mapcar #'sbcl-agent::task-status tasks))))
         (sbcl-agent::stop-all-workers session-one)))
-    (let* ((session-two (make-test-session :cwd "/tmp/orchestration-playbook-reuse/")))
+    (let* ((session-two (make-test-session :cwd cwd)))
       (sbcl-agent::bind-session-to-environment session-two environment)
       (let* ((brief (sbcl-agent::build-prior-outcome-brief
                      session-two

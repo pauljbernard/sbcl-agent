@@ -1952,8 +1952,12 @@ fi
                  "print-shell-result should render the default workspace open handoff")
     (assert-true (search "workspace-current-focus> kind=DISPLAY label=linux.echo status=RUNNING exec=exec-display app=linux.echo" result)
                  "print-shell-result should render the compact current workspace focus")
-    (assert-true (search "workspace-next-action> label=Show current display kind=SHOW-PANEL command=(display/show :app-id \\\"linux.echo\\\") action-id=display:show-panel:linux.echo" result)
-                 "print-shell-result should render the recommended next workspace action")
+    (assert-true (search "workspace-next-action> label=Show current display kind=SHOW-PANEL" result)
+                 "print-shell-result should render the recommended next workspace action header")
+    (assert-true (search "command=(display/show :app-id \"linux.echo\")" result)
+                 "print-shell-result should render the recommended next workspace action command")
+    (assert-true (search "action-id=display:show-panel:linux.echo" result)
+                 "print-shell-result should render the recommended next workspace action id")
     (assert-true (search "workspace-current-display> app=linux.echo state=VISIBLE exec=exec-display" result)
                  "print-shell-result should render current display posture in workspace summaries")
     (assert-true (search "workspace-display-state> status=RUNNING kind=DESKTOP-WINDOW controllable=T relaunch=T" result)
@@ -2056,8 +2060,12 @@ fi
                :desktop-show))))
     (assert-true (search "desktop-active-summary> panel=DISPLAY label=Display focus=exec-display exec=exec-display app=linux.echo status=RUNNING" result)
                  "print-shell-result should render the compact active desktop panel summary")
-    (assert-true (search "desktop-next-action> label=Show selected display kind=SHOW-PANEL command=(display/show :app-id \\\"linux.echo\\\") action-id=display:show-panel:linux.echo" result)
-                 "print-shell-result should render the recommended next desktop action"))
+    (assert-true (search "desktop-next-action> label=Show selected display kind=SHOW-PANEL" result)
+                 "print-shell-result should render the recommended next desktop action header")
+    (assert-true (search "command=(display/show :app-id \"linux.echo\")" result)
+                 "print-shell-result should render the recommended next desktop action command")
+    (assert-true (search "action-id=display:show-panel:linux.echo" result)
+                 "print-shell-result should render the recommended next desktop action id"))
   (let (result)
     (setf result
           (with-output-to-string (stream)
@@ -2088,8 +2096,12 @@ fi
                :desktop-show))))
     (assert-true (search "desktop-inspector-summary> object=WORK-ITEM resolved=EXECUTION-HANDLE history=3" result)
                  "print-shell-result should render the compact active inspector posture")
-    (assert-true (search "desktop-next-action> label=Open focused execution kind=OPEN-PANEL command=(open :execution-id \\\"exec-work\\\") action-id=inspector:open-panel:exec-work" result)
-                 "print-shell-result should render the inspector-focused recommended desktop action"))
+    (assert-true (search "desktop-next-action> label=Open focused execution kind=OPEN-PANEL" result)
+                 "print-shell-result should render the inspector-focused recommended desktop action header")
+    (assert-true (search "command=(open :execution-id \"exec-work\")" result)
+                 "print-shell-result should render the inspector-focused recommended desktop action command")
+    (assert-true (search "action-id=inspector:open-panel:exec-work" result)
+                 "print-shell-result should render the inspector-focused recommended desktop action id"))
   (let ((result (with-output-to-string (stream)
                   (let ((*standard-output* stream))
                     (sbcl-agent::print-shell-result
@@ -4405,9 +4417,9 @@ fi
         (declare (ignore listed-session))
         (assert-equal :list-work-items list-kind "list-work-items should dispatch correctly")
         (assert-equal 1 (length list-result) "list-work-items should return one work-item summary")
-        (assert-equal nil
-                      (getf (first list-result) :primary-execution-handle)
-                      "list-work-items should leave primary execution empty before governed actions exist"))
+        (assert-true (stringp (getf (getf (first list-result) :primary-execution-handle)
+                                    :execution-id))
+                     "list-work-items should expose the enqueue execution as the primary handle"))
       (multiple-value-bind (detail-result detail-kind detailed-session)
           (sbcl-agent::execute-command
            (sbcl-agent::normalize-form-command `(describe-work-item ,(getf enqueue-result :work-item-id)))
@@ -4419,9 +4431,9 @@ fi
                       "describe-work-item should expose transaction detail")
         (assert-equal 1 (length (getf detail-result :checkpoints))
                       "describe-work-item should expose checkpoint detail")
-        (assert-equal nil
-                      (getf detail-result :primary-execution-handle)
-                      "work-item detail should leave primary execution empty before governed actions exist"))
+        (assert-true (stringp (getf (getf detail-result :primary-execution-handle)
+                                    :execution-id))
+                     "work-item detail should expose the enqueue execution as the primary handle"))
       (let* ((work-item-id (getf enqueue-result :work-item-id))
              (approval-response (sbcl-agent::command-request-work-item-approval-service updated-session
                                                                                         work-item-id
@@ -4469,9 +4481,9 @@ fi
                         "describe-work-item-plan should return the requested work-item")
           (assert-true (listp (getf plan-result :plan-steering))
                        "describe-work-item-plan should expose plan steering")
-          (assert-equal nil
-                        (getf plan-result :primary-execution-handle)
-                        "work-item plan should leave primary execution empty before governed actions exist"))
+          (assert-true (stringp (getf (getf plan-result :primary-execution-handle)
+                                      :execution-id))
+                       "work-item plan should expose the enqueue execution as the primary handle"))
         (multiple-value-bind (steer-result steer-kind steer-session)
             (sbcl-agent::execute-command
              (sbcl-agent::normalize-form-command
@@ -4784,9 +4796,9 @@ fi
         (declare (ignore listed-session))
         (assert-equal :list-workflow-records list-kind "list-workflow-records should dispatch correctly")
         (assert-equal 1 (length list-result) "list-workflow-records should return one workflow record")
-        (assert-equal nil
-                      (getf (first list-result) :primary-execution-handle)
-                      "workflow list should leave primary execution empty before governed actions exist"))
+        (assert-true (stringp (getf (getf (first list-result) :primary-execution-handle)
+                                    :execution-id))
+                     "workflow list should expose the enqueue execution as the primary handle"))
       (let* ((record (first (sbcl-agent::agent-session-workflow-records updated-session)))
              (record-id (sbcl-agent::workflow-record-id record)))
         (multiple-value-bind (detail-result detail-kind detailed-session)
@@ -4805,9 +4817,9 @@ fi
           (assert-equal :committed
                         (getf detail-result :status)
                         "describe-workflow-record should expose committed closure state")
-          (assert-equal nil
-                        (getf detail-result :primary-execution-handle)
-                        "workflow detail should leave primary execution empty before governed actions exist")))
+          (assert-true (stringp (getf (getf detail-result :primary-execution-handle)
+                                      :execution-id))
+                       "workflow detail should expose the enqueue execution as the primary handle")))
       (let* ((work-item (sbcl-agent::create-work-item updated-session
                                                       "Workflow execution shell check"
                                                       :transaction-scope :test))

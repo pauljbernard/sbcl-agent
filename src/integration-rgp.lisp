@@ -1595,7 +1595,17 @@
                 blocked))))))
 
 (defun json-safe-keyword (value)
-  (string-downcase (substitute #\_ #\- (symbol-name value))))
+  (string-downcase (symbol-name value)))
+
+(defun json-alist-p (value)
+  (and (listp value)
+       (every #'consp value)
+       (every (lambda (entry)
+                (stringp (car entry)))
+              value)))
+
+(defun json-alist-keyword (key)
+  (intern (string-upcase (substitute #\- #\_ key)) "KEYWORD"))
 
 (defun json-safe-value (value)
   (cond
@@ -1605,6 +1615,13 @@
      (json-safe-keyword value))
     ((symbolp value)
      (string-downcase (symbol-name value)))
+    ((json-alist-p value)
+     (loop for (key . entry) in value
+           append (list (json-alist-keyword key)
+                        (json-safe-value entry))))
+    ((and (listp value)
+          (every #'keywordp value))
+     (mapcar #'json-safe-value value))
     ((json-plist-p value)
      (loop for (key entry) on value by #'cddr
            append (list key (json-safe-value entry))))

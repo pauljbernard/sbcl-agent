@@ -476,6 +476,16 @@
          (compatibility-target
            (and base-compatibility-target
                 (append (copy-list base-compatibility-target)
+                        (when (getf result :backend-implementation)
+                          (list :backend-implementation (getf result :backend-implementation)))
+                        (when (getf result :window-state)
+                          (list :window-state (getf result :window-state)))
+                        (when (getf result :bridge-session-id)
+                          (list :bridge-session-id (getf result :bridge-session-id)))
+                        (when (member :bridge-attached-p result)
+                          (list :bridge-attached-p (getf result :bridge-attached-p)))
+                        (when (getf result :recovery-note)
+                          (list :recovery-note (getf result :recovery-note)))
                         (when (getf result :control-token)
                           (list :control-token (getf result :control-token)))
                         (when (getf result :pid)
@@ -508,6 +518,71 @@
    :context (list :thread-id (and thread (thread-id thread))
                   :turn-id (and turn (turn-id turn))
                   :tool-arguments tool-args))))
+
+(defun command-invoke-compatibility-app-service (session app-id app-args &key thread turn operation)
+  (let* ((definition (or (find-compatibility-app app-id
+                                                 :session session
+                                                 :environment (session-bound-environment session))
+                         (error "Unknown compatibility app ~S" app-id)))
+         (backend-profile-id (compatibility-app-definition-backend-profile-id definition))
+         (argv (compatibility-app-command-argv app-id app-args
+                                               :session session
+                                               :environment (session-bound-environment session)))
+         (base-target (compatibility-app-target app-id session app-args
+                                                :environment (session-bound-environment session)))
+         (result (let ((*runtime-governance-thread* thread)
+                       (*runtime-governance-turn* turn)
+                       (*runtime-governance-operation* operation))
+                   (declare (special *runtime-governance-thread*
+                                     *runtime-governance-turn*
+                                     *runtime-governance-operation*))
+                   (compatibility-backend-launch backend-profile-id
+                                                session
+                                                argv
+                                                :display-surface-kind
+                                                (compatibility-app-definition-display-surface-kind
+                                                 definition))))
+         (compatibility-target
+           (append (copy-list base-target)
+                   (when (getf result :backend-implementation)
+                     (list :backend-implementation (getf result :backend-implementation)))
+                   (when (getf result :window-state)
+                     (list :window-state (getf result :window-state)))
+                   (when (getf result :bridge-session-id)
+                     (list :bridge-session-id (getf result :bridge-session-id)))
+                   (when (member :bridge-attached-p result)
+                     (list :bridge-attached-p (getf result :bridge-attached-p)))
+                   (when (getf result :recovery-note)
+                     (list :recovery-note (getf result :recovery-note)))
+                   (when (getf result :control-token)
+                     (list :control-token (getf result :control-token)))
+                   (when (getf result :pid)
+                     (list :pid (getf result :pid)))
+                   (when (getf result :registered-at)
+                     (list :registered-at (getf result :registered-at)))
+                   (when (getf result :status)
+                          (list :status (getf result :status)
+                                :last-observed-status (getf result :status)
+                                :last-status-change-at (get-universal-time)))))
+         (payload (append (copy-list result)
+                          (list :app-id app-id
+                                :compatibility-target compatibility-target))))
+    (kernelize-service-command-response
+     (make-service-command-response :execution
+                                    :compatibility-app
+                                    payload
+                                    :metadata (make-service-metadata :authority :environment
+                                                                     :command-model :compatibility-app-execution-v1
+                                                                     :session session
+                                                                     :thread-id (and thread (thread-id thread))
+                                                                     :turn-id (and turn (turn-id turn))))
+     :session session
+     :intention (format nil "Invoke compatibility app ~A." app-id)
+     :capability app-id
+     :authority :environment
+     :context (list :thread-id (and thread (thread-id thread))
+                    :turn-id (and turn (turn-id turn))
+                    :app-arguments app-args))))
 
 (defun command-apply-patch-service (session operations &key thread turn operation)
   (kernelize-service-command-response

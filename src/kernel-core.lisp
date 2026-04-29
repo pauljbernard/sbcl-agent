@@ -57,7 +57,11 @@
         :domain (getf handle :domain)
         :operation (getf handle :operation)
         :target (getf handle :target)
-        :recorded-at (getf handle :recorded-at)))
+        :recorded-at (getf handle :recorded-at)
+        :last-observed-status (getf handle :last-observed-status)
+        :last-status-change-at (getf handle :last-status-change-at)
+        :last-control-action (getf handle :last-control-action)
+        :last-control-at (getf handle :last-control-at)))
 
 (defun kernel-execution-summaries-by-target (key value &optional environment)
   (mapcar #'kernel-execution-summary
@@ -108,9 +112,32 @@
 
 (defun kernel-response-target (response)
   (let* ((metadata (service-response-metadata response))
-         (data (service-response-data response)))
-    (list :thread-id (getf metadata :thread-id)
-          :turn-id (getf metadata :turn-id)
+         (data (service-response-data response))
+         (package (and (plist-shaped-p data)
+                       (listp (getf data :package))
+                       (getf data :package)))
+         (turn (and (plist-shaped-p data)
+                    (listp (getf data :turn))
+                    (getf data :turn))))
+    (list :thread-id (or (getf metadata :thread-id)
+                         (and (plist-shaped-p data)
+                              (getf data :id)
+                              (eq (getf response :domain) :conversation)
+                              (member (getf response :operation) '(:create-thread :use-thread) :test #'eq)
+                              (getf data :id)))
+          :turn-id (or (getf metadata :turn-id)
+                       (and turn
+                            (getf turn :id)))
+          :task-id (or (getf metadata :task-id)
+                       (and (plist-shaped-p data)
+                            (getf data :id)
+                            (eq (getf response :domain) :task)
+                            (getf data :id)))
+          :worker-id (or (getf metadata :worker-id)
+                         (and (plist-shaped-p data)
+                              (getf data :id)
+                              (eq (getf response :domain) :worker)
+                              (getf data :id)))
           :work-item-id (or (getf metadata :work-item-id)
                             (and (plist-shaped-p data)
                                  (getf data :work-item-id)))
@@ -127,7 +154,15 @@
                                         (copy-tree (getf data :compatibility-target)))
           :policy-id (or (getf metadata :policy-id)
                          (and (plist-shaped-p data)
-                              (getf data :policy-id))))))
+                              (getf data :policy-id)))
+          :platform-package-id (or (getf metadata :platform-package-id)
+                                   (and (plist-shaped-p data)
+                                        (or (getf data :package-id)
+                                            (and package
+                                                 (getf package :package-id)))))
+          :platform-package-path (or (getf metadata :platform-package-path)
+                                     (and (plist-shaped-p data)
+                                          (getf data :path))))))
 
 (defun kernel-response-trace (response)
   (let* ((metadata (service-response-metadata response))
@@ -139,14 +174,78 @@
           :binding (getf metadata :binding)
           :thread-id (getf target :thread-id)
           :turn-id (getf target :turn-id)
+          :task-id (getf target :task-id)
+          :worker-id (getf target :worker-id)
           :work-item-id (getf target :work-item-id)
           :workflow-record-id (getf target :workflow-record-id)
           :incident-id (getf target :incident-id)
           :runtime-id (getf target :runtime-id))))
 
+(defun make-kernel-history-entry (&key event-kind status action reason note result)
+  (list :timestamp (get-universal-time)
+        :event-kind event-kind
+        :status status
+        :action action
+        :reason reason
+        :note note
+        :result result))
+
+(defun append-kernel-history-entry (handle key entry)
+  (let ((updated (copy-list handle)))
+    (setf (getf updated key)
+          (append (copy-list (or (getf handle key) '()))
+                  (list entry)))
+    updated))
+
+(defun kernel-record-lifecycle-event (handle status &key result)
+  (let* ((updated (append-kernel-history-entry
+                   handle
+                   :lifecycle-history
+                   (make-kernel-history-entry :event-kind :lifecycle
+                                              :status status
+                                              :result result))))
+    (setf (getf updated :status) status
+          (getf updated :last-observed-status) status
+          (getf updated :last-status-change-at) (getf (car (last (getf updated :lifecycle-history))) :timestamp))
+    updated))
+
+(defun kernel-record-control-event (handle action &key status reason note result)
+  (let* ((updated (append-kernel-history-entry
+                   handle
+                   :control-history
+                   (make-kernel-history-entry :event-kind :control
+                                              :status status
+                                              :action action
+                                              :reason reason
+                                              :note note
+                                              :result result))))
+    (setf (getf updated :last-control-action) action
+          (getf updated :last-control-at) (getf (car (last (getf updated :control-history))) :timestamp))
+    (if status
+        (kernel-record-lifecycle-event updated status :result result)
+        updated)))
+
+(defun kernel-record-observed-status (handle status environment &key (result :observation))
+  (if (or (null status)
+          (eq status (getf handle :last-observed-status)))
+      handle
+      (let ((updated (kernel-record-lifecycle-event handle status :result result)))
+        (let* ((target (copy-tree (or (getf updated :target) '())))
+               (compatibility-target (and (listp target)
+                                          (copy-tree (getf target :compatibility-execution)))))
+          (when compatibility-target
+            (setf (getf compatibility-target :last-observed-status) status
+                  (getf compatibility-target :last-status-change-at) (getf updated :last-status-change-at)
+                  (getf target :compatibility-execution) compatibility-target
+                  (getf updated :target) target)))
+        (store-kernel-execution-handle updated environment)
+        updated)))
+
 (defun build-kernel-execution-handle (response &key intention capability authority context constraints)
   (let* ((metadata (service-response-metadata response))
-         (binding (getf metadata :binding)))
+         (binding (getf metadata :binding))
+         (status (kernel-response-state response))
+         (recorded-at (get-universal-time)))
     (list :execution-id (make-kernel-execution-id)
           :intention intention
           :capability capability
@@ -154,12 +253,21 @@
           :constraints constraints
           :context context
           :binding binding
-          :status (kernel-response-state response)
+          :status status
           :domain (getf response :domain)
           :operation (getf response :operation)
           :target (kernel-response-target response)
           :trace (kernel-response-trace response)
-          :recorded-at (get-universal-time))))
+          :recorded-at recorded-at
+          :last-observed-status status
+          :last-status-change-at recorded-at
+          :last-control-action nil
+          :last-control-at nil
+          :lifecycle-history (list (list :timestamp recorded-at
+                                         :event-kind :invoke
+                                         :status status
+                                         :result :accepted))
+          :control-history '())))
 
 (defun store-kernel-execution-handle (handle &optional environment)
   (let* ((active-environment (ensure-environment environment))
@@ -178,6 +286,21 @@
   (let* ((target (copy-tree (or (getf handle :target) '())))
          (compatibility-target (and (listp target)
                                     (copy-tree (getf target :compatibility-execution)))))
+    (unless (getf handle :lifecycle-history)
+      (setf (getf handle :lifecycle-history)
+            (list (list :timestamp (or (getf handle :recorded-at)
+                                       (get-universal-time))
+                        :event-kind :invoke
+                        :status (getf handle :status)
+                        :result :accepted))))
+    (unless (member :control-history handle)
+      (setf (getf handle :control-history) '()))
+    (unless (member :last-observed-status handle)
+      (setf (getf handle :last-observed-status) (getf handle :status)))
+    (unless (member :last-status-change-at handle)
+      (setf (getf handle :last-status-change-at)
+            (or (getf handle :recorded-at)
+                (get-universal-time))))
     (when (and compatibility-target
                (eq (getf compatibility-target :execution-mode) :detached)
                (not (member (getf handle :status)
@@ -190,7 +313,7 @@
       (setf (getf compatibility-target :detached-runtime-loss-p) t)
       (setf (getf target :compatibility-execution) compatibility-target)
       (setf (getf handle :target) target)
-      (setf (getf handle :status) :detached))
+      (setf handle (kernel-record-lifecycle-event handle :detached :result :reload-normalization)))
     handle))
 
 (defun normalize-kernel-execution-registry-for-load (environment)

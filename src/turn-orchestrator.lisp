@@ -5,16 +5,6 @@
                                     :decision :allowed
                                     :reason "Conversation provider runs are currently read-only orchestrator operations."))
 
-(defun staged-assistant-action-disposition (action)
-  (if (assistant-action-requires-approval-p action)
-      :approval-required
-      :staged))
-
-(defun staged-assistant-action-status (action)
-  (if (assistant-action-requires-approval-p action)
-      :awaiting-approval
-      :staged))
-
 (defun turn-status-from-action-operations (operations)
   (cond
     ((find :awaiting-approval operations :key #'operation-status)

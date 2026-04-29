@@ -92,8 +92,8 @@ Implemented or substantially in place:
 - a real execution-kernel seam through `src/kernel-core.lisp`, `src/kernel-service.lisp`, and `src/shell-service.lisp`
 - execution-handle-centered inspect/control behavior and execution-native shell commands
 - execution surfaces, shell workspace, governance queue, object browser, inspector, and desktop host model
-- compatibility execution tracking, lifecycle posture, and detached host-process control for the first compatibility backend
-- developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activate, install, and applied profile query
+- compatibility app registry, Linux app execution, lifecycle posture, relaunch, and shell-visible display-surface bridging through the compatibility kernel
+- developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activate, install, applied profile query, audit, history, harness, and package-provided compatibility app extension
 
 Still incomplete or still planned:
 
@@ -103,7 +103,21 @@ Still incomplete or still planned:
 - richer operation and artifact coverage across all mutating paths
 - deeper cold-start validation and rollback fidelity
 - deeper incident workspace and restart-oriented runtime debugging services
-- a fuller external SDK, package application model, simulation harness, and distribution/update toolchain for the platform layer
+- broader alternative compatibility backends beyond the current governed host-process implementation
+- fuller ecosystem/distribution depth for the platform layer beyond the now-implemented core package contract
+
+## Architectural Conformance
+
+Against the accepted [IntentOS target-state architecture]({{ '/agentos-target-state-architecture.html' | relative_url }}), the current codebase now satisfies the target architectural contract.
+
+What remains after this point is best understood as:
+
+- enhancement
+- hardening
+- distribution work
+- alternative backend evolution
+
+not unresolved current-vs-target architecture gaps.
 
 ## Delivery Stages
 

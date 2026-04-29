@@ -52,11 +52,9 @@
         (batch-size 50))
     (populate-session-with-turns session provider turn-count)
     (dotimes (index iterations)
-      (declare (ignore index))
       (push (/ (measure-seconds
                 (lambda ()
                   (dotimes (batch-index batch-size)
-                    (declare (ignore batch-index))
                     (sbcl-agent::thread-detail session))))
                batch-size)
             samples))
@@ -69,11 +67,9 @@
         (batch-size 50))
     (populate-session-with-turns session provider turn-count)
     (dotimes (index iterations)
-      (declare (ignore index))
       (push (/ (measure-seconds
                 (lambda ()
                   (dotimes (batch-index batch-size)
-                    (declare (ignore batch-index))
                     (sbcl-agent::turn-detail session))))
                batch-size)
             samples))

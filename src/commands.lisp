@@ -18,9 +18,9 @@
       ((or (null operator)
            (not (member operator '("ask" "say" "plan" "tool" "help" "approve" "patch" "execute-actions"
                                    "provider/show" "provider/list" "provider/use" "provider/configure" "provider/routing" "provider/route"
-                                   "platform/manifest" "platform/package" "platform/show-package" "platform/validate-package" "platform/import-package" "platform/list-packages" "platform/show-imported-package" "platform/activate-package" "platform/deactivate-package" "platform/active-packages" "platform/profile" "platform/install-package"
-                                   "execution/show" "execution/control" "compatibility/list" "compatibility/show"
-                                   "workspace/show" "desktop/show" "desktop/panel" "desktop/select" "desktop/restore" "desktop/action" "surface/list" "surface/select" "surface/step" "open" "focus/show" "focus/set" "governance/queue" "governance/select" "object-browser" "object-browser/select" "inspector/show"
+                                   "platform/manifest" "platform/package" "platform/show-package" "platform/validate-package" "platform/import-package" "platform/list-packages" "platform/show-imported-package" "platform/activate-package" "platform/deactivate-package" "platform/active-packages" "platform/profile" "platform/install-package" "platform/simulate-package" "platform/history" "platform/audit" "platform/harness" "platform/run-harness"
+                                   "execution/show" "execution/control" "compatibility/list" "compatibility/show" "compatibility/apps" "compatibility/app-show" "compatibility/launch" "compatibility/relaunch" "compatibility/windows"
+                                   "workspace/show" "desktop/show" "desktop/panel" "desktop/select" "desktop/restore" "desktop/action" "surface/list" "surface/select" "surface/step" "display/list" "display/show" "display/select" "display/step" "display/control" "open" "focus/show" "focus/set" "governance/queue" "governance/select" "object-browser" "object-browser/select" "inspector/show"
                                    "thread/new" "thread/list" "thread/use" "thread/show" "turn/status" "turn/resume" "incident/list" "incident/show"
                                    "environment/status" "review/mutation"
                                    "integration/rgp-bind" "integration/rgp-show" "integration/rgp-workspace" "integration/rgp-export" "integration/rgp-artifacts" "integration/rgp-approvals" "integration/rgp-approve" "integration/rgp-resume"
@@ -84,6 +84,16 @@
        (make-command :kind :platform-profile :form form :arguments (rest form)))
       ((string= operator "platform/install-package")
        (make-command :kind :platform-install-package :form form :arguments (rest form)))
+      ((string= operator "platform/simulate-package")
+       (make-command :kind :platform-simulate-package :form form :arguments (rest form)))
+      ((string= operator "platform/history")
+       (make-command :kind :platform-history :form form :arguments (rest form)))
+      ((string= operator "platform/audit")
+       (make-command :kind :platform-audit :form form :arguments (rest form)))
+      ((string= operator "platform/harness")
+       (make-command :kind :platform-harness :form form :arguments (rest form)))
+      ((string= operator "platform/run-harness")
+       (make-command :kind :platform-run-harness :form form :arguments (rest form)))
       ((string= operator "execution/show")
        (make-command :kind :execution-show :form form :arguments (rest form)))
       ((string= operator "execution/control")
@@ -92,6 +102,16 @@
        (make-command :kind :compatibility-list :form form :arguments (rest form)))
       ((string= operator "compatibility/show")
        (make-command :kind :compatibility-show :form form :arguments (rest form)))
+      ((string= operator "compatibility/apps")
+       (make-command :kind :compatibility-apps :form form :arguments (rest form)))
+      ((string= operator "compatibility/app-show")
+       (make-command :kind :compatibility-app-show :form form :arguments (rest form)))
+      ((string= operator "compatibility/launch")
+       (make-command :kind :compatibility-launch :form form :arguments (rest form)))
+      ((string= operator "compatibility/relaunch")
+       (make-command :kind :compatibility-relaunch :form form :arguments (rest form)))
+      ((string= operator "compatibility/windows")
+       (make-command :kind :compatibility-windows :form form :arguments (rest form)))
       ((string= operator "workspace/show")
        (make-command :kind :workspace-show :form form :arguments (rest form)))
       ((string= operator "desktop/show")
@@ -110,6 +130,16 @@
        (make-command :kind :surface-select :form form :arguments (rest form)))
       ((string= operator "surface/step")
        (make-command :kind :surface-step :form form :arguments (rest form)))
+      ((string= operator "display/list")
+       (make-command :kind :display-list :form form :arguments (rest form)))
+      ((string= operator "display/show")
+       (make-command :kind :display-show :form form :arguments (rest form)))
+      ((string= operator "display/select")
+       (make-command :kind :display-select :form form :arguments (rest form)))
+      ((string= operator "display/step")
+       (make-command :kind :display-step :form form :arguments (rest form)))
+      ((string= operator "display/control")
+       (make-command :kind :display-control :form form :arguments (rest form)))
       ((string= operator "open")
        (make-command :kind :open :form form :arguments (rest form)))
       ((string= operator "focus/show")

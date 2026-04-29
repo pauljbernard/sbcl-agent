@@ -69,7 +69,11 @@
   (namestring (uiop:ensure-directory-pathname (uiop:getcwd))))
 
 (defun make-test-session (&key (cwd (current-workspace-root)))
-  (sbcl-agent::make-default-session :cwd cwd))
+  (let* ((session (sbcl-agent::make-default-session :cwd cwd))
+         (environment (sbcl-agent::make-default-environment :storage-root cwd
+                                                            :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    session))
 
 (defun make-temporary-directory (template)
   (multiple-value-bind (exit-code stdout stderr)
@@ -97,6 +101,60 @@
       (with-captured-output
         (lambda ()
           (sbcl-agent::sandbox-worker-main))))))
+
+(defun run-main-command (arguments)
+  (with-fake-command-line-arguments
+      arguments
+    (lambda ()
+      (multiple-value-bind (status stdout stderr)
+          (with-captured-output
+            (lambda ()
+              (sbcl-agent::main)))
+        (values stdout stderr status)))))
+
+(defun rewrite-platform-package-app-display-surface-kind (path app-id display-surface-kind
+                                                          &key backend-profile-id)
+  (labels ((set-entry-value (entry key value)
+             (cond
+               ((and (listp entry) (keywordp (first entry)))
+                (setf (getf entry key) value)
+                entry)
+               ((listp entry)
+                (let* ((json-key (etypecase key
+                                   (keyword (string-downcase
+                                             (substitute #\_ #\- (symbol-name key))))
+                                   (string key)))
+                       (cell (assoc json-key entry :test #'string=)))
+                  (if cell
+                      (setf (cdr cell) value)
+                      (nconc entry (list (cons json-key value))))
+                  entry))
+               (t
+                entry))))
+    (let* ((descriptor (sbcl-agent::platform-normalize-integrity-payload
+                        (sbcl-agent::parse-platform-package-file path)))
+           (manifest (getf descriptor :manifest))
+           (compatibility-apps (getf manifest :compatibility-apps))
+           (entry (find app-id
+                        compatibility-apps
+                        :key (lambda (item) (getf item :app-id))
+                        :test #'string=))
+           (display-value display-surface-kind))
+      (assert-true entry
+                   (format nil "platform package should contain compatibility app ~A" app-id))
+      (set-entry-value entry :display-surface-kind display-value)
+      (when backend-profile-id
+        (set-entry-value entry :backend-profile-id backend-profile-id))
+      (setf (getf descriptor :integrity)
+            (sbcl-agent::platform-integrity-data descriptor))
+      (with-open-file (stream path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string (sbcl-agent::emit-json
+                       (sbcl-agent::platform-json-safe-value descriptor))
+                      stream))
+      path)))
 
 (defun make-test-git-repo ()
   (let* ((root (make-temporary-directory "/tmp/sbcl-agent-git-XXXXXX"))

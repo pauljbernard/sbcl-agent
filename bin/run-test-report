@@ -1,0 +1,12 @@
+#!/usr/bin/env -S sbcl --script
+
+(defparameter *script-path*
+  (or *load-truename* *compile-file-truename* (truename *default-pathname-defaults*)))
+
+(defparameter *project-dir*
+  (make-pathname :directory (butlast (pathname-directory *script-path*))
+                 :name nil
+                 :type nil
+                 :defaults *script-path*))
+
+(load (merge-pathnames #P"scripts/run-test-report.lisp" *project-dir*))

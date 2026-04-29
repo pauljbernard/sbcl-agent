@@ -9,7 +9,7 @@
   (format t "                     Providers: mock, openai-compatible, anthropic, gemini/google, lm-studio, meta-compatible~%")
   (format t "  exec <cmd...>      Run a shell command from the current directory.~%")
   (format t "  provider <subcmd>  Query or mutate provider profiles and routing as JSON service envelopes.~%")
-(format t "  platform <subcmd>  Query developer-platform manifests and export/inspect/validate/import/install/activate/list/profile .aop package descriptors.~%")
+  (format t "  platform <subcmd>  Query developer-platform manifests, simulate/import/install packages, and run platform harnesses as JSON service envelopes.~%")
   (format t "  rgp <subcommand>   Execute non-interactive governed runtime operations for RGP.~%")
   (format t "  doctor             Print runtime and configuration diagnostics.~%")
   (format t "  help               Show this message.~%"))
@@ -56,7 +56,27 @@
   input-path
   output-path
   package-id
+  limit
+  package-version
+  harness-id
   title
+  allow-downgrade-p
+  allow-deprecated-p
+  allow-manual-recovery-p
+  allow-untrusted-p
+  attested-p-specified-p
+  publisher
+  build-system
+  source-repository
+  build-kind
+  release-status
+  replacement-package-id
+  rollback-strategy
+  failure-mode
+  backup-required-p-specified-p
+  backup-required-p
+  recovery-runbook
+  attested-p
   capabilities)
 
 (defun normalize-arguments (arguments)
@@ -189,7 +209,27 @@
         (input-path nil)
         (output-path nil)
         (package-id nil)
+        (limit nil)
+        (package-version nil)
+        (harness-id nil)
         (title nil)
+        (allow-downgrade-p nil)
+        (allow-deprecated-p nil)
+        (allow-manual-recovery-p nil)
+        (allow-untrusted-p nil)
+        (publisher nil)
+        (build-system nil)
+        (source-repository nil)
+        (build-kind nil)
+        (release-status nil)
+        (replacement-package-id nil)
+        (rollback-strategy nil)
+        (failure-mode nil)
+        (backup-required-p-specified-p nil)
+        (backup-required-p nil)
+        (recovery-runbook nil)
+        (attested-p-specified-p nil)
+        (attested-p nil)
         (capabilities '()))
     (unless subcommand
       (error "platform requires a subcommand"))
@@ -214,9 +254,62 @@
                ((string= argument "--package-id")
                 (setf package-id (require-option-value argument remaining))
                 (pop remaining))
+               ((string= argument "--limit")
+                (setf limit (parse-integer (require-option-value argument remaining)))
+                (pop remaining))
+               ((string= argument "--package-version")
+                (setf package-version (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--harness-id")
+                (setf harness-id (parse-rgp-keyword (require-option-value argument remaining)))
+                (pop remaining))
                ((string= argument "--title")
                 (setf title (require-option-value argument remaining))
                 (pop remaining))
+               ((string= argument "--allow-downgrade")
+                (setf allow-downgrade-p t))
+               ((string= argument "--allow-deprecated")
+                (setf allow-deprecated-p t))
+               ((string= argument "--allow-manual-recovery")
+                (setf allow-manual-recovery-p t))
+               ((string= argument "--allow-untrusted")
+                (setf allow-untrusted-p t))
+               ((string= argument "--publisher")
+                (setf publisher (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--build-system")
+                (setf build-system (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--source-repository")
+                (setf source-repository (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--build-kind")
+                (setf build-kind (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--release-status")
+                (setf release-status (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--replacement-package-id")
+                (setf replacement-package-id (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--rollback-strategy")
+                (setf rollback-strategy (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--failure-mode")
+                (setf failure-mode (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--backup-required")
+                (setf backup-required-p-specified-p t
+                      backup-required-p t))
+               ((string= argument "--no-backup-required")
+                (setf backup-required-p-specified-p t
+                      backup-required-p nil))
+               ((string= argument "--recovery-runbook")
+                (setf recovery-runbook (require-option-value argument remaining))
+                (pop remaining))
+               ((string= argument "--unattested")
+                (setf attested-p nil
+                      attested-p-specified-p t))
                ((or (string= argument "--capability")
                     (string= argument "--capabilities"))
                 (push (parse-rgp-keyword (require-option-value argument remaining)) capabilities)
@@ -229,7 +322,27 @@
                            :input-path input-path
                            :output-path output-path
                            :package-id package-id
+                           :limit limit
+                           :package-version package-version
+                           :harness-id harness-id
                            :title title
+                           :allow-downgrade-p allow-downgrade-p
+                           :allow-deprecated-p allow-deprecated-p
+                           :allow-manual-recovery-p allow-manual-recovery-p
+                           :allow-untrusted-p allow-untrusted-p
+                           :attested-p-specified-p attested-p-specified-p
+                           :publisher publisher
+                           :build-system build-system
+                           :source-repository source-repository
+                           :build-kind build-kind
+                           :release-status release-status
+                           :replacement-package-id replacement-package-id
+                           :rollback-strategy rollback-strategy
+                           :failure-mode failure-mode
+                           :backup-required-p-specified-p backup-required-p-specified-p
+                           :backup-required-p backup-required-p
+                           :recovery-runbook recovery-runbook
+                           :attested-p attested-p
                            :capabilities (nreverse capabilities))))
 
 (defun parse-rgp-arguments (arguments)
@@ -366,13 +479,15 @@
 (defun rgp-command-bind (options)
   (let* ((environment (load-or-create-rgp-environment options))
          (session (environment-session environment))
-         (response (command-rgp-bind-service session
-                                             :tenant-id (rgp-options-tenant-id options)
-                                             :request-id (rgp-options-request-id options)
-                                             :agent-session-id (rgp-options-agent-session-id options)
-                                             :integration-id (rgp-options-integration-id options)
-                                             :projection-id (rgp-options-projection-id options)
-                                             :environment environment)))
+         (response (command-kernel-invoke-service session
+                                                  "Bind governed runtime integration posture."
+                                                  "rgp/bind"
+                                                  :payload (list :tenant-id (rgp-options-tenant-id options)
+                                                                 :request-id (rgp-options-request-id options)
+                                                                 :agent-session-id (rgp-options-agent-session-id options)
+                                                                 :integration-id (rgp-options-integration-id options)
+                                                                 :projection-id (rgp-options-projection-id options))
+                                                  :context (list :environment environment))))
     (persist-rgp-environment environment options)
     (write-rgp-result
      (list :status "bound"
@@ -404,7 +519,12 @@
     (ensure-rgp-path-parent output-path)
     (setf session (environment-session environment))
     (write-rgp-result
-     (service-response-data (command-rgp-export-service session output-path environment)))
+     (service-response-data
+      (command-kernel-invoke-service session
+                                     "Export governed runtime snapshot."
+                                     "rgp/export"
+                                     :payload (list :path output-path)
+                                     :context (list :environment environment))))
     0))
 
 (defun rgp-command-artifacts (options)
@@ -430,11 +550,14 @@
       (error "rgp approve requires --work-item-id"))
     (unless policy
       (error "rgp approve requires --policy"))
-    (let ((response (command-rgp-approve-service session
-                                                 work-item-id
-                                                 policy
-                                                 :reason (rgp-options-reason options)
-                                                 :environment environment)))
+    (let ((response (command-kernel-invoke-service session
+                                                   "Approve governed runtime checkpoint."
+                                                   "rgp/approve"
+                                                   :payload (list :work-item-id work-item-id
+                                                                  :policy policy
+                                                                  :reason (rgp-options-reason options))
+                                                   :context (list :environment environment
+                                                                  :work-item-id work-item-id))))
       (persist-rgp-environment environment options)
       (write-rgp-result
        (list :status "approved"
@@ -449,10 +572,13 @@
          (work-item-id (rgp-options-work-item-id options)))
     (unless work-item-id
       (error "rgp resume requires --work-item-id"))
-    (let ((response (command-rgp-resume-service session
-                                                work-item-id
-                                                :note (rgp-options-note options)
-                                                :environment environment)))
+    (let ((response (command-kernel-invoke-service session
+                                                   "Resume governed runtime work."
+                                                   "rgp/resume"
+                                                   :payload (list :work-item-id work-item-id
+                                                                  :note (rgp-options-note options))
+                                                   :context (list :environment environment
+                                                                  :work-item-id work-item-id))))
       (persist-rgp-environment environment options)
       (write-rgp-result
        (list :status "resumed"
@@ -506,9 +632,12 @@
   0)
 
 (defun provider-command-routing (options environment)
-  (let ((response (command-environment-provider-routing-service
-                   (provider-options-mode options)
-                   environment)))
+  (let ((response (command-kernel-invoke-service
+                   (environment-session environment)
+                   "Update provider routing mode."
+                   "environment/provider-routing"
+                   :payload (list :mode (provider-options-mode options))
+                   :context (list :environment environment))))
     (persist-provider-environment environment options)
     (write-service-result response))
   0)
@@ -520,14 +649,17 @@
     (error "provider configure requires --provider"))
   (unless (provider-options-model options)
     (error "provider configure requires --model"))
-  (let ((response (command-environment-provider-configure-service
-                   (provider-options-profile-name options)
-                   (list :provider (provider-options-provider options)
-                         :model (provider-options-model options)
-                         :fast-model (provider-options-fast-model options)
-                         :api-base (provider-options-api-base options)
-                         :intents (provider-options-intents options))
-                   environment)))
+  (let ((response (command-kernel-invoke-service
+                   (environment-session environment)
+                   "Configure environment provider profile."
+                   "environment/provider-configure"
+                   :payload (list :profile-name (provider-options-profile-name options)
+                                  :options (list :provider (provider-options-provider options)
+                                                 :model (provider-options-model options)
+                                                 :fast-model (provider-options-fast-model options)
+                                                 :api-base (provider-options-api-base options)
+                                                 :intents (provider-options-intents options)))
+                   :context (list :environment environment))))
     (persist-provider-environment environment options)
     (write-service-result response))
   0)
@@ -535,9 +667,12 @@
 (defun provider-command-use (options environment)
   (unless (provider-options-profile-name options)
     (error "provider use requires --profile"))
-  (let ((response (command-environment-provider-use-service
-                   (provider-options-profile-name options)
-                   environment)))
+  (let ((response (command-kernel-invoke-service
+                   (environment-session environment)
+                   "Activate environment provider profile."
+                   "environment/provider-use"
+                   :payload (list :profile-name (provider-options-profile-name options))
+                   :context (list :environment environment))))
     (persist-provider-environment environment options)
     (write-service-result response))
   0)
@@ -593,12 +728,28 @@
 
 (defun platform-command-package (options environment)
   (write-service-result
-   (command-platform-package-service (platform-options-output-path options)
-                                     :package-id (platform-options-package-id options)
-                                     :title (platform-options-title options)
-                                     :capability-ids (platform-options-capabilities options)
-                                     :environment environment
-                                     :session (environment-session environment)))
+   (command-kernel-invoke-service (environment-session environment)
+                                  "export platform package"
+                                  "platform/package"
+                                  :environment environment
+                                  :payload (append (list :output-path (platform-options-output-path options)
+                                                         :package-id (platform-options-package-id options)
+                                                         :package-version (platform-options-package-version options)
+                                                         :title (platform-options-title options)
+                                                         :publisher (platform-options-publisher options)
+                                                         :build-system (platform-options-build-system options)
+                                                         :source-repository (platform-options-source-repository options)
+                                                         :build-kind (platform-options-build-kind options)
+                                                         :release-status (platform-options-release-status options)
+                                                         :replacement-package-id (platform-options-replacement-package-id options)
+                                                         :rollback-strategy (platform-options-rollback-strategy options)
+                                                         :failure-mode (platform-options-failure-mode options)
+                                                         :recovery-runbook (platform-options-recovery-runbook options)
+                                                         :capabilities (platform-options-capabilities options))
+                                                   (when (platform-options-backup-required-p-specified-p options)
+                                                     (list :backup-required (platform-options-backup-required-p options)))
+                                                   (when (platform-options-attested-p-specified-p options)
+                                                     (list :attested-p (platform-options-attested-p options))))))
   0)
 
 (defun platform-command-show (options environment)
@@ -623,9 +774,15 @@
   (unless (platform-options-input-path options)
     (error "platform import requires --input"))
   (let ((response
-          (command-platform-import-package-service (platform-options-input-path options)
-                                                   :environment environment
-                                                   :session (environment-session environment))))
+          (command-kernel-invoke-service (environment-session environment)
+                                         "import platform package"
+                                         "platform/import-package"
+                                         :environment environment
+                                         :payload (list :path (platform-options-input-path options)
+                                                        :allow-downgrade (platform-options-allow-downgrade-p options)
+                                                        :allow-deprecated (platform-options-allow-deprecated-p options)
+                                                        :allow-manual-recovery (platform-options-allow-manual-recovery-p options)
+                                                        :allow-untrusted (platform-options-allow-untrusted-p options)))))
     (persist-platform-environment environment options)
     (write-service-result response))
   0)
@@ -650,9 +807,11 @@
   (unless (platform-options-package-id options)
     (error "platform activate requires --package-id"))
   (let ((response
-          (command-platform-activate-package-service (platform-options-package-id options)
-                                                     :environment environment
-                                                     :session (environment-session environment))))
+          (command-kernel-invoke-service (environment-session environment)
+                                         "activate platform package"
+                                         "platform/activate-package"
+                                         :environment environment
+                                         :payload (list :package-id (platform-options-package-id options)))))
     (persist-platform-environment environment options)
     (write-service-result response))
   0)
@@ -661,9 +820,11 @@
   (unless (platform-options-package-id options)
     (error "platform deactivate requires --package-id"))
   (let ((response
-          (command-platform-deactivate-package-service (platform-options-package-id options)
-                                                       :environment environment
-                                                       :session (environment-session environment))))
+          (command-kernel-invoke-service (environment-session environment)
+                                         "deactivate platform package"
+                                         "platform/deactivate-package"
+                                         :environment environment
+                                         :payload (list :package-id (platform-options-package-id options)))))
     (persist-platform-environment environment options)
     (write-service-result response))
   0)
@@ -682,15 +843,61 @@
                                    :session (environment-session environment)))
   0)
 
+(defun platform-command-history (options environment)
+  (write-service-result
+   (query-platform-package-history-service :environment environment
+                                           :session (environment-session environment)
+                                           :package-id (platform-options-package-id options)
+                                           :limit (platform-options-limit options)))
+  0)
+
+(defun platform-command-audit (options environment)
+  (declare (ignore options))
+  (write-service-result
+   (query-platform-audit-service :environment environment
+                                 :session (environment-session environment)))
+  0)
+
 (defun platform-command-install (options environment)
   (unless (platform-options-input-path options)
     (error "platform install requires --input"))
   (let ((response
-          (command-platform-install-package-service (platform-options-input-path options)
-                                                    :environment environment
-                                                    :session (environment-session environment))))
+          (command-kernel-invoke-service (environment-session environment)
+                                         "install platform package"
+                                         "platform/install-package"
+                                         :environment environment
+                                         :payload (list :path (platform-options-input-path options)
+                                                        :allow-downgrade (platform-options-allow-downgrade-p options)
+                                                        :allow-deprecated (platform-options-allow-deprecated-p options)
+                                                        :allow-manual-recovery (platform-options-allow-manual-recovery-p options)
+                                                        :allow-untrusted (platform-options-allow-untrusted-p options)))))
     (persist-platform-environment environment options)
     (write-service-result response))
+  0)
+
+(defun platform-command-simulate (options environment)
+  (unless (platform-options-input-path options)
+    (error "platform simulate requires --input"))
+  (write-service-result
+   (query-platform-simulate-package-service (platform-options-input-path options)
+                                            :environment environment
+                                            :session (environment-session environment)))
+  0)
+
+(defun platform-command-harness (options environment)
+  (declare (ignore options))
+  (write-service-result
+   (query-platform-harness-service :environment environment
+                                   :session (environment-session environment)))
+  0)
+
+(defun platform-command-run-harness (options environment)
+  (write-service-result
+   (command-kernel-invoke-service (environment-session environment)
+                                  "run platform harness"
+                                  "platform/run-harness"
+                                  :environment environment
+                                  :payload (list :harness-id (platform-options-harness-id options))))
   0)
 
 (defun platform-command (config arguments)
@@ -720,8 +927,18 @@
        (platform-command-active options environment))
       ((string= subcommand "profile")
        (platform-command-profile options environment))
+      ((string= subcommand "history")
+       (platform-command-history options environment))
+      ((string= subcommand "audit")
+       (platform-command-audit options environment))
       ((string= subcommand "install")
        (platform-command-install options environment))
+      ((string= subcommand "simulate")
+       (platform-command-simulate options environment))
+      ((string= subcommand "harness")
+       (platform-command-harness options environment))
+      ((string= subcommand "run-harness")
+       (platform-command-run-harness options environment))
       (t
        (error "Unknown platform subcommand ~A" subcommand)))))
 

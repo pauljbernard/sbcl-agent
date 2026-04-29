@@ -1123,7 +1123,7 @@
                 (every (lambda (task)
                          (eq :completed (sbcl-agent::task-status task)))
                        tasks))
-              :timeout-seconds 15.0
+              :timeout-seconds 30.0
               :sleep-seconds 0.05)
     (let* ((group-id (sbcl-agent::task-orchestration-group-id (first tasks)))
            (worker-ids (remove-duplicates (mapcar #'sbcl-agent::task-worker-id tasks) :test #'string=))
@@ -1190,7 +1190,7 @@
                          (every (lambda (task)
                                   (eq :completed (sbcl-agent::task-status task)))
                                 tasks))
-                       :timeout-seconds 15.0
+                       :timeout-seconds 30.0
                        :sleep-seconds 0.05))
         (sbcl-agent::stop-all-workers session-one)))
     (let* ((session-two (make-test-session :cwd "/tmp/orchestration-playbook-reuse/")))

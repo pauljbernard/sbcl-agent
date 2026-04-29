@@ -259,9 +259,175 @@
                     "kernel inspect should classify runtime executions explicitly")
       (assert-true (stringp (getf (getf (sbcl-agent::service-response-data runtime-inspect) :inspection) :package))
                    "kernel inspect should expose runtime summary data for runtime executions")
+      (assert-equal :invoke
+                    (getf (first (getf (getf (sbcl-agent::service-response-data runtime-inspect) :forensics)
+                                       :lifecycle-history))
+                          :event-kind)
+                    "kernel inspect should expose generic lifecycle history for runtime executions")
       (assert-equal :execution-handle
                     (getf (sbcl-agent::service-response-data runtime-inspect) :resolved-via)
                     "kernel inspect should identify the execution-handle read path"))
+
+    (let* ((provider-configure-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Configure a local provider profile."
+                                                        "environment/provider-configure"
+                                                        :payload (list :profile-name "kernel-local"
+                                                                       :options '(:provider "lm-studio"
+                                                                                  :model "qwen-coder"
+                                                                                  :fast-model "qwen-mini"
+                                                                                  :api-base "http://localhost:1234/v1"))))
+           (provider-execution-id (getf (sbcl-agent::service-response-metadata provider-configure-response)
+                                        :execution-id))
+           (profiles (getf (sbcl-agent::service-response-data provider-configure-response) :profiles))
+           (configured-profile (find "kernel-local"
+                                     profiles
+                                     :key (lambda (profile) (getf profile :name))
+                                     :test #'string=)))
+      (assert-true (stringp provider-execution-id)
+                   "kernel invoke should assign an execution handle to provider configuration commands")
+      (assert-equal "kernel-local"
+                    (getf configured-profile :name)
+                    "kernel invoke should dispatch environment/provider-configure through the environment provider service"))
+
+    (let* ((rgp-bind-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Bind the governed runtime to RGP."
+                                                        "rgp/bind"
+                                                        :payload (list :request-id "kernel-rgp-req"
+                                                                       :agent-session-id "kernel-rgp-session")))
+           (rgp-bind-execution-id (getf (sbcl-agent::service-response-metadata rgp-bind-response)
+                                        :execution-id)))
+      (assert-true (stringp rgp-bind-execution-id)
+                   "kernel invoke should assign an execution handle to rgp bind commands")
+      (assert-equal "kernel-rgp-req"
+                    (getf (getf (sbcl-agent::service-response-data rgp-bind-response) :binding) :request-id)
+                    "kernel invoke should dispatch rgp/bind through the rgp bind service"))
+
+    (let* ((task-enqueue-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Enqueue a filesystem read task."
+                                                        "task/enqueue"
+                                                        :payload (list :form '(tool :fs/read :path "src/main.lisp")
+                                                                       :priority 2)))
+           (task-execution-id (getf (sbcl-agent::service-response-metadata task-enqueue-response)
+                                    :execution-id))
+           (task-inspect (sbcl-agent::service-response-data
+                          (sbcl-agent::query-kernel-inspect-service session task-execution-id))))
+      (assert-true (stringp task-execution-id)
+                   "kernel invoke should assign an execution handle to task enqueue commands")
+      (assert-equal :task
+                    (getf task-inspect :object-kind)
+                    "kernel inspect should classify task enqueue executions as task objects"))
+
+    (let* ((worker-start-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Start a worker."
+                                                        "worker/start"
+                                                        :provider (make-test-provider)))
+           (worker-execution-id (getf (sbcl-agent::service-response-metadata worker-start-response)
+                                      :execution-id))
+           (worker-inspect (sbcl-agent::service-response-data
+                            (sbcl-agent::query-kernel-inspect-service session worker-execution-id))))
+      (assert-true (stringp worker-execution-id)
+                   "kernel invoke should assign an execution handle to worker start commands")
+      (assert-equal :worker
+                    (getf worker-inspect :object-kind)
+                    "kernel inspect should classify worker start executions as worker objects"))
+
+    (let* ((authority-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Grant process-run authority."
+                                                        "authority/grant"
+                                                        :payload (list :policy :process-run)))
+           (authority-execution-id (getf (sbcl-agent::service-response-metadata authority-response)
+                                         :execution-id))
+           (authority-inspect (sbcl-agent::service-response-data
+                               (sbcl-agent::query-kernel-inspect-service session authority-execution-id))))
+      (assert-true (stringp authority-execution-id)
+                   "kernel invoke should assign an execution handle to authority grant commands")
+      (assert-equal :execution
+                    (getf authority-inspect :object-kind)
+                    "kernel inspect should classify authority grants as generic execution objects when no more specific target exists"))
+
+    (let* ((thread-create-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Create a kernel thread."
+                                                        "conversation/create-thread"
+                                                        :payload (list :title "Kernel Thread")))
+           (thread-execution-id (getf (sbcl-agent::service-response-metadata thread-create-response)
+                                      :execution-id))
+           (thread-inspect (sbcl-agent::service-response-data
+                            (sbcl-agent::query-kernel-inspect-service session thread-execution-id))))
+      (assert-true (stringp thread-execution-id)
+                   "kernel invoke should assign an execution handle to thread creation commands")
+      (assert-equal :thread
+                    (getf thread-inspect :object-kind)
+                    "kernel inspect should resolve thread execution handles through the conversation target model"))
+
+    (let* ((session-save-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Save the session."
+                                                        "session/save"
+                                                        :payload (list :path "/tmp/kernel-session-save.sexp")))
+           (session-save-execution-id (getf (sbcl-agent::service-response-metadata session-save-response)
+                                            :execution-id)))
+      (assert-true (stringp session-save-execution-id)
+                   "kernel invoke should assign an execution handle to session save commands"))
+
+    (let* ((session-load-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Load the session."
+                                                        "session/load"
+                                                        :payload (list :path "/tmp/kernel-session-save.sexp")))
+           (session-load-payload (sbcl-agent::service-response-data session-load-response))
+           (loaded-session (getf session-load-payload :session))
+           (session-load-execution-id (getf (sbcl-agent::service-response-metadata session-load-response)
+                                            :execution-id))
+           (session-load-inspect (and loaded-session
+                                      (sbcl-agent::service-response-data
+                                       (sbcl-agent::query-kernel-inspect-service loaded-session
+                                                                                 session-load-execution-id)))))
+      (assert-true (stringp session-load-execution-id)
+                   "kernel invoke should assign an execution handle to session load commands")
+      (assert-equal "/tmp/kernel-session-save.sexp"
+                    (getf session-load-payload :loaded)
+                    "kernel invoke should preserve the loaded session path in the kernelized response")
+      (assert-equal :execution
+                    (getf session-load-inspect :object-kind)
+                    "kernel inspect should expose session/load as a generic execution object"))
+
+    (let* ((environment-save-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Save the environment."
+                                                        "environment/save"
+                                                        :payload (list :path "/tmp/kernel-environment-save.sexp")))
+           (environment-save-execution-id (getf (sbcl-agent::service-response-metadata environment-save-response)
+                                                :execution-id)))
+      (assert-true (stringp environment-save-execution-id)
+                   "kernel invoke should assign an execution handle to environment save commands"))
+
+    (let* ((environment-load-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Load the environment."
+                                                        "environment/load"
+                                                        :payload (list :path "/tmp/kernel-environment-save.sexp")))
+           (environment-load-payload (sbcl-agent::service-response-data environment-load-response))
+           (loaded-session (getf environment-load-payload :session))
+           (environment-load-execution-id (getf (sbcl-agent::service-response-metadata environment-load-response)
+                                                :execution-id))
+           (environment-load-inspect (and loaded-session
+                                          (sbcl-agent::service-response-data
+                                           (sbcl-agent::query-kernel-inspect-service loaded-session
+                                                                                     environment-load-execution-id)))))
+      (assert-true (stringp environment-load-execution-id)
+                   "kernel invoke should assign an execution handle to environment load commands")
+      (assert-equal "/tmp/kernel-environment-save.sexp"
+                    (getf environment-load-payload :loaded)
+                    "kernel invoke should preserve the loaded environment path in the kernelized response")
+      (assert-equal :execution
+                    (getf environment-load-inspect :object-kind)
+                    "kernel inspect should expose environment/load as a generic execution object"))
 
     (sbcl-agent::approve-policy session :process-run)
     (let* ((proc-command (sbcl-agent::command-invoke-tool-service session :proc/run '(:argv ("/bin/echo" "compatibility"))))
@@ -297,6 +463,12 @@
       (assert-equal :process-run
                     (getf compatibility-target :sandbox-profile)
                     "kernel execution target should persist compatibility sandbox posture")
+      (assert-equal :host-process-sync
+                    (getf compatibility-target :backend-adapter-id)
+                    "kernel execution target should persist the backend adapter id for attached compatibility tools")
+      (assert-equal :attached-host-process
+                    (getf (getf compatibility-target :backend-profile) :runtime-class)
+                    "kernel execution target should expose attached host-process runtime posture for proc/run")
       (assert-service-metadata-shape compatibility-response "compatibility executions service")
       (assert-equal :compatibility
                     (getf compatibility-response :domain)
@@ -357,6 +529,12 @@
       (assert-equal :running
                     (getf (getf spawn-inspect :inspection) :status)
                     "kernel inspect should expose running lifecycle state for spawned compatibility execution")
+      (assert-equal :host-process-detached
+                    (getf (getf spawn-inspect :inspection) :backend-adapter-id)
+                    "kernel inspect should preserve the detached compatibility backend adapter id")
+      (assert-equal :detached-host-process
+                    (getf (getf (getf spawn-inspect :inspection) :backend-profile) :runtime-class)
+                    "kernel inspect should expose detached host-process runtime posture for proc/spawn")
       (assert-true (member :stop
                            (getf (getf (getf spawn-inspect :inspection) :control-posture) :supported-actions))
                    "kernel inspect should expose stop support for spawned compatibility execution")
@@ -379,7 +557,296 @@
                     "kernel control should preserve the last compatibility control action in post-state")
       (assert-equal :stopped
                     (getf (getf (getf spawn-stop-data :post-state) :inspection) :last-observed-status)
-                    "kernel control should preserve the last observed compatibility status in post-state"))
+                    "kernel control should preserve the last observed compatibility status in post-state")
+      (assert-equal :stop
+                    (getf (car (last (getf (getf spawn-stop-data :execution) :control-history)))
+                          :action)
+                    "kernel control should record generic control history for compatibility executions"))
+
+    (sbcl-agent::approve-policy session :linux-app-launch)
+
+    (let* ((linux-echo-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Launch a Linux echo app."
+                                                        "linux.echo"
+                                                        :payload (list :arguments '("linux-app"))))
+           (linux-echo-execution-id (getf (sbcl-agent::service-response-metadata linux-echo-response)
+                                          :execution-id))
+           (linux-echo-inspect (sbcl-agent::service-response-data
+                                (sbcl-agent::query-kernel-inspect-service session linux-echo-execution-id))))
+      (assert-true (stringp linux-echo-execution-id)
+                   "kernel invoke should assign an execution handle to linux app invocations")
+      (assert-equal :compatibility-execution
+                    (getf linux-echo-inspect :object-kind)
+                    "kernel inspect should classify linux app invocations as compatibility executions")
+      (assert-equal :linux-app
+                    (getf (getf linux-echo-inspect :inspection) :kind)
+                    "kernel inspect should classify linux.echo as a linux-app compatibility execution")
+      (assert-equal "linux.echo"
+                    (getf (getf linux-echo-inspect :inspection) :app-id)
+                    "kernel inspect should preserve the linux app manifest id")
+      (assert-equal :linux-app-launch
+                    (getf (getf linux-echo-inspect :inspection) :policy-id)
+                    "kernel inspect should preserve the linux app manifest policy id")
+      (assert-equal :headless
+                    (getf (getf linux-echo-inspect :inspection) :display-surface-kind)
+                    "kernel inspect should preserve the linux app display surface contract")
+      (assert-equal :none
+                    (getf (getf linux-echo-inspect :inspection) :filesystem-scope-kind)
+                    "kernel inspect should preserve the linux app filesystem scope contract")
+      (assert-equal :host-process-sync
+                    (getf (getf linux-echo-inspect :inspection) :backend-profile-id)
+                    "kernel inspect should expose the declared runtime backend profile for attached linux apps")
+      (assert-equal :sandbox-worker-process
+                    (getf (getf (getf linux-echo-inspect :inspection) :backend-profile) :substrate-kind)
+                    "kernel inspect should expose the backend substrate contract for attached linux apps")
+      (assert-equal :sandbox-proc-runner
+                    (getf (getf linux-echo-inspect :inspection) :backend-implementation)
+                    "kernel inspect should expose the actual backend implementation used for attached linux apps")
+      (assert-equal :completed
+                    (getf (getf linux-echo-inspect :inspection) :status)
+                    "kernel inspect should report attached linux app executions as completed when the backend exits cleanly")
+      (assert-true (member :relaunch
+                           (getf (getf (getf linux-echo-inspect :inspection) :control-posture)
+                                 :supported-actions))
+                   "kernel inspect should advertise relaunch for terminal linux app executions")
+      (let* ((linux-echo-relaunch
+               (sbcl-agent::command-kernel-control-service session
+                                                          linux-echo-execution-id
+                                                          :relaunch))
+             (linux-echo-relaunch-data (sbcl-agent::service-response-data linux-echo-relaunch)))
+        (assert-equal :accepted
+                      (getf (getf linux-echo-relaunch-data :result) :status)
+                      "kernel control should accept relaunch for terminal linux app executions")
+        (assert-equal :linux-app
+                      (getf (getf (getf linux-echo-relaunch-data :post-state) :inspection) :kind)
+                      "kernel control relaunch should project the relaunched linux app execution")
+        (assert-true (string/= linux-echo-execution-id
+                               (getf (getf linux-echo-relaunch-data :execution) :execution-id))
+                     "kernel control relaunch should return a new execution handle")))
+
+    (let* ((linux-sleep-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Launch a Linux sleep app."
+                                                        "linux.sleep"
+                                                        :payload (list :arguments '("5"))))
+           (linux-sleep-execution-id (getf (sbcl-agent::service-response-metadata linux-sleep-response)
+                                           :execution-id))
+           (linux-sleep-inspect (sbcl-agent::service-response-data
+                                 (sbcl-agent::query-kernel-inspect-service session linux-sleep-execution-id)))
+           (linux-sleep-stop (sbcl-agent::command-kernel-control-service session
+                                                                         linux-sleep-execution-id
+                                                                         :stop))
+           (linux-sleep-stop-data (sbcl-agent::service-response-data linux-sleep-stop)))
+      (assert-true (stringp linux-sleep-execution-id)
+                   "kernel invoke should assign an execution handle to detached linux app invocations")
+      (assert-equal :linux-app
+                    (getf (getf linux-sleep-inspect :inspection) :kind)
+                    "kernel inspect should classify linux.sleep as a linux-app compatibility execution")
+      (assert-equal :running
+                    (getf (getf linux-sleep-inspect :inspection) :status)
+                    "kernel inspect should surface running lifecycle state for detached linux app executions")
+      (assert-equal :host-process-detached
+                    (getf (getf linux-sleep-inspect :inspection) :backend-profile-id)
+                    "kernel inspect should expose the declared runtime backend profile for detached linux apps")
+      (assert-equal :process-token
+                    (getf (getf (getf linux-sleep-inspect :inspection) :backend-profile) :control-plane-kind)
+                    "kernel inspect should expose runtime control-plane posture for detached linux apps")
+      (assert-equal :sandbox-detached-process
+                    (getf (getf linux-sleep-inspect :inspection) :backend-implementation)
+                    "kernel inspect should expose the actual backend implementation used for detached linux apps")
+      (assert-true (member :stop
+                           (getf (getf (getf linux-sleep-inspect :inspection) :control-posture) :supported-actions))
+                   "kernel inspect should advertise governed stop control for detached linux app executions")
+      (assert-equal :accepted
+                    (getf (getf linux-sleep-stop-data :result) :status)
+                    "kernel control should accept stop for detached linux app executions")
+      (assert-true (member :relaunch
+                           (getf (getf (getf (getf linux-sleep-stop-data :post-state) :inspection)
+                                       :control-posture)
+                                 :supported-actions))
+                   "kernel control post-state should advertise relaunch for terminal linux app executions")
+      (let* ((linux-sleep-relaunch
+               (sbcl-agent::command-kernel-control-service session
+                                                          linux-sleep-execution-id
+                                                          :relaunch))
+             (linux-sleep-relaunch-data (sbcl-agent::service-response-data linux-sleep-relaunch)))
+        (assert-equal :accepted
+                      (getf (getf linux-sleep-relaunch-data :result) :status)
+                      "kernel control should accept relaunch for terminal linux app executions")
+        (assert-equal :linux-app
+                      (getf (getf (getf linux-sleep-relaunch-data :post-state) :inspection) :kind)
+                      "kernel control relaunch should project the relaunched linux app execution")))
+
+    (let* ((apps-response (sbcl-agent::query-compatibility-apps-service))
+           (apps-data (sbcl-agent::service-response-data apps-response))
+           (vscode-response (sbcl-agent::query-compatibility-apps-service :app-id "linux.vscode"))
+           (vscode-data (sbcl-agent::service-response-data vscode-response))
+           (vscode-entry (first (getf vscode-data :entries)))
+           (managed-response (sbcl-agent::query-compatibility-apps-service :app-id "linux.intent-demo"))
+           (managed-entry (first (getf (sbcl-agent::service-response-data managed-response) :entries))))
+      (assert-equal :compatibility
+                    (getf apps-response :domain)
+                    "compatibility apps query should report the compatibility domain")
+      (assert-equal :apps
+                    (getf apps-response :operation)
+                    "compatibility apps query should identify the apps operation")
+      (assert-true (> (getf apps-data :count) 0)
+                   "compatibility apps query should expose registered linux app manifests")
+      (assert-equal "linux.vscode"
+                    (getf vscode-entry :id)
+                    "compatibility apps query should expose specific manifest selection")
+      (assert-equal :linux-ide-launch
+                    (getf vscode-entry :policy-id)
+                    "compatibility apps query should expose the manifest policy contract")
+      (assert-equal :proc/spawn
+                    (getf vscode-entry :launch-tool-id)
+                    "compatibility apps query should preserve launch backend identity")
+      (assert-equal :desktop-app-bridge
+                    (getf vscode-entry :backend-profile-id)
+                    "compatibility apps query should expose the manifest runtime backend profile")
+      (assert-equal :desktop-window
+                    (getf (getf vscode-entry :backend-profile) :display-bridge-kind)
+                    "compatibility apps query should expose the manifest display bridge contract")
+      (assert-equal :desktop-session
+                    (getf (getf vscode-entry :backend-profile) :control-plane-kind)
+                    "compatibility apps query should expose a distinct desktop-session control plane for bridged apps")
+      (assert-equal :desktop-bridge
+                    (getf (getf vscode-entry :backend-profile) :runtime-class)
+                    "compatibility apps query should expose desktop-bridge runtime posture for display-bearing Linux apps")
+      (assert-equal :session-workspace
+                    (getf vscode-entry :filesystem-scope-kind)
+                    "compatibility apps query should expose per-manifest filesystem scope")
+      (assert-equal :client
+                    (getf vscode-entry :network-policy)
+                    "compatibility apps query should expose per-manifest network policy")
+      (assert-equal :desktop-window
+                    (getf vscode-entry :display-surface-kind)
+                    "compatibility apps query should expose per-manifest display surface contract")
+      (assert-equal t
+                    (getf vscode-entry :workspace-write-p)
+                    "compatibility apps query should expose per-manifest workspace write posture")
+      (assert-equal "linux.intent-demo"
+                    (getf managed-entry :id)
+                    "compatibility apps query should expose managed desktop surface manifests")
+      (assert-equal :managed-desktop-surface
+                    (getf managed-entry :backend-profile-id)
+                    "compatibility apps query should expose a non-host-process backend profile")
+      (assert-equal :managed-desktop-surface
+                    (getf (getf managed-entry :backend-profile) :runtime-class)
+                    "compatibility apps query should expose managed runtime posture for non-host-process display apps")
+      (assert-equal :governed-desktop-surface
+                    (getf (getf managed-entry :backend-profile) :substrate-kind)
+                    "compatibility apps query should expose a governed desktop substrate for non-host-process display apps")
+      (assert-equal nil
+                    (getf (getf managed-entry :backend-profile) :host-process-p)
+                    "compatibility apps query should distinguish managed desktop surfaces from host-process backends"))
+
+    (let* ((managed-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Launch a managed Linux app surface."
+                                                        "linux.intent-demo"))
+           (managed-execution-id (getf (sbcl-agent::service-response-metadata managed-response)
+                                       :execution-id))
+           (managed-inspect (sbcl-agent::service-response-data
+                             (sbcl-agent::query-kernel-inspect-service session managed-execution-id)))
+           (managed-stop (sbcl-agent::command-kernel-control-service session
+                                                                    managed-execution-id
+                                                                    :stop))
+           (managed-stop-data (sbcl-agent::service-response-data managed-stop)))
+      (assert-true (stringp managed-execution-id)
+                   "kernel invoke should assign an execution handle to managed desktop surface app launches")
+      (assert-equal :linux-app
+                    (getf (getf managed-inspect :inspection) :kind)
+                    "kernel inspect should classify managed desktop surface launches as linux-app compatibility executions")
+      (assert-equal :managed-desktop-surface
+                    (getf (getf managed-inspect :inspection) :backend-profile-id)
+                    "kernel inspect should expose the managed desktop surface backend profile")
+      (assert-equal :managed-desktop-surface
+                    (getf (getf (getf managed-inspect :inspection) :backend-profile) :runtime-class)
+                    "kernel inspect should expose managed runtime posture for non-host-process display apps")
+      (assert-equal :managed-desktop-surface
+                    (getf (getf managed-inspect :inspection) :backend-implementation)
+                    "kernel inspect should expose the managed desktop surface implementation")
+      (assert-equal :running
+                    (getf (getf managed-inspect :inspection) :status)
+                    "kernel inspect should surface managed desktop surfaces as running governed executions")
+      (assert-equal :desktop-window
+                    (getf (getf managed-inspect :inspection) :display-surface-kind)
+                    "kernel inspect should preserve the managed desktop surface display contract")
+      (assert-equal :accepted
+                    (getf (getf managed-stop-data :result) :status)
+                    "kernel control should accept stop for managed desktop surface executions")
+      (assert-equal :stopped
+                    (getf (getf (getf managed-stop-data :post-state) :inspection) :status)
+                    "kernel control post-state should preserve the stopped managed desktop surface status")
+      (assert-true (member :relaunch
+                           (getf (getf (getf (getf managed-stop-data :post-state) :inspection)
+                                       :control-posture)
+                                 :supported-actions))
+                   "kernel control post-state should advertise relaunch for terminal managed desktop surface executions"))
+
+    (let* ((linux-echo-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Launch another Linux echo app."
+                                                        "linux.echo"
+                                                        :payload (list :arguments '("counted"))))
+           (linux-echo-execution-id (getf (sbcl-agent::service-response-metadata linux-echo-response)
+                                          :execution-id))
+           (apps-response (sbcl-agent::query-compatibility-apps-service :app-id "linux.echo"
+                                                                        :session session))
+           (apps-entry (first (getf (sbcl-agent::service-response-data apps-response) :entries))))
+      (assert-true (stringp linux-echo-execution-id)
+                   "kernel invoke should still assign an execution handle to repeated linux app launches")
+      (assert-true (> (getf apps-entry :execution-count) 0)
+                   "compatibility apps query should expose execution counts for launched apps")
+      (assert-true (find linux-echo-execution-id
+                         (getf apps-entry :recent-executions)
+                         :key (lambda (entry) (getf entry :execution-id))
+                         :test #'string=)
+                   "compatibility apps query should expose recent executions for launched apps"))
+
+    (let* ((display-package-path "/tmp/linux-app-display-bridge.aop"))
+      (sbcl-agent::command-platform-package-service display-package-path
+                                                   :package-id "display-kit"
+                                                   :package-version "1.0.0"
+                                                   :title "Display Kit"
+                                                   :capability-ids '(:proc/run)
+                                                   :session session)
+      (rewrite-platform-package-app-display-surface-kind display-package-path
+                                                         "linux.echo"
+                                                         :desktop-window
+                                                         :backend-profile-id :desktop-app-bridge)
+      (sbcl-agent::command-platform-import-package-service display-package-path
+                                                           :session session)
+      (sbcl-agent::command-platform-activate-package-service "display-kit"
+                                                             :session session)
+      (let* ((display-launch-response
+               (sbcl-agent::command-kernel-invoke-service session
+                                                          "Launch a display-bearing linux echo app."
+                                                          "linux.echo"
+                                                          :payload (list :arguments '("display-bridge"))))
+             (display-execution-id (getf (sbcl-agent::service-response-metadata display-launch-response)
+                                         :execution-id))
+             (display-surfaces-response
+               (sbcl-agent::query-compatibility-display-surfaces-service session
+                                                                         :app-id "linux.echo"))
+             (display-surfaces-data (sbcl-agent::service-response-data display-surfaces-response))
+             (display-entry (find display-execution-id
+                                  (getf display-surfaces-data :entries)
+                                  :key (lambda (entry) (getf entry :execution-id))
+                                  :test #'string=)))
+        (assert-equal :display-surfaces
+                      (getf display-surfaces-response :operation)
+                      "compatibility display surface query should identify the display-surfaces operation")
+        (assert-true display-entry
+                     "compatibility display surface query should include launched display-bearing linux apps")
+        (assert-equal :desktop-window
+                      (getf display-entry :display-surface-kind)
+                      "compatibility display surface query should preserve the app display contract")
+        (assert-equal "display-kit"
+                      (getf display-entry :source-package-id)
+                      "compatibility display surface query should preserve package-provided manifest provenance")))
 
     (let* ((persist-session (make-test-session :cwd "/tmp/kernel-compatibility-detached/"))
            (path "/tmp/kernel-compatibility-detached.sexp"))
@@ -426,13 +893,48 @@
             (assert-equal t
                           (getf acknowledge-lifecycle :loss-acknowledged-p)
                           "kernel control should persist acknowledged compatibility runtime loss")
-            (assert-equal "loss reviewed"
+          (assert-equal "loss reviewed"
                           (getf acknowledge-lifecycle :recovery-note)
                           "kernel control should persist the compatibility recovery note"))
           (sbcl-agent::command-kernel-control-service persist-session
                                                      spawn-execution-id
                                                      :revoke
                                                      :environment environment))))
+
+    (let* ((natural-session (make-test-session :cwd "/tmp/kernel-natural-lifecycle/")))
+      (ensure-directories-exist "/tmp/kernel-natural-lifecycle/")
+      (sbcl-agent::approve-policy natural-session :process-run)
+      (let* ((spawn-command (sbcl-agent::command-invoke-tool-service natural-session
+                                                                     :proc/spawn
+                                                                     '(:argv ("/bin/sleep" "1"))))
+             (spawn-execution-id (getf (sbcl-agent::service-response-metadata spawn-command) :execution-id))
+             (initial-inspect (sbcl-agent::service-response-data
+                               (sbcl-agent::query-kernel-inspect-service natural-session
+                                                                         spawn-execution-id))))
+        (assert-equal :running
+                      (getf (getf initial-inspect :inspection) :status)
+                      "kernel inspect should initially observe a short-lived spawned compatibility execution as running")
+        (sleep 1.2)
+        (let* ((completed-inspect (sbcl-agent::service-response-data
+                                   (sbcl-agent::query-kernel-inspect-service natural-session
+                                                                             spawn-execution-id)))
+               (forensics (getf completed-inspect :forensics))
+               (lifecycle-history (getf forensics :lifecycle-history))
+               (last-lifecycle (car (last lifecycle-history))))
+          (assert-equal :completed
+                        (getf (getf completed-inspect :inspection) :status)
+                        "kernel inspect should observe natural completion for a spawned compatibility execution")
+          (assert-true (>= (length lifecycle-history) 2)
+                       "kernel inspect should record an additional lifecycle event when observed status changes after invoke")
+          (assert-equal :lifecycle
+                        (getf last-lifecycle :event-kind)
+                        "kernel inspect should record observed status changes as lifecycle events")
+          (assert-equal :completed
+                        (getf last-lifecycle :status)
+                        "kernel inspect should record the observed terminal status in lifecycle history")
+          (assert-equal :observation
+                        (getf last-lifecycle :result)
+                        "kernel inspect should mark observed status changes distinctly from invoke/control history"))))
 
     (let* ((invoke-response (sbcl-agent::command-kernel-invoke-service session
                                                                        "Mutate the runtime for governance preflight."
@@ -618,6 +1120,30 @@
                                                     :payload (list :package "SBCL-AGENT-USER")))
        "Kernel invoke blocked for governed mutation"
        "kernel invoke should block governed mutation when the bound work-item is quarantined"))
+
+    (let* ((work-item (sbcl-agent::create-work-item session "Kernel workflow mutation gating work"))
+           (work-item-id (sbcl-agent::work-item-id work-item))
+           (approval-command (sbcl-agent::command-request-work-item-approval-service session
+                                                                                     work-item-id
+                                                                                     :workspace-write
+                                                                                     :reason "Kernel workflow mutation gating coverage"))
+           (approval-execution-id (getf (sbcl-agent::service-response-metadata approval-command) :execution-id)))
+      (sbcl-agent::command-kernel-control-service session
+                                                  approval-execution-id
+                                                  :quarantine
+                                                  :reason "Operator hold")
+      (assert-signals-error
+       (lambda ()
+         (sbcl-agent::command-kernel-invoke-service session
+                                                    "Blocked workflow steering for quarantined work."
+                                                    "workflow/steer-plan"
+                                                    :context (list :work-item-id work-item-id)
+                                                    :payload (list :work-item-id work-item-id
+                                                                   :phase :validate
+                                                                   :next-step :run-cold-validation
+                                                                   :note "Should not pass")))
+       "Kernel invoke blocked for governed mutation"
+       "kernel invoke should block workflow steering mutation when the bound work-item is quarantined"))
 
     (let* ((validation-session (make-test-session :cwd "/tmp/kernel-validation-control/"))
            (invoke-response
@@ -934,6 +1460,7 @@
   (let* ((session (make-test-session :cwd "/tmp/shell-service-contract/"))
          (provider (make-test-provider))
          (work-item (sbcl-agent::create-work-item session "Shell workspace contract work")))
+    (ensure-directories-exist "/tmp/shell-service-contract/")
     (sbcl-agent::approve-policy session :process-run)
     (sbcl-agent::command-request-work-item-approval-service session
                                                             (sbcl-agent::work-item-id work-item)
@@ -963,6 +1490,10 @@
                    "shell workspace service should expose object browser groups")
       (assert-true (stringp focus-object-id)
                    "shell workspace service should expose an inspector focus object id")
+      (assert-true (listp (getf workspace :current-focus))
+                   "shell workspace service should expose a compact current focus summary")
+      (assert-true (listp (getf workspace :recommended-action))
+                   "shell workspace service should expose a recommended next action")
       (let* ((desktop-response (sbcl-agent::query-shell-desktop-model-service session))
              (desktop (sbcl-agent::service-response-data desktop-response)))
         (assert-equal :desktop-model
@@ -978,6 +1509,16 @@
         (assert-equal :inspector
                       (getf desktop :active-panel)
                       "shell desktop model service should expose an active panel")
+        (assert-true (listp (getf desktop :active-panel-summary))
+                     "shell desktop model service should expose a compact active panel summary")
+        (assert-equal :inspector
+                      (getf (getf desktop :active-panel-summary) :panel-id)
+                      "shell desktop model service should align the active panel summary with the active panel")
+        (assert-true (listp (getf desktop :recommended-action))
+                     "shell desktop model service should expose a recommended next desktop action")
+        (assert-equal :open-panel
+                      (getf (getf desktop :recommended-action) :action-kind)
+                      "shell desktop model service should recommend opening the focused execution when the inspector is active")
         (assert-true (listp (getf desktop :panels))
                      "shell desktop model service should expose panel state")
         (assert-equal (getf (getf (getf desktop :panels) :workspace) :selected-index)
@@ -1008,6 +1549,283 @@
         (assert-equal (getf workspace :inspector-focus-object-id)
                       (getf desktop :focus-object-id)
                       "shell desktop model service should align focus with workspace posture"))
+      (let ((display-package-path "/tmp/shell-service-display-kit.aop"))
+        (sbcl-agent::command-platform-package-service display-package-path
+                                                     :package-id "shell-display-kit"
+                                                     :package-version "1.0.0"
+                                                     :title "Shell Display Kit"
+                                                     :capability-ids '(:proc/run)
+                                                     :session session)
+        (rewrite-platform-package-app-display-surface-kind display-package-path
+                                                           "linux.echo"
+                                                           :desktop-window)
+        (sbcl-agent::command-platform-import-package-service display-package-path
+                                                             :session session)
+        (sbcl-agent::command-platform-activate-package-service "shell-display-kit"
+                                                               :session session)
+        (sbcl-agent::approve-policy session :linux-app-launch)
+        (let* ((display-echo-response
+                 (sbcl-agent::command-kernel-invoke-service session
+                                                            "Launch a shell display bridge app."
+                                                            "linux.echo"
+                                                            :payload (list :arguments '("display-shell-service"))))
+               (display-echo-execution-id
+                 (getf (sbcl-agent::service-response-metadata display-echo-response) :execution-id)))
+        (let* ((display-workspace (sbcl-agent::service-response-data
+                                   (sbcl-agent::query-shell-workspace-service session)))
+               (display-desktop (sbcl-agent::service-response-data
+                                 (sbcl-agent::query-shell-desktop-model-service session)))
+               (display-list-response
+                 (sbcl-agent::query-shell-display-list-service session))
+               (display-list
+                 (sbcl-agent::service-response-data display-list-response))
+               (display-show-response
+                 (sbcl-agent::query-shell-display-detail-service session
+                                                                 nil
+                                                                 :app-id "linux.echo"))
+               (display-show
+                 (sbcl-agent::service-response-data display-show-response))
+               (display-select-response
+                 (sbcl-agent::command-shell-display-select-service session :app-id "linux.echo"))
+               (display-select
+                 (sbcl-agent::service-response-data display-select-response))
+               (display-step-response
+                 (sbcl-agent::command-shell-display-step-service session :next))
+               (display-step
+                 (sbcl-agent::service-response-data display-step-response))
+               (display-open-response
+                 (sbcl-agent::command-shell-open-service session :display-index 0))
+               (display-open
+                 (sbcl-agent::service-response-data display-open-response))
+               (display-app-open-response
+                 (sbcl-agent::command-shell-open-service session :display-app-id "linux.echo"))
+               (display-app-open
+                 (sbcl-agent::service-response-data display-app-open-response))
+               (display-relaunch-response
+                 (sbcl-agent::command-shell-display-control-service session
+                                                                    :relaunch
+                                                                    :app-id "linux.echo"))
+               (display-relaunch
+                 (sbcl-agent::service-response-data display-relaunch-response))
+               (display-app-select-response
+                 (sbcl-agent::command-shell-desktop-select-service session :display :app-id "linux.echo"))
+               (display-app-select
+                 (sbcl-agent::service-response-data display-app-select-response))
+               (display-app-restore-response
+                 (sbcl-agent::command-shell-desktop-restore-service session
+                                                                    :panel-state '(:panel-id :display
+                                                                                   :selected-app-id "linux.echo")))
+               (display-app-restore
+                 (sbcl-agent::service-response-data display-app-restore-response)))
+          (assert-true (listp (getf display-workspace :current-display-surface))
+                       "shell workspace service should expose current display posture when Linux app windows exist")
+          (assert-equal :desktop-window
+                        (getf (getf display-workspace :current-display-posture) :display-surface-kind)
+                        "shell workspace service should expose current display surface kind in workspace posture")
+          (assert-true (getf (getf display-workspace :current-display-posture) :relaunch-ready-p)
+                       "shell workspace service should expose relaunch readiness in workspace posture")
+          (assert-true (stringp (getf (getf display-workspace :display-actions) :show-command))
+                       "shell workspace service should expose display show commands in the workspace model")
+          (assert-true (stringp (getf (getf (getf display-workspace :display-actions) :show) :action-id))
+                       "shell workspace service should expose stable action ids for current display actions")
+          (assert-true (stringp (getf (getf display-workspace :display-action-ids) :show))
+                       "shell workspace service should expose compact current display action id maps")
+          (assert-equal :step-panel
+                        (getf (getf (getf display-workspace :display-actions) :next) :action-kind)
+                        "shell workspace service should expose structured display next actions in the workspace model")
+          (assert-equal :show-panel
+                        (getf (getf (getf display-workspace :display-entry-actions) :show) :action-kind)
+                        "shell workspace service should expose structured display entry show actions in the workspace model")
+          (assert-true (stringp (getf (getf (getf display-workspace :display-entry-actions) :show) :action-id))
+                       "shell workspace service should expose stable action ids for display entry actions")
+          (assert-true (stringp (getf (getf display-workspace :display-entry-action-ids) :show))
+                       "shell workspace service should expose compact display entry action id maps")
+          (assert-equal :step-panel
+                        (getf (getf (getf display-workspace :display-entry-actions) :next) :action-kind)
+                        "shell workspace service should expose structured display entry next actions in the workspace model")
+          (assert-equal :display
+                        (getf (getf display-workspace :current-focus) :focus-kind)
+                        "shell workspace service should summarize display focus when a display surface is active")
+          (assert-equal "linux.echo"
+                        (getf (getf display-workspace :current-focus) :app-id)
+                        "shell workspace service should preserve app identity in the compact focus summary")
+          (assert-equal :show-panel
+                        (getf (getf display-workspace :recommended-action) :action-kind)
+                        "shell workspace service should recommend the display show action for active display focus")
+          (assert-true (stringp (getf (getf display-workspace :recommended-action) :action-id))
+                       "shell workspace service should expose a stable action id for the recommended action")
+          (assert-true (> (getf (getf display-workspace :display-surfaces) :count) 0)
+                       "shell workspace service should project display-bearing Linux apps into display surfaces")
+          (assert-true (> (getf display-desktop :display-count) 0)
+                       "shell desktop model service should project Linux app display count")
+          (assert-equal :display
+                        (getf display-desktop :active-panel)
+                        "shell desktop model service should prefer the display panel when display-bearing Linux apps exist")
+          (assert-equal :display
+                        (getf (getf display-desktop :active-panel-summary) :panel-id)
+                        "shell desktop model service should expose a display-focused active panel summary when Linux app windows exist")
+          (assert-equal "linux.echo"
+                        (getf (getf display-desktop :active-panel-summary) :app-id)
+                        "shell desktop model service should preserve app identity in the active panel summary")
+          (assert-equal :show-panel
+                        (getf (getf display-desktop :recommended-action) :action-kind)
+                        "shell desktop model service should recommend a compact next desktop action for the active display panel")
+          (assert-equal :display-list
+                        (getf display-list-response :operation)
+                        "shell display list service should identify display-list operation")
+          (assert-service-metadata-shape display-list-response "shell display list service")
+          (assert-true (> (getf display-list :count) 0)
+                       "shell display list service should expose display-bearing Linux app surfaces")
+          (assert-equal :display-show
+                        (getf display-show-response :operation)
+                        "shell display detail service should identify display-show operation")
+          (assert-service-metadata-shape display-show-response "shell display detail service")
+          (assert-equal :display
+                        (getf display-show :panel-id)
+                        "shell display detail service should report display panel posture")
+          (assert-equal display-echo-execution-id
+                        (getf (getf display-show :display-surface) :execution-id)
+                        "shell display detail service should expose the requested display-bearing Linux app")
+          (assert-true (listp (getf display-show :inspection))
+                       "shell display detail service should include display inspection data")
+          (assert-true (listp (getf display-show :lifecycle))
+                       "shell display detail service should include compatibility lifecycle data")
+          (assert-equal :display-select
+                        (getf display-select-response :operation)
+                        "shell display select service should identify display-select operation")
+          (assert-service-metadata-shape display-select-response "shell display select service")
+          (assert-equal :display
+                        (getf display-select :panel-id)
+                        "shell display select service should move the shell into the display panel")
+          (assert-equal "linux.echo"
+                        (getf (getf display-select :display-surface) :app-id)
+                        "shell display select service should support display selection by app id")
+          (assert-equal :display-step
+                        (getf display-step-response :operation)
+                        "shell display step service should identify display-step operation")
+          (assert-service-metadata-shape display-step-response "shell display step service")
+          (assert-equal :display
+                        (getf display-step :panel-id)
+                        "shell display step service should keep the shell in the display panel")
+          (assert-equal :open
+                        (getf display-open-response :operation)
+                        "shell open service should still identify open operation for display entry")
+          (assert-service-metadata-shape display-open-response "shell display open service")
+          (assert-equal :display
+                        (getf display-open :open-via)
+                        "shell open service should support display-index entry through the display lane")
+          (assert-equal :open
+                        (getf display-app-open-response :operation)
+                        "shell open service should still identify open operation for display app entry")
+          (assert-service-metadata-shape display-app-open-response "shell display app open service")
+          (assert-equal :display
+                        (getf display-app-open :open-via)
+                        "shell open service should support display-app-id entry through the display lane")
+          (assert-equal :display-control
+                        (getf display-relaunch-response :operation)
+                        "shell display control service should identify display-control operation")
+          (assert-service-metadata-shape display-relaunch-response "shell display control service")
+          (assert-equal :display
+                        (getf display-relaunch :panel-id)
+                        "shell display control service should keep the shell in the display panel")
+          (assert-equal :relaunch
+                        (getf (getf display-relaunch :result) :action)
+                        "shell display control service should preserve the requested relaunch action")
+          (assert-true (string/= display-echo-execution-id
+                                 (getf display-relaunch :focus-object-id))
+                       "shell display control relaunch should focus the newly launched execution")
+          (assert-equal :display
+                        (getf display-app-select :panel-id)
+                        "shell desktop select service should support display selection by app id")
+          (assert-equal "linux.echo"
+                        (getf (getf (getf (getf display-app-select :desktop-model) :panels) :display) :selected-app-id)
+                        "shell desktop select service should preserve selected display app id in the desktop model")
+          (assert-equal :display
+                        (getf (getf display-app-restore :desktop-model) :active-panel)
+                        "shell desktop restore service should support display restore by app id")
+          (assert-equal "linux.echo"
+                        (getf (getf (getf (getf display-app-restore :desktop-model) :panels) :display) :selected-app-id)
+                        "shell desktop restore service should preserve selected display app id in the desktop model")
+          (assert-true (find :display
+                             (getf display-desktop :entry-points)
+                             :key (lambda (entry) (getf entry :entry-kind))
+                             :test #'eq)
+                       "shell desktop model service should expose display entry points when Linux app windows exist")
+          (let ((display-entry (find :display
+                                     (getf display-desktop :entry-points)
+                                     :key (lambda (entry) (getf entry :entry-kind))
+                                     :test #'eq)))
+            (assert-true (listp (getf display-entry :actions))
+                         "shell desktop model service should expose structured actions on the top display entry point")
+            (assert-equal :show-panel
+                          (getf (getf (getf display-entry :actions) :show) :action-kind)
+                          "shell desktop model service should expose a structured show action on the top display entry point")
+            (assert-equal :step-panel
+                          (getf (getf (getf display-entry :actions) :next) :action-kind)
+                          "shell desktop model service should expose a structured next action on the top display entry point")
+            (assert-equal :control-panel
+                          (getf (getf (getf display-entry :actions) :relaunch) :action-kind)
+                          "shell desktop model service should expose a structured relaunch action on the top display entry point")
+            (assert-equal "linux.echo"
+                          (getf (getf (getf (getf display-entry :actions) :show) :params) :app-id)
+                          "shell desktop model service should preserve app-id in the top display entry show action")
+            (assert-equal "linux.echo"
+                          (getf (getf (getf (getf display-entry :actions) :open) :params) :app-id)
+                          "shell desktop model service should preserve app-id in the top display entry open action")
+            (assert-equal :previous
+                          (getf (getf (getf (getf display-entry :actions) :previous) :params) :direction)
+                          "shell desktop model service should preserve previous direction on the top display entry")
+            (assert-equal "linux.echo"
+                          (getf (getf (getf (getf display-entry :actions) :relaunch) :params) :app-id)
+                          "shell desktop model service should preserve app-id in the top display entry relaunch action"))
+          (assert-true (> (getf (getf (getf display-desktop :panels) :display) :count) 0)
+                       "shell desktop model service should expose a first-class display panel when Linux app windows exist")
+          (assert-equal :desktop-window
+                        (getf (getf (getf display-desktop :panels) :display) :selected-display-surface-kind)
+                        "shell desktop model service should preserve the selected display surface kind in panel state")
+          (assert-true (getf (getf (getf display-desktop :panels) :display) :selected-relaunch-ready-p)
+                       "shell desktop model service should preserve relaunch readiness in display panel state")
+          (assert-true (member :relaunch
+                               (getf (getf (getf display-desktop :panels) :display) :selected-supported-actions))
+                       "shell desktop model service should preserve supported actions in display panel state")
+          (assert-true (stringp (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                          :next-command))
+                       "shell desktop model service should expose a display next command when Linux app windows exist")
+          (assert-true (stringp (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                          :show-command))
+                       "shell desktop model service should expose a display show command when Linux app windows exist")
+          (assert-true (stringp (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                          :relaunch-command))
+                       "shell desktop model service should expose a display relaunch command when the selected Linux app can relaunch")
+          (assert-equal :show-panel
+                        (getf (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                    :show)
+                              :action-kind)
+                        "shell desktop model service should expose a structured display show action")
+          (assert-equal :control-panel
+                        (getf (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                    :relaunch)
+                              :action-kind)
+                        "shell desktop model service should expose a structured display control action")
+          (assert-equal :step-panel
+                        (getf (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                    :next)
+                              :action-kind)
+                        "shell desktop model service should expose a structured display next action")
+          (assert-equal :previous
+                        (getf (getf (getf (getf (getf (getf display-desktop :panels) :display) :actions)
+                                          :previous)
+                                    :params)
+                              :direction)
+                        "shell desktop model service should preserve previous step direction on the display panel")
+          (assert-equal :display
+                        (getf (sbcl-agent::service-response-data
+                               (sbcl-agent::command-shell-desktop-select-service session :display :index 0))
+                              :panel-id)
+                        "shell desktop select service should support display panel selection"))
+        )
+        (sbcl-agent::command-platform-deactivate-package-service "shell-display-kit"
+                                                                 :session session))
       (let* ((desktop-panel-response
                (sbcl-agent::command-shell-desktop-panel-service session :governance))
              (desktop-panel (sbcl-agent::service-response-data desktop-panel-response)))
@@ -1070,6 +1888,27 @@
         (assert-equal :governance
                       (getf (getf desktop-action :desktop-model) :active-panel)
                       "shell desktop action service should activate the selected panel"))
+      (let* ((display-desktop-model (sbcl-agent::service-response-data
+                                     (sbcl-agent::query-shell-desktop-model-service session)))
+             (display-next-action (getf (getf (getf (getf display-desktop-model :panels)
+                                                    :display)
+                                              :actions)
+                                        :next))
+             (display-step-action-response
+               (sbcl-agent::command-shell-desktop-action-service session display-next-action))
+             (display-step-action (sbcl-agent::service-response-data display-step-action-response)))
+        (assert-equal :desktop-action
+                      (getf display-step-action-response :operation)
+                      "shell desktop action service should identify display step actions")
+        (assert-equal :step-panel
+                      (getf (getf display-step-action :action) :action-kind)
+                      "shell desktop action service should preserve display step action kind")
+        (assert-equal :display
+                      (getf (getf display-step-action :result) :panel-id)
+                      "shell desktop action service should keep display step actions in the display panel")
+        (assert-equal :next
+                      (getf (getf display-step-action :result) :direction)
+                      "shell desktop action service should preserve display step direction"))
       (let* ((desktop-model (sbcl-agent::service-response-data
                              (sbcl-agent::query-shell-desktop-model-service session)))
              (desktop-governance-action-id
@@ -1294,7 +2133,13 @@
                       "shell inspector service should preserve the focused execution id")
         (assert-true (member (getf inspector :object-kind)
                              '(:workflow-record :work-item :incident :turn :runtime :execution :compatibility-execution))
-                     "shell inspector service should resolve focused kernel objects"))
+                     "shell inspector service should resolve focused kernel objects")
+        (assert-true (listp (getf inspector :summary))
+                     "shell inspector service should expose a compact inspector summary")
+        (assert-true (integerp (getf (getf inspector :summary) :history-count))
+                     "shell inspector service should expose forensic history counts in its compact summary")
+        (assert-true (listp (getf inspector :recommended-action))
+                     "shell inspector service should expose a recommended next action"))
       (let* ((focused-inspector-response (sbcl-agent::query-shell-inspector-service session))
              (focused-inspector (sbcl-agent::service-response-data focused-inspector-response)))
         (assert-equal (sbcl-agent::agent-session-shell-focus-object-id session)
@@ -1308,6 +2153,7 @@
                              :capability-ids '(:proc/run :git/status)
                              :session session))
          (manifest (sbcl-agent::service-response-data manifest-response)))
+    (ensure-directories-exist "/tmp/platform-service-contract/")
     (when (probe-file output-path)
       (delete-file output-path))
     (assert-equal :platform
@@ -1329,6 +2175,8 @@
                  "platform manifest service should expose governed workflow inventory")
     (assert-true (> (getf manifest :sdk-command-count) 0)
                  "platform manifest service should expose sdk entrypoint inventory")
+    (assert-true (> (getf manifest :compatibility-app-count) 0)
+                 "platform manifest service should expose compatibility app inventory")
     (assert-true (> (getf manifest :compatibility-kind-count) 0)
                  "platform manifest service should expose compatibility inventory")
     (assert-true (find :compatibility-host-process
@@ -1341,9 +2189,10 @@
                        :key (lambda (entry) (getf entry :command-id))
                        :test #'eq)
                  "platform manifest service should expose desktop host sdk entrypoints")
-    (let* ((package-response
+      (let* ((package-response
              (sbcl-agent::command-platform-package-service output-path
                                                           :package-id "demo-kit"
+                                                          :package-version "1.2.0"
                                                           :title "Demo Kit"
                                                           :capability-ids '(:proc/run)
                                                           :session session))
@@ -1355,6 +2204,36 @@
       (assert-equal "demo-kit"
                     (getf package-result :package-id)
                     "platform package service should preserve the package id")
+      (assert-equal "1.2.0"
+                    (getf package-result :package-version)
+                    "platform package service should preserve the package version")
+      (assert-equal t
+                    (getf package-result :contract-compatible-p)
+                    "platform package service should export a contract-compatible package descriptor")
+      (assert-equal t
+                    (getf package-result :support-valid-p)
+                    "platform package service should export a support-valid package descriptor")
+      (assert-equal t
+                    (getf package-result :lifecycle-valid-p)
+                    "platform package service should export a lifecycle-valid package descriptor")
+      (assert-equal nil
+                    (getf package-result :lifecycle-override-required-p)
+                    "platform package service should export active packages without lifecycle override posture")
+      (assert-equal t
+                    (getf package-result :recovery-valid-p)
+                    "platform package service should export a recovery-valid package descriptor")
+      (assert-equal nil
+                    (getf package-result :recovery-override-required-p)
+                    "platform package service should export default recovery posture without explicit override")
+      (assert-equal t
+                    (getf package-result :provenance-valid-p)
+                    "platform package service should export a provenance-valid package descriptor")
+      (assert-equal t
+                    (getf package-result :provenance-trusted-p)
+                    "platform package service should export a provenance-trusted package descriptor")
+      (assert-equal t
+                    (getf package-result :integrity-valid-p)
+                    "platform package service should export an integrity-valid package descriptor")
       (assert-true (> (getf package-result :workflow-count) 0)
                    "platform package service should return workflow inventory counts")
       (assert-true (probe-file output-path)
@@ -1362,14 +2241,68 @@
       (let ((contents (uiop:read-file-string output-path)))
         (assert-true (search "\"package_id\":\"demo-kit\"" contents)
                      "platform package service should persist the package id")
+        (assert-true (search "\"package_version\":\"1.2.0\"" contents)
+                     "platform package service should persist the package version")
+        (assert-true (search "\"requires\"" contents)
+                     "platform package service should persist runtime compatibility requirements")
+        (assert-true (search "\"support\"" contents)
+                     "platform package service should persist support metadata")
+        (assert-true (search "\"release_channel\":\"stable\"" contents)
+                     "platform package service should persist support posture")
+        (assert-true (search "\"lifecycle\"" contents)
+                     "platform package service should persist lifecycle metadata")
+        (assert-true (search "\"release_status\":\"active\"" contents)
+                     "platform package service should persist active lifecycle posture")
+        (assert-true (search "\"recovery\"" contents)
+                     "platform package service should persist recovery metadata")
+        (assert-true (search "\"rollback_strategy\":\"reinstall-prior\"" contents)
+                     "platform package service should persist default recovery posture")
+        (assert-true (search "\"provenance\"" contents)
+                     "platform package service should persist provenance metadata")
+        (assert-true (search "\"publisher\":\"local-developer\"" contents)
+                     "platform package service should persist publisher provenance")
+        (assert-true (search "\"attested_p\":true" contents)
+                     "platform package service should persist attestation posture")
+        (assert-true (search "\"integrity\"" contents)
+                     "platform package service should persist integrity metadata")
+        (assert-true (search "\"algorithm\":\"fnv1a-64\"" contents)
+                     "platform package service should persist the package integrity algorithm")
+        (assert-true (search "\"required_desktop_contract\":\"desktop-shell-v1\"" contents)
+                     "platform package service should persist the desktop host contract requirement")
         (assert-true (search "\"capability_count\":1" contents)
                      "platform package service should persist the selected capability filter")
+        (assert-true (search "\"compatibility_app_ids\"" contents)
+                     "platform package service should persist a top-level compatibility app contents index")
         (assert-true (search "\"workflow_ids\"" contents)
                      "platform package service should persist a top-level workflow contents index")
         (assert-true (search "\"sdk_command_ids\"" contents)
                      "platform package service should persist a top-level sdk command contents index")
         (assert-true (search "\"desktop-host-shell\"" contents)
-                     "platform package service should persist desktop host workflow metadata"))
+                     "platform package service should persist desktop host workflow metadata")))
+      (let* ((kernel-output-path "/tmp/platform-service-contract-kernel.aop")
+             (kernel-package-data
+               (sbcl-agent::execute-platform-package-command
+                (list :output-path kernel-output-path
+                      :package-id "demo-kit-kernel"
+                      :package-version "1.2.1"
+                      :title "Demo Kit Kernel"
+                      :capabilities '(:proc/run))
+                session))
+             (kernel-package-handle
+               (sbcl-agent::kernel-find-execution-by-target :platform-package-id
+                                                            "demo-kit-kernel"
+                                                            (sbcl-agent::session-bound-environment session))))
+        (assert-equal "demo-kit-kernel"
+                      (getf kernel-package-data :package-id)
+                      "shell platform package execution should preserve package data")
+        (assert-true (listp kernel-package-handle)
+                     "shell platform package execution should record a kernel execution handle")
+        (assert-equal "platform/package"
+                      (getf kernel-package-handle :capability)
+                      "shell platform package execution should record the kernel capability")
+        (assert-equal "demo-kit-kernel"
+                      (getf (getf kernel-package-handle :target) :platform-package-id)
+                      "shell platform package execution should capture the platform package target"))
       (let* ((show-response (sbcl-agent::query-platform-package-service output-path
                                                                         :session session))
              (show-result (sbcl-agent::service-response-data show-response)))
@@ -1377,9 +2310,36 @@
                       (getf show-response :operation)
                       "platform package query service should identify package operation")
         (assert-service-metadata-shape show-response "platform package query service")
+        (assert-equal "1.2.0"
+                      (getf show-result :package-version)
+                      "platform package query service should preserve the package version")
+        (assert-equal t
+                      (getf show-result :contract-compatible-p)
+                      "platform package query service should mark exported descriptors contract-compatible")
+        (assert-equal t
+                      (getf show-result :support-valid-p)
+                      "platform package query service should mark exported descriptors support-valid")
+        (assert-equal t
+                      (getf show-result :lifecycle-valid-p)
+                      "platform package query service should mark exported descriptors lifecycle-valid")
+        (assert-equal t
+                      (getf show-result :recovery-valid-p)
+                      "platform package query service should mark exported descriptors recovery-valid")
+        (assert-equal t
+                      (getf show-result :provenance-valid-p)
+                      "platform package query service should mark exported descriptors provenance-valid")
+        (assert-equal t
+                      (getf show-result :provenance-trusted-p)
+                      "platform package query service should mark exported descriptors provenance-trusted")
+        (assert-equal t
+                      (getf show-result :integrity-valid-p)
+                      "platform package query service should mark exported descriptors integrity-valid")
         (assert-equal t
                       (getf show-result :valid-p)
-                      "platform package query service should report valid descriptors"))
+                      "platform package query service should report valid descriptors")
+        (assert-equal :new
+                      (getf show-result :update-posture)
+                      "platform package query service should mark brand-new descriptors as new"))
       (let* ((validate-response
                (sbcl-agent::command-platform-validate-package-service output-path
                                                                       :session session))
@@ -1388,9 +2348,36 @@
                       (getf validate-response :operation)
                       "platform package validate service should identify validation operation")
         (assert-service-metadata-shape validate-response "platform package validate service")
+        (assert-equal "1.2.0"
+                      (getf validate-result :package-version)
+                      "platform package validate service should preserve the package version")
+        (assert-equal t
+                      (getf validate-result :contract-compatible-p)
+                      "platform package validate service should preserve contract-compatibility state")
+        (assert-equal t
+                      (getf validate-result :support-valid-p)
+                      "platform package validate service should preserve support-valid state")
+        (assert-equal t
+                      (getf validate-result :lifecycle-valid-p)
+                      "platform package validate service should preserve lifecycle-valid state")
+        (assert-equal t
+                      (getf validate-result :recovery-valid-p)
+                      "platform package validate service should preserve recovery-valid state")
+        (assert-equal t
+                      (getf validate-result :provenance-valid-p)
+                      "platform package validate service should preserve provenance-valid state")
+        (assert-equal t
+                      (getf validate-result :provenance-trusted-p)
+                      "platform package validate service should preserve provenance-trusted state")
+        (assert-equal t
+                      (getf validate-result :integrity-valid-p)
+                      "platform package validate service should preserve integrity-valid state")
         (assert-equal t
                       (getf validate-result :valid-p)
-                      "platform package validate service should report valid descriptors"))
+                      "platform package validate service should report valid descriptors")
+        (assert-equal :new
+                      (getf validate-result :update-posture)
+                      "platform package validate service should mark brand-new descriptors as new"))
       (let* ((import-response
                (sbcl-agent::command-platform-import-package-service output-path
                                                                    :session session))
@@ -1404,7 +2391,49 @@
                       "platform package import service should register the imported package")
         (assert-equal "demo-kit"
                       (getf (getf import-result :package) :package-id)
-                      "platform package import service should return the imported package summary"))
+                      "platform package import service should return the imported package summary")
+        (assert-equal "1.2.0"
+                      (getf (getf import-result :package) :package-version)
+                      "platform package import service should preserve the imported package version")
+        (assert-equal :new
+                      (getf (getf import-result :package) :update-posture)
+                      "platform package import service should mark the first import as new"))
+      (let* ((history-response
+               (sbcl-agent::query-platform-package-history-service :session session))
+             (history-result (sbcl-agent::service-response-data history-response)))
+        (assert-equal :package-history
+                      (getf history-response :operation)
+                      "platform package history service should identify the history operation")
+        (assert-service-metadata-shape history-response "platform package history service")
+        (assert-equal 1
+                      (getf history-result :count)
+                      "platform package history service should record the initial import event")
+        (assert-equal :import
+                      (getf (first (getf history-result :entries)) :action)
+                      "platform package history service should record import actions"))
+      (let* ((audit-response
+               (sbcl-agent::query-platform-audit-service :session session))
+             (audit-result (sbcl-agent::service-response-data audit-response)))
+        (assert-equal :audit
+                      (getf audit-response :operation)
+                      "platform audit service should identify the audit operation")
+        (assert-service-metadata-shape audit-response "platform audit service")
+        (assert-equal 1
+                      (getf audit-result :count)
+                      "platform audit service should report imported package count")
+        (assert-equal 0
+                      (getf audit-result :override-count)
+                      "platform audit service should not report override usage before any override-granted import")
+        (assert-equal 1
+                      (getf audit-result :manual-update-count)
+                      "platform audit service should report manual update posture from imported package support metadata"))
+      (let* ((simulate-same-response
+               (sbcl-agent::query-platform-simulate-package-service output-path
+                                                                   :session session))
+             (simulate-same-result (sbcl-agent::service-response-data simulate-same-response)))
+        (assert-equal :same-version
+                      (getf simulate-same-result :update-posture)
+                      "platform package simulation service should recognize same-version replacement posture immediately after import"))
       (let* ((registry-response
                (sbcl-agent::query-platform-package-registry-service :session session))
              (registry-result (sbcl-agent::service-response-data registry-response)))
@@ -1427,7 +2456,10 @@
         (assert-service-metadata-shape imported-response "platform imported package service")
         (assert-equal "demo-kit"
                       (getf imported-result :package-id)
-                      "platform imported package service should return the imported package by id"))
+                      "platform imported package service should return the imported package by id")
+        (assert-equal "1.2.0"
+                      (getf imported-result :package-version)
+                      "platform imported package service should preserve imported package version"))
       (let* ((activate-response
                (sbcl-agent::command-platform-activate-package-service "demo-kit"
                                                                      :session session))
@@ -1439,6 +2471,31 @@
         (assert-equal t
                       (getf (getf activate-result :package) :active-p)
                       "platform package activation service should mark the package active"))
+      (let* ((app-response
+               (sbcl-agent::query-compatibility-apps-service :app-id "linux.echo"
+                                                             :session session))
+             (app-entry (first (getf (sbcl-agent::service-response-data app-response) :entries))))
+        (assert-equal "demo-kit"
+                      (getf app-entry :source-package-id)
+                      "active platform packages should project compatibility apps back into the effective registry")
+        (assert-equal :linux-app-launch
+                      (getf app-entry :policy-id)
+                      "active platform package compatibility apps should preserve their launch policy"))
+      (sbcl-agent::approve-policy session :process-run)
+      (sbcl-agent::approve-policy session :linux-app-launch)
+      (let* ((app-launch-response
+               (sbcl-agent::command-kernel-invoke-service session
+                                                          "Launch platform-provided linux echo app."
+                                                          "linux.echo"
+                                                          :payload (list :arguments '("from-package"))))
+             (app-inspection
+               (sbcl-agent::service-response-data
+                (sbcl-agent::query-kernel-inspect-service session
+                                                          (getf (sbcl-agent::service-response-metadata app-launch-response)
+                                                                :execution-id)))))
+        (assert-equal "demo-kit"
+                      (getf (getf app-inspection :inspection) :source-package-id)
+                      "kernel inspect should preserve platform-provided compatibility app provenance on execution handles"))
       (let* ((active-response
                (sbcl-agent::query-platform-active-packages-service :session session))
              (active-result (sbcl-agent::service-response-data active-response)))
@@ -1482,6 +2539,17 @@
         (assert-equal nil
                       (getf (getf deactivate-result :package) :active-p)
                       "platform package deactivation service should clear the active package flag"))
+      (let* ((history-response
+               (sbcl-agent::query-platform-package-history-service :session session
+                                                                  :package-id "demo-kit"))
+             (history-result (sbcl-agent::service-response-data history-response))
+             (actions (mapcar (lambda (entry) (getf entry :action))
+                              (getf history-result :entries))))
+        (assert-equal 3
+                      (getf history-result :count)
+                      "platform package history service should record import, activate, and deactivate lifecycle events for one package")
+        (assert-true (equal '(:import :activate :deactivate) actions)
+                     "platform package history service should preserve action order for package lifecycle events"))
       (let* ((install-path "/tmp/platform-install-service-contract.aop"))
         (uiop:copy-file output-path install-path)
         (let* ((install-session (make-test-session :cwd "/tmp/platform-install-service-contract/"))
@@ -1498,13 +2566,419 @@
                         "platform package install service should activate the imported package")
           (assert-equal 1
                         (getf (getf install-result :profile) :count)
-                        "platform package install service should return the applied active-package profile")))
+                        "platform package install service should return the applied active-package profile")
+          (let* ((install-history-response
+                   (sbcl-agent::query-platform-package-history-service :session install-session
+                                                                      :package-id "demo-kit"))
+                 (install-history-result (sbcl-agent::service-response-data install-history-response))
+                 (install-actions (mapcar (lambda (entry) (getf entry :action))
+                                          (getf install-history-result :entries))))
+            (assert-true (equal '(:import :activate :install) install-actions)
+                         "platform package history service should record install lifecycle actions in order"))))
+      (let* ((simulate-response
+               (sbcl-agent::query-platform-simulate-package-service output-path
+                                                                   :session session))
+             (simulate-result (sbcl-agent::service-response-data simulate-response)))
+        (assert-equal :simulate-package
+                      (getf simulate-response :operation)
+                      "platform package simulation service should identify the simulate operation")
+        (assert-service-metadata-shape simulate-response "platform package simulation service")
+        (assert-equal t
+                      (getf simulate-result :valid-p)
+                      "platform package simulation service should accept a valid descriptor")
+        (assert-equal 1
+                      (getf (getf simulate-result :simulated-profile) :count)
+                      "platform package simulation service should preview one active package when simulating the descriptor into the current environment"))
+      (let ((downgrade-path "/tmp/platform-downgrade-service-contract.aop"))
+        (let ((downgrade-package-response
+                (sbcl-agent::command-platform-package-service downgrade-path
+                                                             :package-id "demo-kit"
+                                                             :package-version "1.1.0"
+                                                             :title "Demo Kit"
+                                                             :capability-ids '(:proc/run)
+                                                             :session session)))
+          (assert-service-metadata-shape downgrade-package-response "platform downgrade package service"))
+        (let ((downgrade-session (make-test-session :cwd "/tmp/platform-downgrade-service-contract/")))
+          (sbcl-agent::command-platform-import-package-service output-path
+                                                              :session downgrade-session)
+          (let* ((downgrade-simulate-response
+                   (sbcl-agent::query-platform-simulate-package-service downgrade-path
+                                                                       :session downgrade-session))
+                 (downgrade-simulate-result (sbcl-agent::service-response-data downgrade-simulate-response)))
+            (assert-equal :downgrade
+                          (getf downgrade-simulate-result :update-posture)
+                          "platform package simulation service should identify downgrades explicitly")
+            (assert-equal t
+                          (getf downgrade-simulate-result :downgrade-p)
+                          "platform package simulation service should flag downgrade posture")
+            (assert-equal t
+                          (getf downgrade-simulate-result :would-require-override-p)
+                          "platform package simulation service should require explicit downgrade override"))
+          (assert-signals-error
+           (lambda ()
+             (sbcl-agent::command-platform-import-package-service downgrade-path
+                                                                 :session downgrade-session))
+           "Refusing to downgrade platform package"
+           "platform package import service should refuse downgrades without explicit override")
+          (let* ((downgrade-import-response
+                   (sbcl-agent::command-platform-import-package-service downgrade-path
+                                                                       :session downgrade-session
+                                                                       :allow-downgrade-p t))
+                 (downgrade-import-result (sbcl-agent::service-response-data downgrade-import-response)))
+            (assert-equal :downgrade
+                          (getf (getf downgrade-import-result :package) :update-posture)
+                          "platform package import service should mark explicit downgrade imports as downgrade posture")
+          (assert-equal t
+                        (getf (getf downgrade-import-result :package) :downgrade-p)
+                        "platform package import service should preserve downgrade markers when override is granted"))))
+      (let ((tampered-path "/tmp/platform-tampered-service-contract.aop"))
+        (with-open-file (stream tampered-path
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string (uiop:read-file-string output-path) stream))
+        (let* ((contents (uiop:read-file-string tampered-path))
+               (needle "\"title\":\"Demo Kit\"")
+               (replacement "\"title\":\"Tampered Kit\"")
+               (position (search needle contents))
+               (tampered (if position
+                             (concatenate 'string
+                                          (subseq contents 0 position)
+                                          replacement
+                                          (subseq contents (+ position (length needle))))
+                             contents)))
+          (with-open-file (stream tampered-path
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+            (write-string tampered stream)))
+        (let* ((tampered-response
+                 (sbcl-agent::command-platform-validate-package-service tampered-path
+                                                                        :session session))
+               (tampered-result (sbcl-agent::service-response-data tampered-response)))
+          (assert-equal nil
+                        (getf tampered-result :valid-p)
+                        "platform package validate service should reject tampered package descriptors")
+        (assert-equal nil
+                      (getf tampered-result :integrity-valid-p)
+                      "platform package validate service should report failed integrity for tampered descriptors")
+          (assert-true (find "integrity digest does not match package contents"
+                             (getf tampered-result :validation-issues)
+                             :test #'string=)
+                       "platform package validate service should expose integrity mismatches explicitly")))
+      (let ((support-tampered-path "/tmp/platform-support-tampered-service-contract.aop"))
+        (with-open-file (stream support-tampered-path
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string (uiop:read-file-string output-path) stream))
+        (let* ((contents (uiop:read-file-string support-tampered-path))
+               (needle "\"update_channel\":\"manual\"")
+               (replacement "\"update_channel\":\"unsupported\"")
+               (position (search needle contents))
+               (tampered (if position
+                             (concatenate 'string
+                                          (subseq contents 0 position)
+                                          replacement
+                                          (subseq contents (+ position (length needle))))
+                             contents)))
+          (with-open-file (stream support-tampered-path
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+            (write-string tampered stream)))
+        (let* ((support-tampered-response
+                 (sbcl-agent::command-platform-validate-package-service support-tampered-path
+                                                                        :session session))
+               (support-tampered-result (sbcl-agent::service-response-data support-tampered-response)))
+          (assert-equal nil
+                        (getf support-tampered-result :valid-p)
+                        "platform package validate service should reject invalid support metadata")
+          (assert-equal nil
+                        (getf support-tampered-result :support-valid-p)
+                        "platform package validate service should report invalid support posture explicitly")
+          (assert-true (find "support update_channel must be manual, managed, or pinned"
+                             (getf support-tampered-result :validation-issues)
+                             :test #'string=)
+                       "platform package validate service should expose malformed support update channels")))
+      (let ((provenance-tampered-path "/tmp/platform-provenance-tampered-service-contract.aop"))
+        (with-open-file (stream provenance-tampered-path
+                                :direction :output
+                                :if-exists :supersede
+                                :if-does-not-exist :create)
+          (write-string (uiop:read-file-string output-path) stream))
+        (let* ((contents (uiop:read-file-string provenance-tampered-path))
+               (needle "\"build_kind\":\"developer-package\"")
+               (replacement "\"build_kind\":\"unknown-package\"")
+               (position (search needle contents))
+               (tampered (if position
+                             (concatenate 'string
+                                          (subseq contents 0 position)
+                                          replacement
+                                          (subseq contents (+ position (length needle))))
+                             contents)))
+          (with-open-file (stream provenance-tampered-path
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+            (write-string tampered stream)))
+        (let* ((provenance-tampered-response
+                 (sbcl-agent::command-platform-validate-package-service provenance-tampered-path
+                                                                        :session session))
+               (provenance-tampered-result (sbcl-agent::service-response-data provenance-tampered-response)))
+          (assert-equal nil
+                        (getf provenance-tampered-result :valid-p)
+                        "platform package validate service should reject invalid provenance metadata")
+          (assert-equal nil
+                        (getf provenance-tampered-result :provenance-valid-p)
+                        "platform package validate service should report invalid provenance posture explicitly")
+          (assert-true (find "provenance build_kind must be developer-package, release-package, or internal-package"
+                             (getf provenance-tampered-result :validation-issues)
+                             :test #'string=)
+                       "platform package validate service should expose malformed provenance build kinds")))
+      (let ((manual-recovery-path "/tmp/platform-manual-recovery-service-contract.aop"))
+        (let ((manual-recovery-package-response
+                (sbcl-agent::command-platform-package-service manual-recovery-path
+                                                             :package-id "ops-kit"
+                                                             :package-version "3.0.0"
+                                                             :title "Ops Kit"
+                                                             :rollback-strategy "manual-recovery"
+                                                             :failure-mode "manual-intervention"
+                                                             :recovery-runbook "ops://runbooks/ops-kit"
+                                                             :capability-ids '(:proc/run)
+                                                             :session session)))
+          (assert-service-metadata-shape manual-recovery-package-response "platform manual-recovery package service"))
+        (let* ((manual-recovery-validate-response
+                 (sbcl-agent::command-platform-validate-package-service manual-recovery-path
+                                                                        :session session))
+               (manual-recovery-validate-result (sbcl-agent::service-response-data manual-recovery-validate-response)))
+          (assert-equal t
+                        (getf manual-recovery-validate-result :valid-p)
+                        "platform package validate service should accept structurally valid manual-recovery packages")
+          (assert-equal t
+                        (getf manual-recovery-validate-result :recovery-override-required-p)
+                        "platform package validate service should mark manual-recovery packages as requiring explicit override"))
+        (let* ((manual-recovery-simulate-response
+                 (sbcl-agent::query-platform-simulate-package-service manual-recovery-path
+                                                                     :session session))
+               (manual-recovery-simulate-result (sbcl-agent::service-response-data manual-recovery-simulate-response)))
+          (assert-equal t
+                        (getf manual-recovery-simulate-result :would-require-recovery-override-p)
+                        "platform package simulation service should require explicit recovery override for manual-recovery packages"))
+        (assert-signals-error
+         (lambda ()
+           (sbcl-agent::command-platform-import-package-service manual-recovery-path
+                                                               :session session))
+         "Refusing to import manual-recovery platform package"
+         "platform package import service should refuse manual-recovery packages without explicit override")
+        (let* ((manual-recovery-import-response
+                 (sbcl-agent::command-platform-import-package-service manual-recovery-path
+                                                                     :session session
+                                                                     :allow-manual-recovery-p t))
+               (manual-recovery-import-result (sbcl-agent::service-response-data manual-recovery-import-response)))
+          (assert-equal t
+                        (getf (getf manual-recovery-import-result :package) :manual-recovery-p)
+                        "platform package import service should preserve manual-recovery posture after override"))
+        (let ((recovery-tampered-path "/tmp/platform-recovery-tampered-service-contract.aop"))
+          (with-open-file (stream recovery-tampered-path
+                                  :direction :output
+                                  :if-exists :supersede
+                                  :if-does-not-exist :create)
+            (write-string (uiop:read-file-string manual-recovery-path) stream))
+          (let* ((contents (uiop:read-file-string recovery-tampered-path))
+                 (needle "\"recovery_runbook\":\"ops://runbooks/ops-kit\"")
+                 (replacement "\"recovery_runbook\":\"\"")
+                 (position (search needle contents))
+                 (tampered (if position
+                               (concatenate 'string
+                                            (subseq contents 0 position)
+                                            replacement
+                                            (subseq contents (+ position (length needle))))
+                               contents)))
+            (with-open-file (stream recovery-tampered-path
+                                    :direction :output
+                                    :if-exists :supersede
+                                    :if-does-not-exist :create)
+              (write-string tampered stream)))
+          (let* ((recovery-tampered-response
+                   (sbcl-agent::command-platform-validate-package-service recovery-tampered-path
+                                                                          :session session))
+                 (recovery-tampered-result (sbcl-agent::service-response-data recovery-tampered-response)))
+            (assert-equal nil
+                          (getf recovery-tampered-result :valid-p)
+                          "platform package validate service should reject invalid recovery metadata")
+            (assert-equal nil
+                          (getf recovery-tampered-result :recovery-valid-p)
+                          "platform package validate service should report invalid recovery posture explicitly")
+            (assert-true (find "recovery recovery_runbook is required for manual recovery posture"
+                               (getf recovery-tampered-result :validation-issues)
+                               :test #'string=)
+                         "platform package validate service should expose malformed recovery metadata"))))
+      (let ((untrusted-path "/tmp/platform-untrusted-service-contract.aop"))
+        (let ((untrusted-package-response
+                (sbcl-agent::command-platform-package-service untrusted-path
+                                                             :package-id "untrusted-kit"
+                                                             :package-version "1.0.0"
+                                                             :title "Untrusted Kit"
+                                                             :publisher "unknown-publisher"
+                                                             :attested-p nil
+                                                             :capability-ids '(:proc/run)
+                                                             :session session)))
+          (assert-service-metadata-shape untrusted-package-response "platform untrusted package service"))
+        (let* ((untrusted-validate-response
+                 (sbcl-agent::command-platform-validate-package-service untrusted-path
+                                                                        :session session))
+               (untrusted-validate-result (sbcl-agent::service-response-data untrusted-validate-response)))
+          (assert-equal t
+                        (getf untrusted-validate-result :valid-p)
+                        "platform package validate service should accept structurally valid but untrusted provenance")
+          (assert-equal nil
+                        (getf untrusted-validate-result :provenance-trusted-p)
+                        "platform package validate service should mark unknown unattested publishers as untrusted")
+          (assert-true (find "package publisher is not in the trusted publisher set"
+                             (getf untrusted-validate-result :provenance-trust-issues)
+                             :test #'string=)
+                       "platform package validate service should expose unknown publisher trust issues")
+          (assert-true (find "package provenance is unattested"
+                             (getf untrusted-validate-result :provenance-trust-issues)
+                             :test #'string=)
+                       "platform package validate service should expose unattested provenance trust issues"))
+        (let* ((untrusted-simulate-response
+                 (sbcl-agent::query-platform-simulate-package-service untrusted-path
+                                                                      :session session))
+               (untrusted-simulate-result (sbcl-agent::service-response-data untrusted-simulate-response)))
+          (assert-equal t
+                        (getf untrusted-simulate-result :would-require-trust-override-p)
+                        "platform package simulation service should require an explicit trust override for untrusted packages"))
+        (assert-signals-error
+         (lambda ()
+           (sbcl-agent::command-platform-import-package-service untrusted-path
+                                                               :session session))
+         "Refusing to import untrusted platform package"
+         "platform package import service should refuse untrusted provenance without explicit override")
+        (let* ((untrusted-import-response
+                 (sbcl-agent::command-platform-import-package-service untrusted-path
+                                                                     :session session
+                                                                     :allow-untrusted-p t))
+               (untrusted-import-result (sbcl-agent::service-response-data untrusted-import-response)))
+          (assert-equal nil
+                        (getf (getf untrusted-import-result :package) :provenance-trusted-p)
+                        "platform package import service should preserve untrusted posture when explicitly overridden")))
+      (let ((deprecated-path "/tmp/platform-deprecated-service-contract.aop"))
+        (let ((deprecated-package-response
+                (sbcl-agent::command-platform-package-service deprecated-path
+                                                             :package-id "legacy-kit"
+                                                             :package-version "2.0.0"
+                                                             :title "Legacy Kit"
+                                                             :release-status "deprecated"
+                                                             :replacement-package-id "modern-kit"
+                                                             :capability-ids '(:proc/run)
+                                                             :session session)))
+          (assert-service-metadata-shape deprecated-package-response "platform deprecated package service"))
+        (let* ((deprecated-validate-response
+                 (sbcl-agent::command-platform-validate-package-service deprecated-path
+                                                                        :session session))
+               (deprecated-validate-result (sbcl-agent::service-response-data deprecated-validate-response)))
+          (assert-equal t
+                        (getf deprecated-validate-result :valid-p)
+                        "platform package validate service should accept structurally valid deprecated packages")
+          (assert-equal t
+                        (getf deprecated-validate-result :lifecycle-valid-p)
+                        "platform package validate service should preserve lifecycle validity for deprecated packages")
+          (assert-equal t
+                        (getf deprecated-validate-result :lifecycle-override-required-p)
+                        "platform package validate service should mark deprecated packages as requiring lifecycle override"))
+        (let* ((deprecated-simulate-response
+                 (sbcl-agent::query-platform-simulate-package-service deprecated-path
+                                                                      :session session))
+               (deprecated-simulate-result (sbcl-agent::service-response-data deprecated-simulate-response)))
+          (assert-equal t
+                        (getf deprecated-simulate-result :would-require-lifecycle-override-p)
+                        "platform package simulation service should require lifecycle override for deprecated packages"))
+        (assert-signals-error
+         (lambda ()
+           (sbcl-agent::command-platform-import-package-service deprecated-path
+                                                               :session session))
+         "Refusing to import deprecated platform package"
+         "platform package import service should refuse deprecated packages without explicit lifecycle override")
+        (let* ((deprecated-import-response
+                 (sbcl-agent::command-platform-import-package-service deprecated-path
+                                                                     :session session
+                                                                     :allow-deprecated-p t))
+               (deprecated-import-result (sbcl-agent::service-response-data deprecated-import-response)))
+          (assert-equal t
+                        (getf (getf deprecated-import-result :package) :deprecated-p)
+                        "platform package import service should preserve deprecated posture when override is granted")))
+      (let* ((audit-response
+               (sbcl-agent::query-platform-audit-service :session session))
+             (audit-result (sbcl-agent::service-response-data audit-response))
+             (legacy-entry (find "legacy-kit"
+                                 (getf audit-result :packages)
+                                 :key (lambda (entry) (getf entry :package-id))
+                                 :test #'string=))
+             (ops-entry (find "ops-kit"
+                              (getf audit-result :packages)
+                              :key (lambda (entry) (getf entry :package-id))
+                              :test #'string=))
+             (untrusted-entry (find "untrusted-kit"
+                                    (getf audit-result :packages)
+                                    :key (lambda (entry) (getf entry :package-id))
+                                    :test #'string=)))
+        (assert-true (>= (getf audit-result :override-count) 3)
+                     "platform audit service should count explicit override-granted imports")
+        (assert-true (>= (getf audit-result :attention-count) 3)
+                     "platform audit service should surface attention-required package posture")
+        (assert-equal 1
+                      (getf audit-result :untrusted-count)
+                      "platform audit service should count untrusted imported packages")
+        (assert-equal 1
+                      (getf audit-result :deprecated-count)
+                      "platform audit service should count deprecated imported packages")
+        (assert-equal 1
+                      (getf audit-result :manual-recovery-count)
+                      "platform audit service should count manual-recovery imported packages")
+        (assert-equal 1
+                      (getf legacy-entry :override-count)
+                      "platform audit service should preserve lifecycle override history per package")
+        (assert-equal 1
+                      (getf ops-entry :override-count)
+                      "platform audit service should preserve manual-recovery override history per package")
+        (assert-equal 1
+                      (getf untrusted-entry :override-count)
+                      "platform audit service should preserve trust override history per package"))
+      (let* ((harness-response
+               (sbcl-agent::query-platform-harness-service :session session))
+             (harness-result (sbcl-agent::service-response-data harness-response)))
+        (assert-equal :harness
+                      (getf harness-response :operation)
+                      "platform harness service should identify the harness inventory operation")
+        (assert-service-metadata-shape harness-response "platform harness service")
+        (assert-true (> (getf harness-result :count) 0)
+                     "platform harness service should expose at least one harness")
+        (assert-true (find :internal-evaluations
+                           (getf harness-result :harnesses)
+                           :key (lambda (entry) (getf entry :harness-id))
+                           :test #'eq)
+                     "platform harness service should expose the internal evaluations harness"))
+      (let* ((run-harness-response
+               (sbcl-agent::command-platform-run-harness-service :harness-id :internal-evaluations
+                                                                 :session session))
+             (run-harness-result (sbcl-agent::service-response-data run-harness-response)))
+        (assert-equal :run-harness
+                      (getf run-harness-response :operation)
+                      "platform harness run service should identify the harness run operation")
+        (assert-service-metadata-shape run-harness-response "platform harness run service")
+        (assert-equal :internal-evaluations
+                      (getf (getf run-harness-result :harness) :harness-id)
+                      "platform harness run service should preserve the requested harness id")
+        (assert-true (>= (getf (getf run-harness-result :report) :implemented-family-count) 4)
+                     "platform harness run service should return the internal evaluation report"))
       (let* ((invalid-path "/tmp/platform-invalid-service-contract.aop"))
         (with-open-file (stream invalid-path
                                 :direction :output
                                 :if-exists :supersede
                                 :if-does-not-exist :create)
-          (write-string "{\"package_format\":\"intentos.aop.v1\",\"package_id\":\"broken-kit\",\"title\":\"Broken Kit\",\"contents\":{\"capability_ids\":[],\"policy_ids\":[],\"workflow_ids\":[],\"sdk_command_ids\":[],\"compatibility_kinds\":[]},\"manifest\":{\"manifest_version\":1,\"kernel_class\":\"execution-kernel\",\"kernel_api\":[\"invoke\",\"inspect\",\"control\"],\"capabilities\":[],\"policies\":[],\"workflows\":[{\"workflow_id\":\"broken\",\"entrypoints\":[\"missing-command\"],\"required_capabilities\":[],\"control_actions\":[]}],\"sdk_commands\":[],\"compatibility_kinds\":[]}}" stream))
+          (write-string "{\"package_format\":\"intentos.aop.v1\",\"package_id\":\"broken-kit\",\"package_version\":\"1.0.0\",\"requires\":{\"supported_package_format\":\"intentos.aop.v1\",\"supported_manifest_version\":1,\"required_kernel_class\":\"execution-kernel\",\"required_kernel_api\":[\"invoke\",\"inspect\",\"control\"],\"required_desktop_contract\":\"desktop-shell-v0\",\"required_surface_contract\":\"execution-surfaces-v1\"},\"title\":\"Broken Kit\",\"contents\":{\"capability_ids\":[],\"policy_ids\":[],\"workflow_ids\":[],\"sdk_command_ids\":[],\"compatibility_kinds\":[]},\"manifest\":{\"manifest_version\":1,\"kernel_class\":\"execution-kernel\",\"kernel_api\":[\"invoke\",\"inspect\",\"control\"],\"capabilities\":[],\"policies\":[],\"workflows\":[{\"workflow_id\":\"broken\",\"entrypoints\":[\"missing-command\"],\"required_capabilities\":[],\"control_actions\":[]}],\"sdk_commands\":[],\"compatibility_kinds\":[]}}" stream))
         (let* ((invalid-response
                  (sbcl-agent::command-platform-validate-package-service invalid-path
                                                                         :session session))
@@ -1512,10 +2986,17 @@
           (assert-equal nil
                         (getf invalid-result :valid-p)
                         "platform package validate service should reject invalid workflow entrypoints")
+          (assert-equal nil
+                        (getf invalid-result :contract-compatible-p)
+                        "platform package validate service should reject incompatible runtime contract requirements")
           (assert-true (find "manifest workflows contain invalid entrypoints or capability references"
                              (getf invalid-result :validation-issues)
                              :test #'string=)
-                       "platform package validate service should expose structural workflow validation failures"))))))
+                       "platform package validate service should expose structural workflow validation failures")
+          (assert-true (find "requires required_desktop_contract does not match the supported desktop host contract"
+                             (getf invalid-result :validation-issues)
+                             :test #'string=)
+                       "platform package validate service should expose incompatible desktop host contract requirements")))))
 
 (defun execution-service-contract-test ()
   (let ((session (make-test-session :cwd "/Volumes/data/development/sbcl-agent/"))

@@ -71,6 +71,12 @@
 (register-capability-policy :process-run
                             "Execute a local process inside the sandbox runtime."
                             :risk-level :high)
+(register-capability-policy :linux-app-launch
+                            "Launch a governed Linux compatibility app through the compatibility kernel."
+                            :risk-level :high)
+(register-capability-policy :linux-ide-launch
+                            "Launch a governed Linux IDE app with workspace access and a desktop display surface."
+                            :risk-level :high)
 (register-capability-policy :git-read
                             "Read repository state through sandboxed git commands."
                             :risk-level :medium)

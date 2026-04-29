@@ -15,31 +15,43 @@
   (format t "  (provider/routing [:mode])        Show or set provider routing mode (:auto or :manual).~%")
   (format t "  (provider/route)                  Show the most recent provider routing decision and ranked candidates.~%")
   (format t "  (platform/manifest [:capabilities '(:capability ...)]) Show the developer-platform capability manifest.~%")
-  (format t "  (platform/package :output-path \"file.aop\" [:package-id \"id\"] [:title \"name\"] [:capabilities '(:capability ...)]) Export a developer package descriptor.~%")
+  (format t "  (platform/package :output-path \"file.aop\" [:package-id \"id\"] [:package-version \"0.1.0\"] [:title \"name\"] [:publisher \"name\"] [:release-status \"deprecated\"] [:replacement-package-id \"id\"] [:rollback-strategy \"manual-recovery\"] [:failure-mode \"manual-intervention\"] [:backup-required nil] [:recovery-runbook \"uri\"] [:attested-p nil] [:capabilities '(:capability ...)]) Export a developer package descriptor.~%")
   (format t "  (platform/show-package \"file.aop\") Inspect an exported developer package descriptor.~%")
   (format t "  (platform/validate-package \"file.aop\") Validate an exported developer package descriptor.~%")
-  (format t "  (platform/import-package \"file.aop\") Validate and import a developer package into the bound environment registry.~%")
+  (format t "  (platform/import-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t]) Validate and import a developer package into the bound environment registry.~%")
   (format t "  (platform/list-packages)          List imported developer packages from the bound environment registry.~%")
   (format t "  (platform/show-imported-package \"package-id\") Inspect one imported developer package from the bound environment registry.~%")
   (format t "  (platform/activate-package \"package-id\") Activate one imported developer package in the bound environment registry.~%")
   (format t "  (platform/deactivate-package \"package-id\") Deactivate one imported developer package in the bound environment registry.~%")
   (format t "  (platform/active-packages)        List active imported developer packages from the bound environment registry.~%")
   (format t "  (platform/profile)                Show the applied active-package platform profile for the bound environment registry.~%")
-  (format t "  (platform/install-package \"file.aop\") Validate, import, and activate one developer package in the bound environment registry.~%")
+  (format t "  (platform/install-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t]) Validate, import, and activate one developer package in the bound environment registry.~%")
+  (format t "  (platform/history [:package-id \"id\"] [:limit N]) Show package lifecycle history from the bound environment registry.~%")
+  (format t "  (platform/audit)                  Show package trust, override, update, and lifecycle audit posture for the bound environment registry.~%")
   (format t "  (execution/show \"exec-id\")       Inspect a governed execution handle directly.~%")
   (format t "  (execution/control \"exec-id\" :action [:reason \"...\"] [:note \"...\"]) Intervene on a governed execution handle directly.~%")
   (format t "  (compatibility/list [:kind :host-process] [:backend :sbcl-sandbox-worker] [:sandbox-profile :process-run]) List hosted compatibility executions.~%")
   (format t "  (compatibility/show \"exec-id\")   Inspect one compatibility execution in detail.~%")
+  (format t "  (compatibility/apps [:app-id \"linux.vscode\"]) List registered Linux compatibility app manifests.~%")
+  (format t "  (compatibility/app-show \"linux.vscode\") Show one registered Linux compatibility app manifest.~%")
+  (format t "  (compatibility/launch \"linux.vscode\" [:arguments '(...)]) Launch a registered Linux compatibility app.~%")
+  (format t "  (compatibility/relaunch \"exec-id\") Relaunch a terminal or detached-loss Linux app through its manifest.~%")
+  (format t "  (compatibility/windows [:app-id \"linux.vscode\"]) List visible Linux app display surfaces bridged into the shell model.~%")
   (format t "  (workspace/show)                   Show the shell workspace model built from execution surfaces.~%")
   (format t "  (desktop/show)                     Show the desktop-hostable shell model for the current workspace.~%")
-  (format t "  (desktop/panel :workspace|:governance|:object-browser|:inspector) Persist the active desktop panel for the hosted shell model.~%")
-  (format t "  (desktop/select :panel ... [:index N] [:kind :object-kind] [:execution-id \"exec-id\"]) Select one desktop-panel item through the hosted shell model.~%")
+  (format t "  (desktop/panel :workspace|:display|:governance|:object-browser|:inspector) Persist the active desktop panel for the hosted shell model.~%")
+  (format t "  (desktop/select :panel ... [:index N] [:kind :object-kind] [:execution-id \"exec-id\"] [:app-id \"linux.echo\"]) Select one desktop-panel item through the hosted shell model.~%")
   (format t "  (desktop/restore [:panel-id ...] [:panel-state '(... )]) Restore one hosted desktop panel from persisted shell model state.~%")
   (format t "  (desktop/action [:action-id \"...\"] | :action-kind ... :panel-id ...) Dispatch one structured desktop action directly from the hosted shell model.~%")
   (format t "  (surface/list)                     Show execution surfaces in the current workspace and current surface focus.~%")
   (format t "  (surface/select [:index N] [:execution-id \"exec-id\"]) Move shell focus to one workspace surface.~%")
   (format t "  (surface/step :next|:previous)     Move shell focus across workspace surfaces relative to the current focus.~%")
-  (format t "  (open [:execution-id \"exec-id\"] [:surface-index N] [:governance-index N] [:object-kind :kind :object-index N]) Open one shell object and inspect it through the unified focus path.~%")
+  (format t "  (display/list)                     Show Linux app display surfaces in the current workspace and current display focus.~%")
+  (format t "  (display/show [\"exec-id\"] [:app-id \"linux.echo\"]) Show one display-bearing Linux app surface, or the current display focus.~%")
+  (format t "  (display/select [:index N] [:execution-id \"exec-id\"] [:app-id \"linux.echo\"]) Move shell focus to one display-bearing Linux app surface.~%")
+  (format t "  (display/step :next|:previous)     Move shell focus across display-bearing Linux app surfaces relative to the current focus.~%")
+  (format t "  (display/control :action [:execution-id \"exec-id\"] [:app-id \"linux.echo\"] [:reason \"...\"] [:note \"...\"]) Control one display-bearing Linux app surface from the display lane.~%")
+  (format t "  (open [:execution-id \"exec-id\"] [:surface-index N] [:display-index N] [:display-app-id \"linux.echo\"] [:governance-index N] [:object-kind :kind :object-index N]) Open one shell object and inspect it through the unified focus path.~%")
   (format t "  (focus/show)                       Show the current shell focus and its inspected object.~%")
   (format t "  (focus/set \"exec-id\")            Set the current shell focus explicitly to one execution handle.~%")
   (format t "  (governance/queue)                 Show the shell governance queue derived from blocked work, approvals, and incidents.~%")
@@ -144,7 +156,10 @@
     (unless (keywordp policy)
       (error "APPROVE requires a keyword policy"))
     (service-response-data
-     (command-approve-policy-service session policy))))
+     (command-kernel-invoke-service session
+                                    (format nil "Grant authority for policy ~A." policy)
+                                    "authority/grant"
+                                    :payload (list :policy policy)))))
 
 (defun execute-patch-command (arguments session)
   (let ((operations (first arguments)))
@@ -159,31 +174,46 @@
     (unless (typep action 'assistant-action)
       (error "ASSISTANT-ACTION command requires an assistant-action object"))
     (service-response-data
-     (command-execute-assistant-action-service session action))))
+     (command-kernel-invoke-service session
+                                    "Execute a staged assistant action."
+                                    "assistant/action"
+                                    :payload (list :action action)))))
 
 (defun execute-pending-actions-command (session)
   (service-response-data
-   (command-execute-pending-actions-service session)))
+   (command-kernel-invoke-service session
+                                  "Execute all currently staged pending actions."
+                                  "assistant/pending-actions")))
 
 (defun execute-pending-actions-command-with-context (session &key thread turn operation)
   (service-response-data
-   (command-execute-pending-actions-service session
-                                            :thread thread
-                                            :turn turn
-                                            :operation operation)))
+   (command-kernel-invoke-service session
+                                  "Execute all currently staged pending actions."
+                                  "assistant/pending-actions"
+                                  :context (list :thread thread
+                                                 :thread-id (and thread (thread-id thread))
+                                                 :turn turn
+                                                 :turn-id (and turn (turn-id turn))
+                                                 :operation operation))))
 
 (defun execute-session-save-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/SAVE requires a string path"))
     (service-response-data
-     (command-session-save-service session path))))
+     (command-kernel-invoke-service session
+                                    "Save session state."
+                                    "session/save"
+                                    :payload (list :path path)))))
 
-(defun execute-session-load-command (arguments)
+(defun execute-session-load-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/LOAD requires a string path"))
-    (let* ((response (command-session-load-service path))
+    (let* ((response (command-kernel-invoke-service session
+                                                    "Load session state."
+                                                    "session/load"
+                                                    :payload (list :path path)))
            (payload (service-response-data response))
            (session (getf payload :session))
            (workspace (and session
@@ -220,6 +250,7 @@
   (let ((panel-id (getf arguments :panel))
         (index (getf arguments :index))
         (execution-id (getf arguments :execution-id))
+        (app-id (getf arguments :app-id))
         (object-kind (getf arguments :kind)))
     (unless (keywordp panel-id)
       (error "DESKTOP/SELECT requires :panel"))
@@ -227,6 +258,8 @@
       (error "DESKTOP/SELECT :index must be a non-negative integer"))
     (when (and execution-id (not (stringp execution-id)))
       (error "DESKTOP/SELECT :execution-id must be a string"))
+    (when (and app-id (not (stringp app-id)))
+      (error "DESKTOP/SELECT :app-id must be a string"))
     (when (and object-kind (not (keywordp object-kind)))
       (error "DESKTOP/SELECT :kind must be a keyword"))
     (service-response-data
@@ -234,6 +267,7 @@
                                            panel-id
                                            :index index
                                            :execution-id execution-id
+                                           :app-id app-id
                                            :object-kind object-kind))))
 
 (defun execute-desktop-restore-command (arguments session)
@@ -284,9 +318,79 @@
     (service-response-data
      (command-shell-surface-step-service session direction))))
 
+(defun execute-display-list-command (session)
+  (service-response-data
+   (query-shell-display-list-service session)))
+
+(defun execute-display-show-command (arguments session)
+  (let ((execution-id (if (and (consp arguments)
+                               (keywordp (first arguments)))
+                          (getf arguments :execution-id)
+                          (first arguments)))
+        (app-id (and (consp arguments)
+                     (keywordp (first arguments))
+                     (getf arguments :app-id))))
+    (when (and execution-id (not (stringp execution-id)))
+      (error "DISPLAY/SHOW requires a string execution id when provided"))
+    (when (and app-id (not (stringp app-id)))
+      (error "DISPLAY/SHOW :app-id must be a string"))
+    (service-response-data
+     (query-shell-display-detail-service session execution-id :app-id app-id))))
+
+(defun execute-display-select-command (arguments session)
+  (let ((index (getf arguments :index))
+        (execution-id (getf arguments :execution-id))
+        (app-id (getf arguments :app-id)))
+    (when (and index (not (and (integerp index) (<= 0 index))))
+      (error "DISPLAY/SELECT :index must be a non-negative integer"))
+    (when (and execution-id (not (stringp execution-id)))
+      (error "DISPLAY/SELECT :execution-id must be a string"))
+    (when (and app-id (not (stringp app-id)))
+      (error "DISPLAY/SELECT :app-id must be a string"))
+    (when (and (null index) (null execution-id) (null app-id))
+      (error "DISPLAY/SELECT requires :index, :execution-id, or :app-id"))
+    (service-response-data
+     (command-shell-display-select-service session
+                                           :index index
+                                           :execution-id execution-id
+                                           :app-id app-id
+                                           :source :display-select))))
+
+(defun execute-display-step-command (arguments session)
+  (let ((direction (or (first arguments)
+                       (getf arguments :direction))))
+    (unless (member direction '(:next :previous) :test #'eq)
+      (error "DISPLAY/STEP requires direction :next or :previous"))
+    (service-response-data
+     (command-shell-display-step-service session direction))))
+
+(defun execute-display-control-command (arguments session)
+  (let ((action (getf arguments :action))
+        (execution-id (getf arguments :execution-id))
+        (app-id (getf arguments :app-id))
+        (reason (getf arguments :reason))
+        (note (getf arguments :note))
+        (status (getf arguments :status)))
+    (unless (keywordp action)
+      (error "DISPLAY/CONTROL requires :action as a keyword"))
+    (when (and execution-id (not (stringp execution-id)))
+      (error "DISPLAY/CONTROL :execution-id must be a string"))
+    (when (and app-id (not (stringp app-id)))
+      (error "DISPLAY/CONTROL :app-id must be a string"))
+    (service-response-data
+     (command-shell-display-control-service session
+                                            action
+                                            :execution-id execution-id
+                                            :app-id app-id
+                                            :reason reason
+                                            :note note
+                                            :status status))))
+
 (defun execute-open-command (arguments session)
   (let ((execution-id (getf arguments :execution-id))
         (surface-index (getf arguments :surface-index))
+        (display-index (getf arguments :display-index))
+        (display-app-id (getf arguments :display-app-id))
         (governance-index (getf arguments :governance-index))
         (object-kind (getf arguments :object-kind))
         (object-index (getf arguments :object-index)))
@@ -294,6 +398,10 @@
       (error "OPEN :execution-id must be a string"))
     (when (and surface-index (not (and (integerp surface-index) (<= 0 surface-index))))
       (error "OPEN :surface-index must be a non-negative integer"))
+    (when (and display-index (not (and (integerp display-index) (<= 0 display-index))))
+      (error "OPEN :display-index must be a non-negative integer"))
+    (when (and display-app-id (not (stringp display-app-id)))
+      (error "OPEN :display-app-id must be a string"))
     (when (and governance-index (not (and (integerp governance-index) (<= 0 governance-index))))
       (error "OPEN :governance-index must be a non-negative integer"))
     (when (and object-kind (not (keywordp object-kind)))
@@ -304,6 +412,8 @@
      (command-shell-open-service session
                                  :execution-id execution-id
                                  :surface-index surface-index
+                                 :display-index display-index
+                                 :display-app-id display-app-id
                                  :governance-index governance-index
                                  :object-kind object-kind
                                  :object-index object-index
@@ -365,11 +475,6 @@
                                        (getf result :focus-object-id))
       result)))
 
-(defun plist-value (plist indicator &optional default)
-  (if (and (listp plist) (member indicator plist))
-      (getf plist indicator)
-      default))
-
 (defun parse-ask-arguments (arguments)
   (let ((prompt (first arguments))
         (options (rest arguments)))
@@ -396,10 +501,6 @@
     (:tool-intent nil)
     (t
      (format t "~&assistant-stream-event> ~S~%" event))))
-
-(defun option-present-p (plist key)
-  (and (listp plist)
-       (member key plist)))
 
 (defun print-shell-environment-orientation (&optional environment)
   (let* ((status (environment-status (ensure-environment environment)))
@@ -434,6 +535,11 @@
             (or (getf (getf workspace :governance-queue) :count) 0)
             (or (getf (getf workspace :object-browser) :group-count) 0)
             (or (getf workspace :inspector-focus-object-id) :none))
+    (when (getf (getf workspace :display-surfaces) :top-surface)
+      (format t "Workspace display: app=~A state=~A exec=~A~%"
+              (or (getf (getf (getf workspace :display-surfaces) :top-surface) :app-id) :none)
+              (or (getf (getf (getf workspace :display-surfaces) :top-surface) :window-state) :unknown)
+              (or (getf (getf (getf workspace :display-surfaces) :top-surface) :execution-id) :none)))
     (when top-surface
       (format t "Workspace top surface: ~A status=~A exec=~A~%"
               (or (getf top-surface :surface-kind) :none)
@@ -441,6 +547,9 @@
               (or (getf top-surface :execution-id) :none)))
     (when top-surface
       (format t "Workspace open: (open :surface-index 0)~%"))
+    (when (getf (getf workspace :display-surfaces) :top-surface)
+      (format t "Workspace display open: (open :execution-id ~S)~%"
+              (getf (getf (getf workspace :display-surfaces) :top-surface) :execution-id)))
     (when top-queue-item
       (format t "Workspace governance top: queue=~A status=~A exec=~A~%"
               (or (getf top-queue-item :queue-kind) :none)
@@ -473,16 +582,6 @@
   (let ((object-kind (and group (getf group :object-kind))))
     (when object-kind
       (format nil "(open :object-kind ~S :object-index 0)" object-kind))))
-
-(defun remove-plist-key (plist key)
-  (cond
-    ((null plist) '())
-    ((eq (first plist) key)
-     (remove-plist-key (cddr plist) key))
-    (t
-     (list* (first plist)
-            (second plist)
-            (remove-plist-key (cddr plist) key)))))
 
 (defun provider-routing-enabled-p (provider)
   (member (string-downcase (provider-name provider))
@@ -563,7 +662,7 @@
 (defun execute-provider-list-command (&optional environment)
   (execute-provider-show-command environment))
 
-(defun execute-provider-configure-command (arguments &optional environment)
+(defun execute-provider-configure-command (arguments session &optional environment)
   (let ((profile-name (first arguments))
         (options (rest arguments)))
     (unless (stringp profile-name)
@@ -575,21 +674,34 @@
     (unless (stringp (getf options :model))
       (error "PROVIDER/CONFIGURE requires a string :model"))
     (service-response-data
-     (command-environment-provider-configure-service profile-name options environment))))
+     (command-kernel-invoke-service session
+                                    "Configure environment provider profile."
+                                    "environment/provider-configure"
+                                    :payload (list :profile-name profile-name
+                                                   :options options)
+                                    :context (list :environment environment)))))
 
-(defun execute-provider-use-command (arguments &optional environment)
+(defun execute-provider-use-command (arguments session &optional environment)
   (let ((profile-name (first arguments)))
     (unless (stringp profile-name)
       (error "PROVIDER/USE requires a string profile name"))
     (service-response-data
-     (command-environment-provider-use-service profile-name environment))))
+     (command-kernel-invoke-service session
+                                    "Activate environment provider profile."
+                                    "environment/provider-use"
+                                    :payload (list :profile-name profile-name)
+                                    :context (list :environment environment)))))
 
-(defun execute-provider-routing-command (arguments &optional environment)
+(defun execute-provider-routing-command (arguments session &optional environment)
   (let ((mode (first arguments)))
     (when (> (length arguments) 1)
       (error "PROVIDER/ROUTING accepts at most one mode argument"))
     (service-response-data
-     (command-environment-provider-routing-service mode environment))))
+     (command-kernel-invoke-service session
+                                    "Update provider routing mode."
+                                    "environment/provider-routing"
+                                    :payload (list :mode mode)
+                                    :context (list :environment environment)))))
 
 (defun execute-provider-route-command (&optional environment)
   (service-response-data
@@ -602,12 +714,10 @@
 
 (defun execute-platform-package-command (arguments session)
   (service-response-data
-   (command-platform-package-service (or (getf arguments :output-path)
-                                         (getf arguments :output))
-                                     :package-id (getf arguments :package-id)
-                                     :title (getf arguments :title)
-                                     :capability-ids (getf arguments :capabilities)
-                                     :session session)))
+   (command-kernel-invoke-service session
+                                  "export platform package"
+                                  "platform/package"
+                                  :payload arguments)))
 
 (defun execute-platform-show-package-command (arguments session)
   (let ((path (first arguments)))
@@ -624,11 +734,19 @@
      (command-platform-validate-package-service path :session session))))
 
 (defun execute-platform-import-package-command (arguments session)
-  (let ((path (first arguments)))
+  (let ((path (first arguments))
+        (options (rest arguments)))
     (unless (or (stringp path) (pathnamep path))
       (error "PLATFORM/IMPORT-PACKAGE requires a string path"))
     (service-response-data
-     (command-platform-import-package-service path :session session))))
+     (command-kernel-invoke-service session
+                                    "import platform package"
+                                    "platform/import-package"
+                                    :payload (list :path path
+                                                   :allow-downgrade (getf options :allow-downgrade)
+                                                   :allow-deprecated (getf options :allow-deprecated)
+                                                   :allow-manual-recovery (getf options :allow-manual-recovery)
+                                                   :allow-untrusted (getf options :allow-untrusted))))))
 
 (defun execute-platform-list-packages-command (session)
   (service-response-data
@@ -646,14 +764,20 @@
     (unless (stringp package-id)
       (error "PLATFORM/ACTIVATE-PACKAGE requires a string package id"))
     (service-response-data
-     (command-platform-activate-package-service package-id :session session))))
+     (command-kernel-invoke-service session
+                                    "activate platform package"
+                                    "platform/activate-package"
+                                    :payload (list :package-id package-id)))))
 
 (defun execute-platform-deactivate-package-command (arguments session)
   (let ((package-id (first arguments)))
     (unless (stringp package-id)
       (error "PLATFORM/DEACTIVATE-PACKAGE requires a string package id"))
     (service-response-data
-     (command-platform-deactivate-package-service package-id :session session))))
+     (command-kernel-invoke-service session
+                                    "deactivate platform package"
+                                    "platform/deactivate-package"
+                                    :payload (list :package-id package-id)))))
 
 (defun execute-platform-active-packages-command (session)
   (service-response-data
@@ -664,11 +788,52 @@
    (query-platform-profile-service :session session)))
 
 (defun execute-platform-install-package-command (arguments session)
-  (let ((path (first arguments)))
+  (let ((path (first arguments))
+        (options (rest arguments)))
     (unless (or (stringp path) (pathnamep path))
       (error "PLATFORM/INSTALL-PACKAGE requires a string path"))
     (service-response-data
-     (command-platform-install-package-service path :session session))))
+     (command-kernel-invoke-service session
+                                    "install platform package"
+                                    "platform/install-package"
+                                    :payload (list :path path
+                                                   :allow-downgrade (getf options :allow-downgrade)
+                                                   :allow-deprecated (getf options :allow-deprecated)
+                                                   :allow-manual-recovery (getf options :allow-manual-recovery)
+                                                   :allow-untrusted (getf options :allow-untrusted))))))
+
+(defun execute-platform-simulate-package-command (arguments session)
+  (let ((path (first arguments)))
+    (unless (or (stringp path) (pathnamep path))
+      (error "PLATFORM/SIMULATE-PACKAGE requires a string path"))
+    (service-response-data
+     (query-platform-simulate-package-service path :session session))))
+
+(defun execute-platform-history-command (arguments session)
+  (service-response-data
+   (query-platform-package-history-service :session session
+                                           :package-id (getf arguments :package-id)
+                                           :limit (getf arguments :limit))))
+
+(defun execute-platform-audit-command (session)
+  (service-response-data
+   (query-platform-audit-service :session session)))
+
+(defun execute-platform-harness-command (session)
+  (service-response-data
+   (query-platform-harness-service :session session)))
+
+(defun execute-platform-run-harness-command (arguments session)
+  (let ((harness-id (or (getf arguments :harness-id)
+                        (first arguments)
+                        :internal-evaluations)))
+    (unless (keywordp harness-id)
+      (error "PLATFORM/RUN-HARNESS requires a keyword harness id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "run platform harness"
+                                    "platform/run-harness"
+                                    :payload (list :harness-id harness-id)))))
 
 (defun execute-execution-show-command (arguments session)
   (let ((execution-id (first arguments)))
@@ -698,6 +863,7 @@
   (service-response-data
    (query-compatibility-executions-service session
                                            :kind (getf arguments :kind)
+                                           :app-id (getf arguments :app-id)
                                            :backend (getf arguments :backend)
                                            :sandbox-profile (getf arguments :sandbox-profile))))
 
@@ -708,12 +874,62 @@
     (service-response-data
      (query-compatibility-execution-detail-service session execution-id))))
 
+(defun execute-compatibility-apps-command (arguments session)
+  (service-response-data
+   (query-compatibility-apps-service :app-id (getf arguments :app-id)
+                                     :session session)))
+
+(defun execute-compatibility-app-show-command (arguments session)
+  (let ((app-id (first arguments)))
+    (unless (stringp app-id)
+      (error "COMPATIBILITY/APP-SHOW requires a string app id"))
+    (service-response-data
+     (query-compatibility-apps-service :app-id app-id
+                                       :session session))))
+
+(defun execute-compatibility-launch-command (arguments session)
+  (let ((app-id (first arguments))
+        (options (rest arguments)))
+    (unless (stringp app-id)
+      (error "COMPATIBILITY/LAUNCH requires a string app id"))
+    (let* ((response (command-kernel-invoke-service session
+                                                    (format nil "Launch Linux compatibility app ~A." app-id)
+                                                    app-id
+                                                    :payload (list :arguments (unwrap-task-form (getf options :arguments)))))
+           (result (service-response-data response))
+           (execution-id (getf (service-response-metadata response) :execution-id))
+           (execution (and execution-id
+                           (kernel-find-execution execution-id
+                                                  (session-bound-environment session)))))
+      (append result
+              (list :execution-id execution-id
+                    :execution (and execution
+                                    (kernel-execution-summary execution)))))))
+
+(defun execute-compatibility-relaunch-command (arguments session)
+  (let ((execution-id (first arguments)))
+    (unless (stringp execution-id)
+      (error "COMPATIBILITY/RELAUNCH requires a string execution id"))
+    (service-response-data
+     (command-kernel-control-service session
+                                     execution-id
+                                     :relaunch))))
+
+(defun execute-compatibility-windows-command (arguments session)
+  (service-response-data
+   (query-compatibility-display-surfaces-service session
+                                                 :app-id (getf arguments :app-id)
+                                                 :display-surface-kind (getf arguments :display-surface-kind))))
+
 (defun execute-thread-new-command (arguments session)
   (let ((title (getf arguments :title)))
     (when (and title (not (stringp title)))
       (error "THREAD/NEW :TITLE must be a string"))
     (service-response-data
-     (command-conversation-create-thread-service session :title title))))
+     (command-kernel-invoke-service session
+                                    "Create conversation thread."
+                                    "conversation/create-thread"
+                                    :payload (list :title title)))))
 
 (defun execute-thread-list-command (session)
   (service-response-data
@@ -724,7 +940,10 @@
     (unless (stringp thread-id)
       (error "THREAD/USE requires a string thread id"))
     (service-response-data
-     (command-conversation-use-thread-service session thread-id))))
+     (command-kernel-invoke-service session
+                                    "Switch active conversation thread."
+                                    "conversation/use-thread"
+                                    :payload (list :thread-id thread-id)))))
 
 (defun execute-thread-show-command (arguments session)
   (let ((thread-id (first arguments)))
@@ -768,6 +987,21 @@
               command-name
               work-item-or-execution-id)))))
 
+(defun resolve-shell-work-item-execution-id (session work-item-or-execution-id)
+  (let ((handle (resolve-shell-execution-handle session work-item-or-execution-id)))
+    (cond
+      (handle
+       (getf handle :execution-id))
+      ((stringp work-item-or-execution-id)
+       (let* ((environment (ensure-kernel-bound-environment session))
+              (matching-handles (kernel-find-executions-by-target :work-item-id
+                                                                 work-item-or-execution-id
+                                                                 environment))
+              (first-handle (first matching-handles)))
+         (and first-handle
+              (getf first-handle :execution-id))))
+      (t nil))))
+
 (defun resolve-shell-workflow-record-id (session workflow-or-execution-id command-name)
   (let ((handle (resolve-shell-execution-handle session workflow-or-execution-id)))
     (cond
@@ -800,6 +1034,19 @@
               command-name
               incident-or-execution-id)))))
 
+(defun shell-kernel-control-inspection (session response)
+  (let* ((data (service-response-data response))
+         (post-state (and (listp data) (getf data :post-state)))
+         (target (and (listp post-state) (getf post-state :target)))
+         (work-item-id (and (listp target) (getf target :work-item-id)))
+         (inspection (and (listp post-state) (getf post-state :inspection))))
+    (or (and work-item-id
+             (service-response-data
+              (query-work-item-detail-service session work-item-id)))
+        inspection
+        post-state
+        data)))
+
 (defun execute-incident-show-command (arguments session)
   (let ((incident-id (resolve-shell-incident-id session
                                                 (first arguments)
@@ -831,12 +1078,10 @@
   (when (oddp (length arguments))
     (error "INTEGRATION/RGP-BIND arguments must be a property list"))
   (service-response-data
-   (command-rgp-bind-service session
-                             :tenant-id (getf arguments :tenant-id)
-                             :request-id (getf arguments :request-id)
-                             :agent-session-id (getf arguments :agent-session-id)
-                             :integration-id (getf arguments :integration-id)
-                             :projection-id (getf arguments :projection-id))))
+   (command-kernel-invoke-service session
+                                  "Bind governed runtime integration posture."
+                                  "rgp/bind"
+                                  :payload arguments)))
 
 (defun execute-integration-rgp-show-command (session)
   (service-response-data
@@ -851,7 +1096,10 @@
     (unless (stringp path)
       (error "INTEGRATION/RGP-EXPORT requires a string path"))
     (service-response-data
-     (command-rgp-export-service session path))))
+     (command-kernel-invoke-service session
+                                    "Export governed runtime snapshot."
+                                    "rgp/export"
+                                    :payload (list :path path)))))
 
 (defun execute-integration-rgp-artifacts-command (session)
   (service-response-data
@@ -872,7 +1120,13 @@
     (unless (keywordp policy)
       (error "INTEGRATION/RGP-APPROVE requires a keyword policy"))
     (service-response-data
-     (command-rgp-approve-service session work-item-id policy :reason reason))))
+     (command-kernel-invoke-service session
+                                    "Approve governed runtime checkpoint."
+                                    "rgp/approve"
+                                    :payload (list :work-item-id work-item-id
+                                                   :policy policy
+                                                   :reason reason)
+                                    :context (list :work-item-id work-item-id)))))
 
 (defun execute-integration-rgp-resume-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -882,7 +1136,12 @@
     (unless (stringp work-item-id)
       (error "INTEGRATION/RGP-RESUME requires a string work-item id"))
     (service-response-data
-     (command-rgp-resume-service session work-item-id :note note))))
+     (command-kernel-invoke-service session
+                                    "Resume governed runtime work."
+                                    "rgp/resume"
+                                    :payload (list :work-item-id work-item-id
+                                                   :note note)
+                                    :context (list :work-item-id work-item-id)))))
 
 (defun execute-runtime-current-package-command (session)
   (getf (service-response-data (query-runtime-summary-service session)) :package-details))
@@ -999,13 +1258,20 @@
     (unless (stringp path)
       (error "ENVIRONMENT/SAVE requires a string path"))
     (service-response-data
-     (command-environment-save-service path environment))))
+     (command-kernel-invoke-service (environment-session (ensure-environment environment))
+                                    "Save environment state."
+                                    "environment/save"
+                                    :payload (list :path path)
+                                    :environment environment))))
 
-(defun execute-environment-load-command (arguments)
+(defun execute-environment-load-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "ENVIRONMENT/LOAD requires a string path"))
-    (let* ((response (command-environment-load-service path))
+    (let* ((response (command-kernel-invoke-service session
+                                                    "Load environment state."
+                                                    "environment/load"
+                                                    :payload (list :path path)))
            (payload (service-response-data response))
            (session (getf payload :session))
            (workspace (and session
@@ -1059,8 +1325,11 @@
   (let* ((raw-form (first arguments))
          (form (unwrap-task-form raw-form))
          (priority (or (getf (rest arguments) :priority) 0))
-         (command (normalize-form-command form))
-         (response (command-task-enqueue-service session form command priority)))
+         (response (command-kernel-invoke-service session
+                                                 "Enqueue task."
+                                                 "task/enqueue"
+                                                 :payload (list :form form
+                                                                :priority priority))))
     (service-response-data response)))
 
 (defun execute-describe-task-command (arguments session)
@@ -1082,18 +1351,34 @@
     (unless (stringp task-id)
       (error "CANCEL-TASK requires a string task id"))
     (service-response-data
-     (command-task-cancel-service session task-id))))
+     (command-kernel-invoke-service session
+                                    "Cancel task."
+                                    "task/cancel"
+                                    :payload (list :task-id task-id)))))
+
+(defun execute-run-next-task-command (provider session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Run next task."
+                                  "task/run-next"
+                                  :provider provider)))
 
 (defun execute-start-worker-command (provider session)
   (service-response-data
-   (command-worker-start-service session provider)))
+   (command-kernel-invoke-service session
+                                  "Start worker."
+                                  "worker/start"
+                                  :provider provider)))
 
 (defun execute-stop-worker-command (arguments session)
   (let ((worker-id (first arguments)))
     (unless (stringp worker-id)
       (error "STOP-WORKER requires a string worker id"))
     (service-response-data
-     (command-worker-stop-service session worker-id))))
+     (command-kernel-invoke-service session
+                                    "Stop worker."
+                                    "worker/stop"
+                                    :payload (list :worker-id worker-id)))))
 
 (defun execute-describe-worker-command (arguments session)
   (let ((worker-id (first arguments)))
@@ -1147,29 +1432,44 @@
     (unless (keywordp policy)
       (error "REQUEST-WORK-ITEM-APPROVAL requires a keyword policy"))
     (service-response-data
-     (command-request-work-item-approval-service session work-item-id policy :reason reason))))
+     (command-kernel-invoke-service session
+                                    "Request governed work approval."
+                                    "workflow/request-approval"
+                                    :payload (list :work-item-id work-item-id
+                                                   :policy policy
+                                                   :reason reason)))))
 
 (defun execute-quarantine-work-item-command (arguments session)
-  (let ((work-item-id (resolve-shell-work-item-id session
-                                                  (first arguments)
+  (let* ((work-item-or-execution-id (first arguments))
+         (work-item-id (resolve-shell-work-item-id session
+                                                  work-item-or-execution-id
                                                   "QUARANTINE-WORK-ITEM"))
+        (execution-id (resolve-shell-work-item-execution-id session work-item-or-execution-id))
         (reason (second arguments)))
     (unless (stringp work-item-id)
       (error "QUARANTINE-WORK-ITEM requires a string work-item id"))
     (unless (stringp reason)
       (error "QUARANTINE-WORK-ITEM requires a string reason"))
-    (service-response-data
-     (command-work-item-quarantine-service session work-item-id reason))))
+    (if execution-id
+        (shell-kernel-control-inspection session
+                                         (command-kernel-control-service session execution-id :quarantine :reason reason))
+        (service-response-data
+         (command-work-item-quarantine-service session work-item-id reason)))))
 
 (defun execute-resume-work-item-command (arguments session)
-  (let ((work-item-id (resolve-shell-work-item-id session
-                                                  (first arguments)
+  (let* ((work-item-or-execution-id (first arguments))
+         (work-item-id (resolve-shell-work-item-id session
+                                                  work-item-or-execution-id
                                                   "RESUME-WORK-ITEM"))
+        (execution-id (resolve-shell-work-item-execution-id session work-item-or-execution-id))
         (note (getf (rest arguments) :note)))
     (unless (stringp work-item-id)
       (error "RESUME-WORK-ITEM requires a string work-item id"))
-    (service-response-data
-     (command-work-item-resume-service session work-item-id :note note))))
+    (if execution-id
+        (shell-kernel-control-inspection session
+                                         (command-kernel-control-service session execution-id :resume :note note))
+        (service-response-data
+         (command-work-item-resume-service session work-item-id :note note)))))
 
 (defun execute-steer-work-item-plan-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -1185,11 +1485,14 @@
     (unless (keywordp next-step)
       (error "STEER-WORK-ITEM-PLAN requires a keyword :next-step"))
     (service-response-data
-     (command-work-item-steer-service session
-                                      work-item-id
-                                      :phase phase
-                                      :next-step next-step
-                                      :note note))))
+     (command-kernel-invoke-service session
+                                    "Steer governed work plan."
+                                    "workflow/steer-plan"
+                                    :payload (list :work-item-id work-item-id
+                                                   :phase phase
+                                                   :next-step next-step
+                                                   :note note)
+                                    :context (list :work-item-id work-item-id)))))
 
 (defun execute-why-waiting-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -1209,7 +1512,9 @@
    (query-image-reconciliations-service session)))
 
 (defun execute-replay-validator-task-command (arguments session)
-  (let ((work-item-id (first arguments))
+  (let ((work-item-id (resolve-shell-work-item-id session
+                                                  (first arguments)
+                                                  "REPLAY-VALIDATOR-TASK"))
         (validator-task-id (second arguments))
         (status (or (getf (cddr arguments) :status) :passed)))
     (unless (stringp work-item-id)
@@ -1217,10 +1522,18 @@
     (unless (stringp validator-task-id)
       (error "REPLAY-VALIDATOR-TASK requires a string validator task id"))
     (service-response-data
-     (command-replay-validator-task-service session work-item-id validator-task-id :status status))))
+     (command-kernel-invoke-service session
+                                    "Record replay validator task result."
+                                    "workflow/replay-validator-task"
+                                    :payload (list :work-item-id work-item-id
+                                                   :validator-task-id validator-task-id
+                                                   :status status)
+                                    :context (list :work-item-id work-item-id)))))
 
 (defun execute-replay-validator-set-command (arguments session)
-  (let ((work-item-id (first arguments))
+  (let ((work-item-id (resolve-shell-work-item-id session
+                                                  (first arguments)
+                                                  "REPLAY-VALIDATOR-SET"))
         (replay-id (second arguments))
         (status (or (getf (cddr arguments) :status) :passed))
         (statuses (getf (cddr arguments) :statuses)))
@@ -1229,17 +1542,31 @@
     (unless (stringp replay-id)
       (error "REPLAY-VALIDATOR-SET requires a string replay id"))
     (service-response-data
-     (command-replay-validator-set-service session work-item-id replay-id :status status :statuses statuses))))
+     (command-kernel-invoke-service session
+                                    "Record replay validator set results."
+                                    "workflow/replay-validator-set"
+                                    :payload (list :work-item-id work-item-id
+                                                   :replay-id replay-id
+                                                   :status status
+                                                   :statuses statuses)
+                                    :context (list :work-item-id work-item-id)))))
 
 (defun execute-reconcile-image-only-source-command (arguments session)
-  (let ((work-item-id (first arguments))
+  (let ((work-item-id (resolve-shell-work-item-id session
+                                                  (first arguments)
+                                                  "RECONCILE-IMAGE-ONLY-SOURCE"))
         (summary (second arguments)))
     (unless (stringp work-item-id)
       (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string work-item id"))
     (unless (stringp summary)
       (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string summary"))
     (service-response-data
-     (command-reconcile-image-only-source-service session work-item-id summary))))
+     (command-kernel-invoke-service session
+                                    "Reconcile image-only governed work to source."
+                                    "workflow/reconcile-image-only-source"
+                                    :payload (list :work-item-id work-item-id
+                                                   :summary summary)
+                                    :context (list :work-item-id work-item-id)))))
 
 
 (defun execute-command (command provider &optional session)
@@ -1274,12 +1601,14 @@
                provider))
       (:provider-configure
        (values (execute-provider-configure-command (command-arguments command)
+                                                  active-session
                                                   active-environment)
                :provider-configure
                active-session
                provider))
       (:provider-routing
        (values (execute-provider-routing-command (command-arguments command)
+                                                active-session
                                                 active-environment)
                :provider-routing
                active-session
@@ -1349,8 +1678,34 @@
                :platform-install-package
                active-session
                provider))
+      (:platform-simulate-package
+       (values (execute-platform-simulate-package-command (command-arguments command) active-session)
+               :platform-simulate-package
+               active-session
+               provider))
+      (:platform-history
+       (values (execute-platform-history-command (command-arguments command) active-session)
+               :platform-history
+               active-session
+               provider))
+      (:platform-audit
+       (values (execute-platform-audit-command active-session)
+               :platform-audit
+               active-session
+               provider))
+      (:platform-harness
+       (values (execute-platform-harness-command active-session)
+               :platform-harness
+               active-session
+               provider))
+      (:platform-run-harness
+       (values (execute-platform-run-harness-command (command-arguments command) active-session)
+               :platform-run-harness
+               active-session
+               provider))
       (:provider-use
        (let* ((result (execute-provider-use-command (command-arguments command)
+                                                   active-session
                                                    active-environment))
               (active-profile (getf result :active-profile))
               (updated-provider (or (and active-profile
@@ -1375,6 +1730,31 @@
       (:compatibility-show
        (values (execute-compatibility-show-command (command-arguments command) active-session)
                :compatibility-show
+               active-session
+               provider))
+      (:compatibility-apps
+       (values (execute-compatibility-apps-command (command-arguments command) active-session)
+               :compatibility-apps
+               active-session
+               provider))
+      (:compatibility-app-show
+       (values (execute-compatibility-app-show-command (command-arguments command) active-session)
+               :compatibility-app-show
+               active-session
+               provider))
+      (:compatibility-launch
+       (values (execute-compatibility-launch-command (command-arguments command) active-session)
+               :compatibility-launch
+               active-session
+               provider))
+      (:compatibility-relaunch
+       (values (execute-compatibility-relaunch-command (command-arguments command) active-session)
+               :compatibility-relaunch
+               active-session
+               provider))
+      (:compatibility-windows
+       (values (execute-compatibility-windows-command (command-arguments command) active-session)
+               :compatibility-windows
                active-session
                provider))
       (:workspace-show
@@ -1420,6 +1800,31 @@
       (:surface-step
        (values (execute-surface-step-command (command-arguments command) active-session)
                :surface-step
+               active-session
+               provider))
+      (:display-list
+       (values (execute-display-list-command active-session)
+               :display-list
+               active-session
+               provider))
+      (:display-show
+       (values (execute-display-show-command (command-arguments command) active-session)
+               :display-show
+               active-session
+               provider))
+      (:display-select
+       (values (execute-display-select-command (command-arguments command) active-session)
+               :display-select
+               active-session
+               provider))
+      (:display-step
+       (values (execute-display-step-command (command-arguments command) active-session)
+               :display-step
+               active-session
+               provider))
+      (:display-control
+       (values (execute-display-control-command (command-arguments command) active-session)
+               :display-control
                active-session
                provider))
       (:open
@@ -1592,7 +1997,7 @@
                active-session))
       (:environment-load
        (multiple-value-bind (result loaded-environment)
-           (execute-environment-load-command (command-arguments command))
+           (execute-environment-load-command (command-arguments command) active-session)
          (declare (ignore loaded-environment))
          (values result :environment-load *current-session*)))
       (:execute-actions
@@ -1626,8 +2031,7 @@
                :monitor-task
                active-session))
       (:run-next-task
-       (values (service-response-data
-                (command-task-run-next-service active-session provider))
+       (values (execute-run-next-task-command provider active-session)
                :run-next-task
                active-session))
       (:start-worker
@@ -1722,7 +2126,7 @@
          (values result :session-save active-session)))
       (:session-load
        (multiple-value-bind (result loaded-session)
-           (execute-session-load-command (command-arguments command))
+           (execute-session-load-command (command-arguments command) active-session)
          (values result :session-load loaded-session)))
       (:session-reset
        (let ((fresh-session (reset-session active-session)))
@@ -1776,13 +2180,15 @@
              (or (getf result :count) 0)
              (or (getf result :filters) '()))
      (dolist (entry (or (getf result :entries) '()))
-       (format t "compatibility-entry> ~A kind=~A status=~A backend=~A sandbox=~A actions=~S loss=~A ack=~A cwd=~A argv=~S~%"
+       (format t "compatibility-entry> ~A kind=~A status=~A backend=~A sandbox=~A actions=~S relaunch=~A loss=~A ack=~A cwd=~A argv=~S~%"
                (or (getf entry :execution-id) "<unknown>")
                (or (getf entry :kind) :none)
                (or (getf entry :status) :unknown)
                (or (getf entry :backend) :none)
                (or (getf entry :sandbox-profile) :none)
                (or (getf (getf entry :control-posture) :supported-actions) '())
+               (not (null (member :relaunch
+                                  (getf (getf entry :control-posture) :supported-actions))))
                (or (getf entry :detached-runtime-loss-p) nil)
                (or (getf entry :loss-acknowledged-p) nil)
                (or (getf (getf entry :compatibility) :cwd) :none)
@@ -1798,87 +2204,259 @@
              (or (getf (getf result :lifecycle) :control-posture) '()))
      (format t "compatibility-lifecycle> ~S~%"
              (or (getf result :lifecycle) '()))
+     (when (getf (getf result :lifecycle) :relaunch-ready-p)
+       (format t "compatibility-relaunch> app=~A latest=~A~%"
+               (or (getf (getf result :lifecycle) :relaunch-app-id) :none)
+               (or (getf (getf result :lifecycle) :relaunch-execution-id) :none)))
      (format t "compatibility-inspection> ~S~%"
              (or (getf result :inspection) '()))
      (finish-output))
+    (:compatibility-apps
+     (format t "compatibility-apps> count=~D selected=~A~%"
+             (or (getf result :count) 0)
+             (or (getf result :selected-app-id) :none))
+     (dolist (entry (or (getf result :entries) '()))
+       (format t "compatibility-app> ~A title=~A tool=~A exec=~A defaults=~S executions=~D running=~D~%"
+               (or (getf entry :id) "<unknown>")
+               (or (getf entry :title) :none)
+               (or (getf entry :launch-tool-id) :none)
+               (or (getf entry :executable) :none)
+               (or (getf entry :default-arguments) '())
+               (or (getf entry :execution-count) 0)
+               (or (getf entry :running-count) 0)))
+     (finish-output))
+    (:compatibility-app-show
+     (format t "compatibility-app-show> ~S~%" result)
+     (finish-output))
+    (:compatibility-launch
+     (format t "compatibility-launch> exec=~A app=~A status=~A~%"
+             (or (getf (getf result :execution) :execution-id) "<unknown>")
+             (or (getf result :app-id)
+                 (getf (getf result :compatibility-target) :app-id)
+                 :none)
+             (or (getf result :status) :unknown))
+     (when (getf result :compatibility-target)
+       (format t "compatibility-launch-target> ~S~%" (getf result :compatibility-target)))
+     (finish-output))
+    (:compatibility-relaunch
+     (format t "compatibility-relaunch> exec=~A previous=~A status=~A~%"
+             (or (getf (getf result :execution) :execution-id) "<unknown>")
+             (or (getf (getf (getf result :result) :compatibility-result) :previous-execution-id) :none)
+             (or (getf (getf (getf result :result) :compatibility-result) :status) :unknown))
+     (when (getf result :post-state)
+       (format t "compatibility-relaunch-post-state> ~S~%" (getf result :post-state)))
+     (finish-output))
+    (:compatibility-windows
+     (format t "compatibility-windows> count=~D filters=~S~%"
+             (or (getf result :count) 0)
+             (or (getf result :filters) '()))
+     (dolist (entry (or (getf result :entries) '()))
+       (format t "compatibility-window> ~A app=~A kind=~A state=~A status=~A open=~A~%"
+               (or (getf entry :display-id) "<unknown>")
+               (or (getf entry :app-id) :none)
+               (or (getf entry :display-surface-kind) :none)
+               (or (getf entry :window-state) :unknown)
+               (or (getf entry :status) :unknown)
+               (format nil "(open :execution-id ~S)" (getf entry :execution-id))))
+     (finish-output))
     (:workspace-show
-     (format t "workspace> session=~A env=~A plan=~A surfaces=~D governance=~D groups=~D~%"
+     (format t "workspace> session=~A env=~A plan=~A surfaces=~D displays=~D governance=~D groups=~D~%"
              (or (getf result :workspace-id) :none)
              (or (getf result :environment-id) :none)
              (or (getf result :plan) :none)
              (or (getf (getf result :execution-surfaces) :count) 0)
+             (or (getf (getf result :display-surfaces) :count) 0)
              (or (getf (getf result :governance-queue) :count) 0)
              (or (getf result :object-browser-group-count)
                  (getf (getf result :object-browser) :group-count)
                  0))
      (when (getf result :inspector-focus-object-id)
        (format t "workspace-focus> ~A~%" (getf result :inspector-focus-object-id)))
+     (when (getf result :current-focus)
+       (format t "workspace-current-focus> kind=~A label=~A status=~A exec=~A app=~A~%"
+               (or (getf (getf result :current-focus) :focus-kind) :none)
+               (or (getf (getf result :current-focus) :label) :none)
+               (or (getf (getf result :current-focus) :status) :unknown)
+               (or (getf (getf result :current-focus) :execution-id) :none)
+               (or (getf (getf result :current-focus) :app-id) :none)))
+     (when (getf result :recommended-action)
+       (format t "workspace-next-action> label=~A kind=~A command=~A action-id=~A~%"
+               (or (getf (getf result :recommended-action) :label) :none)
+               (or (getf (getf result :recommended-action) :action-kind) :none)
+               (or (getf (getf result :recommended-action) :command) :none)
+               (or (getf (getf result :recommended-action) :action-id) :none)))
      (when (getf result :top-surface)
        (format t "workspace-top-surface> ~A status=~A exec=~A~%"
                (or (getf (getf result :top-surface) :surface-kind) :none)
                (or (getf (getf result :top-surface) :status) :unknown)
                (or (getf (getf result :top-surface) :execution-id) :none)))
+     (when (getf (getf result :display-surfaces) :top-surface)
+       (format t "workspace-top-display> ~A state=~A exec=~A~%"
+               (or (getf (getf (getf result :display-surfaces) :top-surface) :app-id) :none)
+               (or (getf (getf (getf result :display-surfaces) :top-surface) :window-state) :unknown)
+               (or (getf (getf (getf result :display-surfaces) :top-surface) :execution-id) :none)))
+     (when (getf result :current-display-surface)
+       (format t "workspace-current-display> app=~A state=~A exec=~A~%"
+               (or (getf (getf result :current-display-surface) :app-id) :none)
+               (or (getf (getf result :current-display-surface) :window-state) :unknown)
+               (or (getf (getf result :current-display-surface) :execution-id) :none)))
+     (when (getf result :current-display-posture)
+       (format t "workspace-display-state> status=~A kind=~A controllable=~A relaunch=~A source=~A actions=~S~%"
+               (or (getf (getf result :current-display-posture) :status) :unknown)
+               (or (getf (getf result :current-display-posture) :display-surface-kind) :none)
+               (or (getf (getf result :current-display-posture) :controllable-p) nil)
+               (or (getf (getf result :current-display-posture) :relaunch-ready-p) nil)
+               (or (getf (getf result :current-display-posture) :source-package-id) :none)
+               (or (getf (getf result :current-display-posture) :supported-actions) '())))
      (render-shell-open-handoff "workspace-open"
                                 (shell-open-command-for-surface-index 0))
+     (when (getf (getf result :display-surfaces) :top-surface)
+       (render-shell-open-handoff "workspace-display-open"
+                                  (shell-open-command-for-surface
+                                   (getf (getf result :display-surfaces) :top-surface))))
+     (when (getf result :display-actions)
+       (format t "workspace-display-actions> show=~A next=~A previous=~A relaunch=~A stop=~A~%"
+               (or (getf (getf result :display-actions) :show-command) :none)
+               (or (getf (getf result :display-actions) :next-command) :none)
+               (or (getf (getf result :display-actions) :previous-command) :none)
+               (or (getf (getf result :display-actions) :relaunch-command) :none)
+               (or (getf (getf result :display-actions) :stop-command) :none)))
+     (when (getf result :display-actions)
+       (format t "workspace-display-action-ids> show=~A next=~A previous=~A relaunch=~A stop=~A~%"
+               (or (getf (getf result :display-action-ids) :show) :none)
+               (or (getf (getf result :display-action-ids) :next) :none)
+               (or (getf (getf result :display-action-ids) :previous) :none)
+               (or (getf (getf result :display-action-ids) :relaunch) :none)
+               (or (getf (getf result :display-action-ids) :stop) :none)))
+     (when (getf result :display-entry-actions)
+       (format t "workspace-display-entry-actions> open=~A show=~A next=~A previous=~A relaunch=~A stop=~A~%"
+               (or (getf (getf (getf result :display-entry-actions) :open) :command) :none)
+               (or (getf (getf (getf result :display-entry-actions) :show) :command) :none)
+               (or (getf (getf (getf result :display-entry-actions) :next) :command) :none)
+               (or (getf (getf (getf result :display-entry-actions) :previous) :command) :none)
+               (or (getf (getf (getf result :display-entry-actions) :relaunch) :command) :none)
+               (or (getf (getf (getf result :display-entry-actions) :stop) :command) :none)))
+     (when (getf result :display-entry-actions)
+       (format t "workspace-display-entry-action-ids> open=~A show=~A next=~A previous=~A relaunch=~A stop=~A~%"
+               (or (getf (getf result :display-entry-action-ids) :open) :none)
+               (or (getf (getf result :display-entry-action-ids) :show) :none)
+               (or (getf (getf result :display-entry-action-ids) :next) :none)
+               (or (getf (getf result :display-entry-action-ids) :previous) :none)
+               (or (getf (getf result :display-entry-action-ids) :relaunch) :none)
+               (or (getf (getf result :display-entry-action-ids) :stop) :none)))
      (when (getf (getf result :governance-queue) :top-item)
        (render-shell-open-handoff "workspace-governance-open"
                                   (shell-open-command-for-governance-index 0)))
      (finish-output))
     (:desktop-show
-     (format t "desktop> session=~A env=~A plan=~A surfaces=~D governance=~D groups=~D focus=~A entries=~D~%"
+     (format t "desktop> session=~A env=~A plan=~A surfaces=~D displays=~D governance=~D groups=~D focus=~A entries=~D~%"
              (or (getf result :workspace-id) :none)
              (or (getf result :environment-id) :none)
              (or (getf result :plan) :none)
              (or (getf result :surface-count) 0)
+             (or (getf result :display-count) 0)
              (or (getf result :governance-count) 0)
              (or (getf result :object-group-count) 0)
              (or (getf result :focus-object-id) :none)
              (length (or (getf result :entry-points) '())))
-     (format t "desktop-active-panel> ~A~%"
-             (or (getf result :active-panel) :none))
-     (when (getf result :top-surface)
-       (format t "desktop-top-surface> ~A status=~A exec=~A~%"
-               (or (getf (getf result :top-surface) :surface-kind) :none)
+    (format t "desktop-active-panel> ~A~%"
+            (or (getf result :active-panel) :none))
+    (when (getf result :active-panel-summary)
+      (format t "desktop-active-summary> panel=~A label=~A focus=~A exec=~A app=~A status=~A~%"
+              (or (getf (getf result :active-panel-summary) :panel-id) :none)
+              (or (getf (getf result :active-panel-summary) :label) :none)
+              (or (getf (getf result :active-panel-summary) :focus-object-id) :none)
+              (or (getf (getf result :active-panel-summary) :execution-id) :none)
+              (or (getf (getf result :active-panel-summary) :app-id) :none)
+              (or (getf (getf result :active-panel-summary) :status) :unknown)))
+    (when (and (eq (getf result :active-panel) :inspector)
+               (getf result :active-panel-summary))
+      (format t "desktop-inspector-summary> object=~A resolved=~A history=~A~%"
+              (or (getf (getf result :active-panel-summary) :object-kind) :unknown)
+              (or (getf (getf result :active-panel-summary) :resolved-via) :unknown)
+              (or (getf (getf result :active-panel-summary) :history-count) 0)))
+    (when (getf result :recommended-action)
+      (format t "desktop-next-action> label=~A kind=~A command=~A action-id=~A~%"
+              (or (getf (getf result :recommended-action) :label) :none)
+              (or (getf (getf result :recommended-action) :action-kind) :none)
+              (or (getf (getf result :recommended-action) :command) :none)
+              (or (getf (getf result :recommended-action) :action-id) :none)))
+    (when (getf result :top-surface)
+      (format t "desktop-top-surface> ~A status=~A exec=~A~%"
+              (or (getf (getf result :top-surface) :surface-kind) :none)
                (or (getf (getf result :top-surface) :status) :unknown)
                (or (getf (getf result :top-surface) :execution-id) :none)))
+     (when (getf result :top-display-surface)
+       (format t "desktop-top-display> app=~A state=~A exec=~A~%"
+               (or (getf (getf result :top-display-surface) :app-id) :none)
+               (or (getf (getf result :top-display-surface) :window-state) :unknown)
+               (or (getf (getf result :top-display-surface) :execution-id) :none)))
      (when (getf result :top-governance-item)
        (format t "desktop-top-governance> queue=~A status=~A exec=~A~%"
                (or (getf (getf result :top-governance-item) :queue-kind) :none)
                (or (getf (getf result :top-governance-item) :status) :unknown)
                (or (getf (getf result :top-governance-item) :execution-id) :none)))
      (dolist (entry (or (getf result :entry-points) '()))
-       (format t "desktop-entry> kind=~A label=~A command=~A focus=~A~%"
+       (format t "desktop-entry> kind=~A label=~A command=~A focus=~A action=~A actions=~S~%"
                (or (getf entry :entry-kind) :none)
                (or (getf entry :label) :none)
                (or (getf entry :command) :none)
-               (or (getf entry :focus-object-id) :none)))
+               (or (getf entry :focus-object-id) :none)
+               (or (getf (getf entry :action) :action-id) :none)
+               (and (getf entry :actions)
+                    (loop for (key value) on (getf entry :actions) by #'cddr
+                          collect (list key (getf value :action-id))))))
      (let ((panels (getf result :panels)))
        (when panels
-         (format t "desktop-panel> workspace selected=~A exec=~A focus=~A open=~A~%"
-                 (or (getf (getf panels :workspace) :selected-index) :none)
-                 (or (getf (getf panels :workspace) :selected-execution-id) :none)
-                 (or (getf (getf panels :workspace) :focus-object-id) :none)
-                 (or (getf (getf (getf panels :workspace) :actions) :open-command) :none))
-         (format t "desktop-panel/actions> workspace activate=~A open=~A~%"
-                 (or (getf (getf (getf (getf panels :workspace) :actions) :activate) :action-id) :none)
-                 (or (getf (getf (getf (getf panels :workspace) :actions) :open) :action-id) :none))
-         (format t "desktop-panel/actions> workspace restore=~A~%"
-                 (or (getf (getf (getf (getf panels :workspace) :actions) :restore) :action-id) :none))
-         (format t "desktop-panel> governance selected=~A title=~A focus=~A open=~A~%"
-                 (or (getf (getf panels :governance) :selected-index) :none)
-                 (or (getf (getf panels :governance) :selected-title) :none)
-                 (or (getf (getf panels :governance) :focus-object-id) :none)
-                 (or (getf (getf (getf panels :governance) :actions) :open-command) :none))
-         (format t "desktop-panel> object-browser kind=~A index=~A title=~A focus=~A open=~A~%"
-                 (or (getf (getf panels :object-browser) :selected-kind) :none)
-                 (or (getf (getf panels :object-browser) :selected-index) :none)
-                 (or (getf (getf panels :object-browser) :selected-title) :none)
-                 (or (getf (getf panels :object-browser) :focus-object-id) :none)
-                 (or (getf (getf (getf panels :object-browser) :actions) :open-command) :none))
-         (format t "desktop-panel> inspector object=~A focus=~A open=~A~%"
-                 (or (getf (getf panels :inspector) :object-kind) :none)
-                 (or (getf (getf panels :inspector) :focus-object-id) :none)
-                 (or (getf (getf (getf panels :inspector) :actions) :open-command) :none))))
+         (case (getf result :active-panel)
+           (:workspace
+            (format t "desktop-panel> workspace selected=~A exec=~A focus=~A open=~A~%"
+                    (or (getf (getf panels :workspace) :selected-index) :none)
+                    (or (getf (getf panels :workspace) :selected-execution-id) :none)
+                    (or (getf (getf panels :workspace) :focus-object-id) :none)
+                    (or (getf (getf (getf panels :workspace) :actions) :open-command) :none))
+            (format t "desktop-panel/actions> workspace activate=~A open=~A restore=~A~%"
+                    (or (getf (getf (getf (getf panels :workspace) :actions) :activate) :action-id) :none)
+                    (or (getf (getf (getf (getf panels :workspace) :actions) :open) :action-id) :none)
+                    (or (getf (getf (getf (getf panels :workspace) :actions) :restore) :action-id) :none)))
+           (:display
+            (format t "desktop-panel> display selected=~A exec=~A app=~A state=~A open=~A~%"
+                    (or (getf (getf panels :display) :selected-index) :none)
+                    (or (getf (getf panels :display) :selected-execution-id) :none)
+                    (or (getf (getf panels :display) :selected-app-id) :none)
+                    (or (getf (getf panels :display) :selected-window-state) :none)
+                    (or (getf (getf (getf panels :display) :actions) :open-command) :none))
+            (format t "desktop-panel/display-state> status=~A kind=~A controllable=~A relaunch=~A actions=~S~%"
+                    (or (getf (getf panels :display) :selected-status) :unknown)
+                    (or (getf (getf panels :display) :selected-display-surface-kind) :none)
+                    (or (getf (getf panels :display) :selected-controllable-p) nil)
+                    (or (getf (getf panels :display) :selected-relaunch-ready-p) nil)
+                    (or (getf (getf panels :display) :selected-supported-actions) '()))
+            (format t "desktop-panel/actions> display show=~A next=~A previous=~A relaunch=~A stop=~A~%"
+                    (or (getf (getf (getf panels :display) :actions) :show-command) :none)
+                    (or (getf (getf (getf panels :display) :actions) :next-command) :none)
+                    (or (getf (getf (getf panels :display) :actions) :previous-command) :none)
+                    (or (getf (getf (getf panels :display) :actions) :relaunch-command) :none)
+                    (or (getf (getf (getf panels :display) :actions) :stop-command) :none)))
+           (:governance
+            (format t "desktop-panel> governance selected=~A title=~A focus=~A open=~A~%"
+                    (or (getf (getf panels :governance) :selected-index) :none)
+                    (or (getf (getf panels :governance) :selected-title) :none)
+                    (or (getf (getf panels :governance) :focus-object-id) :none)
+                    (or (getf (getf (getf panels :governance) :actions) :open-command) :none)))
+           (:object-browser
+            (format t "desktop-panel> object-browser kind=~A index=~A title=~A focus=~A open=~A~%"
+                    (or (getf (getf panels :object-browser) :selected-kind) :none)
+                    (or (getf (getf panels :object-browser) :selected-index) :none)
+                    (or (getf (getf panels :object-browser) :selected-title) :none)
+                    (or (getf (getf panels :object-browser) :focus-object-id) :none)
+                    (or (getf (getf (getf panels :object-browser) :actions) :open-command) :none)))
+           (:inspector
+            (format t "desktop-panel> inspector object=~A focus=~A open=~A~%"
+                    (or (getf (getf panels :inspector) :object-kind) :none)
+                    (or (getf (getf panels :inspector) :focus-object-id) :none)
+                    (or (getf (getf (getf panels :inspector) :actions) :open-command) :none)))
+           (otherwise nil))))
      (finish-output))
     (:desktop-panel
      (let ((desktop-model (getf result :desktop-model)))
@@ -1958,6 +2536,57 @@
                (or (getf (getf result :selected-surface) :status) :unknown)
                (or (getf (getf result :selected-surface) :execution-id) :none)))
      (finish-output))
+    (:display-list
+     (format t "display-list> count=~D focus=~A index=~A~%"
+             (or (getf result :count) 0)
+             (or (getf result :focus-object-id) :none)
+             (or (getf result :focus-index) :none))
+     (dolist (entry (or (getf result :items) '()))
+       (format t "display-entry> exec=~A app=~A state=~A status=~A~%"
+               (or (getf entry :execution-id) :none)
+               (or (getf entry :app-id) :none)
+               (or (getf entry :window-state) :unknown)
+               (or (getf entry :status) :unknown)))
+     (finish-output))
+    (:display-show
+     (format t "display-show> focus=~A app=~A state=~A status=~A~%"
+             (or (getf result :focus-object-id) :none)
+             (or (getf (getf result :display-surface) :app-id) :none)
+             (or (getf (getf result :display-surface) :window-state) :unknown)
+             (or (getf (getf (getf result :lifecycle) :lifecycle) :status)
+                 (getf (getf result :display-surface) :status)
+                 :unknown))
+     (when (getf result :inspection)
+       (format t "display-inspection> ~S~%" (getf result :inspection)))
+     (when (getf result :lifecycle)
+       (format t "display-lifecycle> ~S~%" (getf result :lifecycle)))
+     (finish-output))
+    (:display-select
+     (format t "display-select> index=~A focus=~A app=~A state=~A~%"
+             (or (getf result :selected-index) :none)
+             (or (getf result :focus-object-id) :none)
+             (or (getf (getf result :display-surface) :app-id) :none)
+             (or (getf (getf result :display-surface) :window-state) :unknown))
+     (finish-output))
+    (:display-step
+     (format t "display-step> direction=~A index=~A focus=~A app=~A state=~A~%"
+             (or (getf result :direction) :none)
+             (or (getf result :selected-index) :none)
+             (or (getf result :focus-object-id) :none)
+             (or (getf (getf result :display-surface) :app-id) :none)
+             (or (getf (getf result :display-surface) :window-state) :unknown))
+     (finish-output))
+    (:display-control
+     (format t "display-control> action=~A focus=~A app=~A state=~A~%"
+             (or (getf result :action) :none)
+             (or (getf result :focus-object-id) :none)
+             (or (getf (getf result :display-surface) :app-id)
+                 (getf (getf (getf result :result) :execution) :capability)
+                 :none)
+             (or (getf (getf result :display-surface) :window-state) :unknown))
+     (when (getf result :result)
+       (format t "display-control/result> ~S~%" (getf result :result)))
+     (finish-output))
     (:open
      (format t "open> via=~A focus=~A~%"
              (or (getf result :open-via) :none)
@@ -2029,6 +2658,19 @@
              (or (getf result :focus-object-id) :none)
              (or (getf result :object-kind) :unknown)
              (or (getf result :resolved-via) :unknown))
+     (when (getf result :summary)
+       (format t "inspector-summary> status=~A capability=~A history=~A app=~A actions=~S~%"
+               (or (getf (getf result :summary) :status) :unknown)
+               (or (getf (getf result :summary) :capability) :none)
+               (or (getf (getf result :summary) :history-count) 0)
+               (or (getf (getf result :summary) :app-id) :none)
+               (or (getf (getf result :summary) :supported-actions) '())))
+     (when (getf result :recommended-action)
+       (format t "inspector-next-action> label=~A kind=~A command=~A action-id=~A~%"
+               (or (getf (getf result :recommended-action) :label) :none)
+               (or (getf (getf result :recommended-action) :action-kind) :none)
+               (or (getf (getf result :recommended-action) :command) :none)
+               (or (getf (getf result :recommended-action) :action-id) :none)))
      (finish-output))
     ((:ask :say)
      (if (getf result :enqueued-p)
@@ -2246,8 +2888,9 @@
                (or (getf entry :control-actions) '())))
      (finish-output))
     (:platform-package
-     (format t "platform-package> id=~A output=~A capabilities=~D workflows=~D sdk-commands=~D compatibility-kinds=~D~%"
+     (format t "platform-package> id=~A version=~A output=~A capabilities=~D workflows=~D sdk-commands=~D compatibility-kinds=~D~%"
              (or (getf result :package-id) :none)
+             (or (getf result :package-version) :none)
              (or (getf result :output-path) :none)
              (or (getf result :capability-count) 0)
              (or (getf result :workflow-count) 0)
@@ -2255,10 +2898,12 @@
              (or (getf result :compatibility-kind-count) 0))
      (finish-output))
     (:platform-show-package
-     (format t "platform-package-detail> id=~A path=~A valid=~A capabilities=~D workflows=~D sdk-commands=~D~%"
+     (format t "platform-package-detail> id=~A version=~A path=~A valid=~A update=~A capabilities=~D workflows=~D sdk-commands=~D~%"
              (or (getf result :package-id) :none)
+             (or (getf result :package-version) :none)
              (or (getf result :path) :none)
              (if (getf result :valid-p) :yes :no)
+             (or (getf result :update-posture) :none)
              (or (getf result :capability-count) 0)
              (or (getf result :workflow-count) 0)
              (or (getf result :sdk-command-count) 0))
@@ -2266,16 +2911,20 @@
        (format t "platform-package-issues> ~S~%" (getf result :validation-issues)))
      (finish-output))
     (:platform-validate-package
-     (format t "platform-package-validation> path=~A valid=~A issues=~D~%"
+     (format t "platform-package-validation> path=~A version=~A valid=~A update=~A issues=~D~%"
              (or (getf result :path) :none)
+             (or (getf result :package-version) :none)
              (if (getf result :valid-p) :yes :no)
+             (or (getf result :update-posture) :none)
              (length (or (getf result :validation-issues) '())))
      (when (getf result :validation-issues)
        (format t "platform-package-issues> ~S~%" (getf result :validation-issues)))
      (finish-output))
     (:platform-import-package
-     (format t "platform-package-import> id=~A path=~A registry-count=~D~%"
+     (format t "platform-package-import> id=~A version=~A update=~A path=~A registry-count=~D~%"
              (or (getf (getf result :package) :package-id) :none)
+             (or (getf (getf result :package) :package-version) :none)
+             (or (getf (getf result :package) :update-posture) :none)
              (or (getf result :path) :none)
              (or (getf result :registry-count) 0))
      (finish-output))
@@ -2284,8 +2933,9 @@
              (or (getf result :count) 0)
              (or (getf result :active-count) 0))
      (dolist (entry (or (getf result :packages) '()))
-       (format t "platform-package> id=~A title=~A active=~A capabilities=~D workflows=~D imported-at=~A~%"
+       (format t "platform-package> id=~A version=~A title=~A active=~A capabilities=~D workflows=~D imported-at=~A~%"
                (or (getf entry :package-id) :none)
+               (or (getf entry :package-version) :none)
                (or (getf entry :title) :none)
                (if (getf entry :active-p) :yes :no)
                (or (getf entry :capability-count) 0)
@@ -2293,24 +2943,28 @@
                (or (getf entry :imported-at) :none)))
      (finish-output))
     (:platform-show-imported-package
-     (format t "platform-imported-package> id=~A title=~A path=~A active=~A capabilities=~D workflows=~D sdk-commands=~D~%"
+     (format t "platform-imported-package> id=~A version=~A title=~A path=~A active=~A update=~A capabilities=~D workflows=~D sdk-commands=~D~%"
              (or (getf result :package-id) :none)
+             (or (getf result :package-version) :none)
              (or (getf result :title) :none)
              (or (getf result :path) :none)
              (if (getf result :active-p) :yes :no)
+             (or (getf result :update-posture) :none)
              (or (getf result :capability-count) 0)
              (or (getf result :workflow-count) 0)
              (or (getf result :sdk-command-count) 0))
      (finish-output))
     (:platform-activate-package
-     (format t "platform-package-activate> id=~A active=~A active-count=~D~%"
+     (format t "platform-package-activate> id=~A version=~A active=~A active-count=~D~%"
              (or (getf (getf result :package) :package-id) :none)
+             (or (getf (getf result :package) :package-version) :none)
              (if (getf (getf result :package) :active-p) :yes :no)
              (or (getf result :active-count) 0))
      (finish-output))
     (:platform-deactivate-package
-     (format t "platform-package-deactivate> id=~A active=~A active-count=~D~%"
+     (format t "platform-package-deactivate> id=~A version=~A active=~A active-count=~D~%"
              (or (getf (getf result :package) :package-id) :none)
+             (or (getf (getf result :package) :package-version) :none)
              (if (getf (getf result :package) :active-p) :yes :no)
              (or (getf result :active-count) 0))
      (finish-output))
@@ -2318,8 +2972,9 @@
      (format t "platform-active-packages> count=~D~%"
              (or (getf result :count) 0))
      (dolist (entry (or (getf result :packages) '()))
-       (format t "platform-active-package> id=~A title=~A activated-at=~A~%"
+       (format t "platform-active-package> id=~A version=~A title=~A activated-at=~A~%"
                (or (getf entry :package-id) :none)
+               (or (getf entry :package-version) :none)
                (or (getf entry :title) :none)
                (or (getf entry :activated-at) :none)))
      (finish-output))
@@ -2332,11 +2987,92 @@
              (or (getf result :compatibility-kind-count) 0))
      (finish-output))
     (:platform-install-package
-     (format t "platform-package-install> id=~A active=~A active-count=~D registry-count=~D~%"
+     (format t "platform-package-install> id=~A version=~A active=~A active-count=~D registry-count=~D~%"
              (or (getf (getf result :package) :package-id) :none)
+             (or (getf (getf result :package) :package-version) :none)
              (if (getf (getf result :package) :active-p) :yes :no)
              (or (getf result :active-count) 0)
              (or (getf result :registry-count) 0))
+     (finish-output))
+    (:platform-simulate-package
+     (format t "platform-package-simulate> id=~A version=~A path=~A valid=~A update=~A replace-existing=~A~%"
+             (or (getf result :package-id) :none)
+             (or (getf result :package-version) :none)
+             (or (getf result :path) :none)
+             (if (getf result :valid-p) :yes :no)
+             (or (getf result :update-posture) :none)
+             (if (getf result :would-replace-existing-p) :yes :no))
+     (when (getf result :simulated-profile)
+       (format t "platform-simulated-profile> active=~D capabilities=~D workflows=~D sdk-commands=~D compatibility-kinds=~D~%"
+               (or (getf (getf result :simulated-profile) :count) 0)
+               (or (getf (getf result :simulated-profile) :capability-count) 0)
+               (or (getf (getf result :simulated-profile) :workflow-count) 0)
+               (or (getf (getf result :simulated-profile) :sdk-command-count) 0)
+               (or (getf (getf result :simulated-profile) :compatibility-kind-count) 0)))
+     (when (getf result :validation-issues)
+       (format t "platform-package-issues> ~S~%" (getf result :validation-issues)))
+     (finish-output))
+    (:platform-history
+     (format t "platform-package-history> count=~D limit=~D package=~A~%"
+             (or (getf result :count) 0)
+             (or (getf result :limit) 0)
+             (or (getf result :package-id) :all))
+     (dolist (entry (or (getf result :entries) '()))
+       (format t "platform-package-history-entry> action=~A id=~A version=~A active=~A update=~A deprecated=~A manual-recovery=~A untrusted=~A timestamp=~A~%"
+               (or (getf entry :action) :none)
+               (or (getf entry :package-id) :none)
+               (or (getf entry :package-version) :none)
+               (if (getf entry :active-p) :yes :no)
+               (or (getf entry :update-posture) :none)
+               (if (getf entry :deprecated-p) :yes :no)
+               (if (getf entry :manual-recovery-p) :yes :no)
+               (if (getf entry :untrusted-p) :yes :no)
+               (or (getf entry :timestamp) :none)))
+     (finish-output))
+    (:platform-audit
+     (format t "platform-audit> count=~D active=~D history=~D overrides=~D attention=~D untrusted=~D deprecated=~D manual-recovery=~D manual-update=~D~%"
+             (or (getf result :count) 0)
+             (or (getf result :active-count) 0)
+             (or (getf result :history-count) 0)
+             (or (getf result :override-count) 0)
+             (or (getf result :attention-count) 0)
+             (or (getf result :untrusted-count) 0)
+             (or (getf result :deprecated-count) 0)
+             (or (getf result :manual-recovery-count) 0)
+             (or (getf result :manual-update-count) 0))
+     (dolist (entry (or (getf result :packages) '()))
+       (format t "platform-audit-package> id=~A version=~A active=~A trusted=~A release=~A update=~A overrides=~A attention=~A latest=~A~%"
+               (or (getf entry :package-id) :none)
+               (or (getf entry :package-version) :none)
+               (if (getf entry :active-p) :yes :no)
+               (if (getf entry :provenance-trusted-p) :yes :no)
+               (or (getf entry :release-status) :none)
+               (or (getf entry :update-channel) :none)
+               (or (getf entry :override-count) 0)
+               (if (getf entry :attention-required-p) :yes :no)
+               (or (getf entry :latest-action) :none)))
+     (finish-output))
+    (:platform-harness
+     (format t "platform-harnesses> count=~D available=~D~%"
+             (or (getf result :count) 0)
+             (or (getf result :available-count) 0))
+     (dolist (entry (or (getf result :harnesses) '()))
+       (format t "platform-harness> id=~A available=~A report=~A blocked=~A~%"
+               (or (getf entry :harness-id) :none)
+               (if (getf entry :available-p) :yes :no)
+               (or (getf entry :report-shape) :none)
+               (or (getf entry :blocked-reason) :none)))
+     (finish-output))
+    (:platform-run-harness
+     (format t "platform-harness-run> id=~A available=~A report=~A~%"
+             (or (getf (getf result :harness) :harness-id) :none)
+             (if (getf (getf result :harness) :available-p) :yes :no)
+             (or (getf (getf result :harness) :report-shape) :none))
+     (when (getf result :report)
+       (format t "platform-harness-report> implemented=~A passed=~A score=~A~%"
+               (or (getf (getf result :report) :implemented-family-count) :none)
+               (or (getf (getf result :report) :passed-family-count) :none)
+               (or (getf (getf result :report) :implemented-score) :none)))
      (finish-output))
     (:incident-list
      (format t "incidents> count=~D~%" (length (or result '())))
@@ -2757,8 +3493,15 @@
     (t
      (format t "=> ~S~%" result))))
 
-(defun start-shell (provider &optional session &key (default-stream-p nil))
-  (let* ((active-session (ensure-session session))
+(defun start-shell (provider &rest arguments)
+  (let* ((session (and arguments
+                       (not (keywordp (first arguments)))
+                       (first arguments)))
+         (options (if session
+                      (rest arguments)
+                      arguments))
+         (default-stream-p (getf options :default-stream-p nil))
+         (active-session (ensure-session session))
          (active-environment (or (session-bound-environment active-session)
                                  (bind-session-to-environment active-session (ensure-environment)))))
     (unless (environment-provider-profiles active-environment)

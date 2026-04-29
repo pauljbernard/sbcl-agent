@@ -442,6 +442,10 @@
     (unless worker
       (error "Unknown worker ~A" worker-id))
     (setf (worker-state-running-p worker) nil)
+    (let ((thread (worker-state-thread worker)))
+      (when thread
+        (sb-thread:join-thread thread)
+        (setf (worker-state-thread worker) nil)))
     (refresh-bound-environment-agent-state session)
     worker))
 
@@ -449,6 +453,10 @@
   (prog1
       (mapcar (lambda (worker)
                 (setf (worker-state-running-p worker) nil)
+                (let ((thread (worker-state-thread worker)))
+                  (when thread
+                    (sb-thread:join-thread thread)
+                    (setf (worker-state-thread worker) nil)))
                 (worker-summary worker))
               (agent-session-workers session))
     (refresh-bound-environment-agent-state session)))

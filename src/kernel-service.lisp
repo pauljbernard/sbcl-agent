@@ -33,6 +33,67 @@
     (t
      (error "Expected a kernel execution handle or execution id, got ~S" execution-or-id))))
 
+(defun kernel-observed-status (session handle)
+  (case (kernel-execution-object-kind handle)
+    (:compatibility-execution
+     (compatibility-execution-status handle))
+    (:work-item
+     (let ((work-item-id (execution-handle-target-value handle :work-item-id)))
+       (and work-item-id
+            (let ((work-item (find-work-item session work-item-id)))
+              (and work-item
+                   (work-item-status work-item))))))
+    (:workflow-record
+     (let ((record-id (execution-handle-target-value handle :workflow-record-id)))
+       (and record-id
+            (let ((record (find-workflow-record session record-id)))
+              (and record
+                   (workflow-record-status record))))))
+    (:incident
+     (let ((incident-id (execution-handle-target-value handle :incident-id)))
+       (and incident-id
+            (let ((incident (find-incident session incident-id)))
+              (and incident
+                   (incident-status incident))))))
+    (:turn
+     (let ((turn-id (execution-handle-target-value handle :turn-id)))
+       (and turn-id
+            (let ((turn (find-turn session turn-id)))
+              (and turn
+                   (turn-status turn))))))
+    (:thread
+     (let ((thread-id (execution-handle-target-value handle :thread-id)))
+       (and thread-id
+            (let ((thread (find-thread session thread-id)))
+              (and thread
+                   (thread-status thread))))))
+    (:task
+     (let ((task-id (execution-handle-target-value handle :task-id)))
+       (and task-id
+            (let ((task (find-task session task-id)))
+              (and task
+                   (task-status task))))))
+    (:worker
+     (let ((worker-id (execution-handle-target-value handle :worker-id)))
+       (and worker-id
+            (let ((worker (find-worker session worker-id)))
+              (and worker
+                   (if (worker-state-running-p worker) :running :stopped))))))
+    (:runtime
+     (or (getf (service-response-data (query-runtime-summary-service session)) :status)
+         (getf handle :status)))
+    (otherwise
+     (getf handle :status))))
+
+(defun observe-kernel-handle-status (session execution-or-id &optional environment)
+  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+         (handle (ensure-kernel-handle execution-or-id active-environment))
+         (observed-status (kernel-observed-status session handle)))
+    (kernel-record-observed-status handle
+                                   observed-status
+                                   active-environment
+                                   :result :observation)))
+
 (defun kernel-invoke-tool-capability (session intention capability payload)
   (declare (ignore intention))
   (let ((tool-id (or (getf payload :tool-id)
@@ -58,7 +119,7 @@
 (defun kernel-context-operation (context)
   (getf context :operation))
 
-(defun kernel-capability-policy-id (capability payload response)
+(defun kernel-capability-policy-id (session capability payload response)
   (or (and response
            (getf (service-response-metadata response) :policy-id))
       (and (listp payload)
@@ -75,6 +136,16 @@
         (otherwise nil))
       (let ((normalized (kernel-capability-name capability)))
         (cond
+          ((and (stringp capability)
+                (find-compatibility-app capability
+                                        :session session
+                                        :environment (and session
+                                                          (session-bound-environment session))))
+           (compatibility-app-definition-policy-id
+            (find-compatibility-app capability
+                                    :session session
+                                    :environment (and session
+                                                      (session-bound-environment session)))))
           ((string= normalized "workflow/request-approval")
            (and (listp payload)
                 (ignore-errors (getf payload :policy))))
@@ -99,6 +170,31 @@
       ((string= normalized "runtime/set-package") :runtime-package-switch)
       ((string= normalized "workspace/patch") :workspace-mutation)
       ((string= normalized "workflow/request-approval") :approval-request)
+      ((string= normalized "rgp/approve") :approval-request)
+      ((string= normalized "authority/grant") :authority-grant)
+      ((member normalized
+               '("assistant/action" "assistant/pending-actions")
+               :test #'string=)
+       :execution)
+      ((member normalized
+               '("environment/provider-configure"
+                 "environment/provider-use"
+                 "environment/provider-routing"
+                 "rgp/bind"
+                 "rgp/export")
+               :test #'string=)
+       :environment-mutation)
+      ((member normalized
+               '("rgp/resume")
+               :test #'string=)
+       :workflow-mutation)
+      ((member normalized
+               '("workflow/steer-plan"
+                 "workflow/replay-validator-task"
+                 "workflow/replay-validator-set"
+                 "workflow/reconcile-image-only-source")
+               :test #'string=)
+       :workflow-mutation)
       ((search "tool/" normalized :test #'char-equal)
        :tool-execution)
       ((member normalized '("conversation/say" "conversation/ask") :test #'string=)
@@ -107,7 +203,7 @@
 
 (defun kernel-governance-mutation-sensitive-p (mutation-class)
   (member mutation-class
-          '(:runtime-mutation :runtime-reload :runtime-package-switch :workspace-mutation :tool-execution)
+          '(:runtime-mutation :runtime-reload :runtime-package-switch :workspace-mutation :workflow-mutation :environment-mutation :tool-execution)
           :test #'eq))
 
 (defun kernel-string-prefix-p (prefix string)
@@ -168,7 +264,7 @@
                     (find-work-item session bound-id)))))))
 
 (defun kernel-governance-preflight (session capability payload context response)
-  (let* ((policy-id (kernel-capability-policy-id capability payload response))
+  (let* ((policy-id (kernel-capability-policy-id session capability payload response))
          (mutation-class (kernel-governance-mutation-class capability payload))
          (work-item (kernel-context-work-item session context))
          (mutation-block-reasons (and work-item
@@ -188,7 +284,7 @@
                                        '(:runtime-mutation :runtime-reload :workspace-mutation)
                                        :test #'eq))
          (governance-sensitive-p (or approval-required-p checkpoint-required-p
-                                     (eq mutation-class :approval-request))))
+                                     (member mutation-class '(:approval-request :authority-grant) :test #'eq))))
     (list :governance-sensitive-p (not (null governance-sensitive-p))
           :mutation-class mutation-class
           :mutation-allowed-p (null mutation-block-reasons)
@@ -233,7 +329,9 @@
              (getf preflight :mutation-block-reasons)))
     (when (and (getf preflight :approval-required-p)
                (not (getf preflight :approval-granted-p))
-               (not (eq (getf preflight :mutation-class) :approval-request)))
+               (not (member (getf preflight :mutation-class)
+                            '(:approval-request :authority-grant)
+                            :test #'eq)))
       (ensure-policy-approved session (getf preflight :policy-id)))
     (ensure-kernel-governance-checkpoint session capability payload context)))
 
@@ -247,7 +345,6 @@
 
 (defun command-kernel-invoke-service (session intention capability
                                        &key authority context constraints provider options payload environment)
-  (declare (ignore authority constraints))
   (ensure-kernel-bound-environment session environment)
   (let* ((normalized (kernel-capability-name capability))
          (thread (kernel-context-thread session context))
@@ -306,6 +403,207 @@
                                                    (or (getf payload :policy)
                                                        (error "Kernel invoke for workflow/request-approval requires :policy"))
                                                    :reason (getf payload :reason)))
+      ((string= normalized "environment/provider-configure")
+       (command-environment-provider-configure-service
+        (or (getf payload :profile-name)
+            (error "Kernel invoke for environment/provider-configure requires :profile-name"))
+        (or (getf payload :options)
+            (error "Kernel invoke for environment/provider-configure requires :options"))
+        (session-bound-environment session)))
+      ((string= normalized "environment/provider-use")
+       (command-environment-provider-use-service
+        (or (getf payload :profile-name)
+            (error "Kernel invoke for environment/provider-use requires :profile-name"))
+        (session-bound-environment session)))
+      ((string= normalized "environment/provider-routing")
+       (command-environment-provider-routing-service
+        (getf payload :mode)
+        (session-bound-environment session)))
+      ((string= normalized "session/save")
+       (command-session-save-service session
+                                     (or (getf payload :path)
+                                         (error "Kernel invoke for session/save requires :path"))))
+      ((string= normalized "session/load")
+       (command-session-load-service
+        (or (getf payload :path)
+            (error "Kernel invoke for session/load requires :path"))))
+      ((string= normalized "environment/save")
+       (command-environment-save-service
+        (or (getf payload :path)
+            (error "Kernel invoke for environment/save requires :path"))
+        (session-bound-environment session)))
+      ((string= normalized "environment/load")
+       (command-environment-load-service
+        (or (getf payload :path)
+            (error "Kernel invoke for environment/load requires :path"))))
+      ((string= normalized "conversation/create-thread")
+       (command-conversation-create-thread-service session
+                                                  :title (getf payload :title)
+                                                  :summary (getf payload :summary)
+                                                  :metadata (getf payload :metadata)))
+      ((string= normalized "conversation/use-thread")
+       (command-conversation-use-thread-service
+        session
+        (or (getf payload :thread-id)
+            (error "Kernel invoke for conversation/use-thread requires :thread-id"))))
+      ((string= normalized "authority/grant")
+       (command-approve-policy-service
+        session
+        (or (getf payload :policy)
+            (error "Kernel invoke for authority/grant requires :policy"))))
+      ((string= normalized "assistant/action")
+       (command-execute-assistant-action-service
+        session
+        (or (getf payload :action)
+            (error "Kernel invoke for assistant/action requires :action"))
+        :thread thread
+        :turn turn
+        :operation operation))
+      ((string= normalized "assistant/pending-actions")
+       (command-execute-pending-actions-service session
+                                                :thread thread
+                                                :turn turn
+                                                :operation operation))
+      ((string= normalized "rgp/bind")
+       (apply #'command-rgp-bind-service
+              session
+              (append (list :environment (session-bound-environment session))
+                      (copy-list (or payload '())))))
+      ((string= normalized "rgp/export")
+       (command-rgp-export-service session
+                                   (or (getf payload :path)
+                                       (error "Kernel invoke for rgp/export requires :path"))
+                                   (session-bound-environment session)))
+      ((string= normalized "rgp/approve")
+       (command-rgp-approve-service session
+                                    (or (getf payload :work-item-id)
+                                        (error "Kernel invoke for rgp/approve requires :work-item-id"))
+                                    (or (getf payload :policy)
+                                        (error "Kernel invoke for rgp/approve requires :policy"))
+                                    :reason (getf payload :reason)
+                                    :environment (session-bound-environment session)))
+      ((string= normalized "rgp/resume")
+       (command-rgp-resume-service session
+                                   (or (getf payload :work-item-id)
+                                       (error "Kernel invoke for rgp/resume requires :work-item-id"))
+                                   :note (getf payload :note)
+                                   :environment (session-bound-environment session)))
+      ((string= normalized "task/enqueue")
+       (let* ((form (or (getf payload :form)
+                        (error "Kernel invoke for task/enqueue requires :form")))
+              (command (or (getf payload :command)
+                           (normalize-form-command form)))
+              (priority (or (getf payload :priority) 0)))
+         (command-task-enqueue-service session form command priority)))
+      ((string= normalized "task/cancel")
+       (command-task-cancel-service session
+                                    (or (getf payload :task-id)
+                                        (error "Kernel invoke for task/cancel requires :task-id"))))
+      ((string= normalized "task/run-next")
+       (command-task-run-next-service session
+                                      (or provider
+                                          (error "Kernel invoke for task/run-next requires a provider"))))
+      ((string= normalized "worker/start")
+       (command-worker-start-service session
+                                     (or provider
+                                         (error "Kernel invoke for worker/start requires a provider"))))
+      ((string= normalized "worker/stop")
+       (command-worker-stop-service session
+                                    (or (getf payload :worker-id)
+                                        (error "Kernel invoke for worker/stop requires :worker-id"))))
+      ((string= normalized "workflow/steer-plan")
+       (command-work-item-steer-service session
+                                        (or (getf payload :work-item-id)
+                                            (error "Kernel invoke for workflow/steer-plan requires :work-item-id"))
+                                        :phase (or (getf payload :phase)
+                                                   (error "Kernel invoke for workflow/steer-plan requires :phase"))
+                                        :next-step (or (getf payload :next-step)
+                                                       (error "Kernel invoke for workflow/steer-plan requires :next-step"))
+                                        :note (getf payload :note)))
+      ((string= normalized "workflow/replay-validator-task")
+       (command-replay-validator-task-service session
+                                              (or (getf payload :work-item-id)
+                                                  (error "Kernel invoke for workflow/replay-validator-task requires :work-item-id"))
+                                              (or (getf payload :validator-task-id)
+                                                  (error "Kernel invoke for workflow/replay-validator-task requires :validator-task-id"))
+                                              :status (or (getf payload :status) :passed)))
+      ((string= normalized "workflow/replay-validator-set")
+       (command-replay-validator-set-service session
+                                             (or (getf payload :work-item-id)
+                                                 (error "Kernel invoke for workflow/replay-validator-set requires :work-item-id"))
+                                             (or (getf payload :replay-id)
+                                                 (error "Kernel invoke for workflow/replay-validator-set requires :replay-id"))
+                                             :status (or (getf payload :status) :passed)
+                                             :statuses (getf payload :statuses)))
+      ((string= normalized "workflow/reconcile-image-only-source")
+       (command-reconcile-image-only-source-service session
+                                                    (or (getf payload :work-item-id)
+                                                        (error "Kernel invoke for workflow/reconcile-image-only-source requires :work-item-id"))
+                                                    (or (getf payload :summary)
+                                                        (error "Kernel invoke for workflow/reconcile-image-only-source requires :summary"))))
+      ((string= normalized "platform/package")
+       (apply #'command-platform-package-service
+              (or (getf payload :output-path)
+                  (getf payload :output)
+                  (error "Kernel invoke for platform/package requires :output-path"))
+              (append (list :package-id (getf payload :package-id)
+                            :package-version (getf payload :package-version)
+                            :title (getf payload :title)
+                            :publisher (getf payload :publisher)
+                            :build-system (getf payload :build-system)
+                            :source-repository (getf payload :source-repository)
+                            :build-kind (getf payload :build-kind)
+                            :release-status (getf payload :release-status)
+                            :replacement-package-id (getf payload :replacement-package-id)
+                            :rollback-strategy (getf payload :rollback-strategy)
+                            :failure-mode (getf payload :failure-mode)
+                            :recovery-runbook (getf payload :recovery-runbook)
+                            :capability-ids (getf payload :capabilities)
+                            :environment (session-bound-environment session)
+                            :session session)
+                      (when (and (listp payload)
+                                 (member :backup-required payload :test #'eq))
+                        (list :backup-required-p (getf payload :backup-required)))
+                      (when (and (listp payload)
+                                 (member :attested-p payload :test #'eq))
+                        (list :attested-p (getf payload :attested-p))))))
+      ((string= normalized "platform/import-package")
+       (command-platform-import-package-service
+        (or (getf payload :path)
+            (error "Kernel invoke for platform/import-package requires :path"))
+        :allow-downgrade-p (getf payload :allow-downgrade)
+        :allow-deprecated-p (getf payload :allow-deprecated)
+        :allow-manual-recovery-p (getf payload :allow-manual-recovery)
+        :allow-untrusted-p (getf payload :allow-untrusted)
+        :environment (session-bound-environment session)
+        :session session))
+      ((string= normalized "platform/activate-package")
+       (command-platform-activate-package-service
+        (or (getf payload :package-id)
+            (error "Kernel invoke for platform/activate-package requires :package-id"))
+        :environment (session-bound-environment session)
+        :session session))
+      ((string= normalized "platform/deactivate-package")
+       (command-platform-deactivate-package-service
+        (or (getf payload :package-id)
+            (error "Kernel invoke for platform/deactivate-package requires :package-id"))
+        :environment (session-bound-environment session)
+        :session session))
+      ((string= normalized "platform/install-package")
+       (command-platform-install-package-service
+        (or (getf payload :path)
+            (error "Kernel invoke for platform/install-package requires :path"))
+        :allow-downgrade-p (getf payload :allow-downgrade)
+        :allow-deprecated-p (getf payload :allow-deprecated)
+        :allow-manual-recovery-p (getf payload :allow-manual-recovery)
+        :allow-untrusted-p (getf payload :allow-untrusted)
+        :environment (session-bound-environment session)
+        :session session))
+      ((string= normalized "platform/run-harness")
+       (command-platform-run-harness-service
+        :harness-id (or (getf payload :harness-id) :internal-evaluations)
+        :environment (session-bound-environment session)
+        :session session))
       ((or (search "tool/" normalized :test #'char-equal)
            (getf payload :tool-id))
        (let ((*runtime-governance-thread* thread)
@@ -324,24 +622,56 @@
                                       :turn turn
                                       :operation operation)))
       ((search "linux." normalized :test #'char-equal)
-       (error "Compatibility kernel support for ~A is not implemented yet" capability))
+       (command-invoke-compatibility-app-service session
+                                                 normalized
+                                                 payload
+                                                 :thread thread
+                                                 :turn turn
+                                                 :operation operation))
       (t
-       (error "Unsupported kernel capability ~A" capability)))))
-    (annotate-kernel-invoke-response response session capability payload context preflight)))
+       (error "Unsupported kernel capability ~A" capability))))
+         (kernel-session (or (getf (service-response-metadata response) :session)
+                             (let ((data (service-response-data response)))
+                               (and (plist-shaped-p data)
+                                    (typep (getf data :session) 'agent-session)
+                                    (getf data :session)))
+                             session))
+         (kernel-environment (or (getf (service-response-metadata response) :environment)
+                                 (and kernel-session
+                                      (session-bound-environment kernel-session))
+                                 (session-bound-environment session)))
+         (kernelized-response
+           (if (getf (service-response-metadata response) :execution-id)
+               response
+               (kernelize-service-command-response response
+                                                  :session kernel-session
+                                                  :environment kernel-environment
+                                                  :intention intention
+                                                  :capability capability
+                                                  :authority authority
+                                                  :context context
+                                                  :constraints constraints))))
+    (annotate-kernel-invoke-response kernelized-response session capability payload context preflight)))
 
 (defun kernel-execution-object-kind (handle)
   (cond
     ((execution-handle-target-value handle :compatibility-execution) :compatibility-execution)
+    ((execution-handle-target-value handle :platform-package-id) :platform-package)
+    ((execution-handle-target-value handle :turn-id) :turn)
+    ((execution-handle-target-value handle :thread-id) :thread)
+    ((execution-handle-target-value handle :task-id) :task)
+    ((execution-handle-target-value handle :worker-id) :worker)
     ((execution-handle-target-value handle :workflow-record-id) :workflow-record)
     ((execution-handle-target-value handle :incident-id) :incident)
     ((execution-handle-target-value handle :work-item-id) :work-item)
-    ((execution-handle-target-value handle :turn-id) :turn)
     ((execution-handle-target-value handle :runtime-id) :runtime)
     (t :execution)))
 
 (defun kernel-related-object-summaries (session handle)
   (let* ((thread-id (execution-handle-target-value handle :thread-id))
          (turn-id (execution-handle-target-value handle :turn-id))
+         (task-id (execution-handle-target-value handle :task-id))
+         (worker-id (execution-handle-target-value handle :worker-id))
          (work-item-id (execution-handle-target-value handle :work-item-id))
          (workflow-record-id (execution-handle-target-value handle :workflow-record-id))
          (incident-id (execution-handle-target-value handle :incident-id))
@@ -349,6 +679,8 @@
          (runtime-id (execution-handle-target-value handle :runtime-id))
          (thread (and thread-id (find-thread session thread-id)))
          (turn (and turn-id (find-turn session turn-id)))
+         (task (and task-id (find-task session task-id)))
+         (worker (and worker-id (find-worker session worker-id)))
          (work-item (and work-item-id (find-work-item session work-item-id)))
          (workflow-record
            (or (and workflow-record-id
@@ -358,6 +690,8 @@
          (incident (and incident-id (find-incident session incident-id))))
     (list :thread (and thread (thread-record-summary thread))
           :turn (and turn (turn-record-summary turn))
+          :task (and task (task-summary task))
+          :worker (and worker (worker-summary worker))
           :work-item (and work-item (work-item-summary work-item))
           :workflow-record (and workflow-record (workflow-record-summary workflow-record))
           :incident (and incident (incident-record-summary incident))
@@ -366,7 +700,10 @@
                         (service-response-data (query-runtime-summary-service session))))))
 
 (defun inspect-kernel-execution-handle (session handle)
-  (let ((turn-id (execution-handle-target-value handle :turn-id))
+  (let ((thread-id (execution-handle-target-value handle :thread-id))
+        (turn-id (execution-handle-target-value handle :turn-id))
+        (task-id (execution-handle-target-value handle :task-id))
+        (worker-id (execution-handle-target-value handle :worker-id))
         (work-item-id (execution-handle-target-value handle :work-item-id))
         (workflow-record-id (execution-handle-target-value handle :workflow-record-id))
         (incident-id (execution-handle-target-value handle :incident-id))
@@ -381,8 +718,14 @@
                      :control-posture (compatibility-execution-control-posture handle))))
       (workflow-record-id
        (service-response-data (query-workflow-record-detail-service session workflow-record-id)))
+      (thread-id
+       (service-response-data (query-conversation-thread-detail-service session thread-id)))
       (turn-id
        (service-response-data (query-conversation-turn-detail-service session turn-id)))
+      (task-id
+       (service-response-data (query-task-detail-service session task-id)))
+      (worker-id
+       (service-response-data (query-worker-detail-service session worker-id)))
       (work-item-id
        (service-response-data (query-work-item-detail-service session work-item-id)))
       (incident-id
@@ -392,18 +735,31 @@
       (t
        handle))))
 
+(defun kernel-execution-forensics-summary (handle)
+  (list :recorded-at (getf handle :recorded-at)
+        :last-observed-status (getf handle :last-observed-status)
+        :last-status-change-at (getf handle :last-status-change-at)
+        :last-control-action (getf handle :last-control-action)
+        :last-control-at (getf handle :last-control-at)
+        :history-count (+ (length (or (getf handle :lifecycle-history) '()))
+                          (length (or (getf handle :control-history) '())))
+        :lifecycle-history (copy-tree (or (getf handle :lifecycle-history) '()))
+        :control-history (copy-tree (or (getf handle :control-history) '()))))
+
 (defun query-kernel-inspect-service (session object-id &key environment)
   (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (handle (ensure-kernel-handle object-id active-environment))
+         (handle (observe-kernel-handle-status session object-id active-environment))
          (object-kind (kernel-execution-object-kind handle))
          (inspection (inspect-kernel-execution-handle session handle))
-         (related (kernel-related-object-summaries session handle)))
+         (related (kernel-related-object-summaries session handle))
+         (forensics (kernel-execution-forensics-summary handle)))
     (make-service-query-response :kernel
                                  :inspect
                                  (list :execution handle
                                        :object-kind object-kind
                                        :target (getf handle :target)
                                        :inspection inspection
+                                       :forensics forensics
                                        :related related
                                        :resolved-via :execution-handle
                                        :doctrine +kernel-doctrine-rules+)
@@ -535,7 +891,8 @@
 
 (defun query-execution-surface-by-id (session execution-id &key environment)
   (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (handle (kernel-find-execution execution-id active-environment)))
+         (handle (and (kernel-find-execution execution-id active-environment)
+                      (observe-kernel-handle-status session execution-id active-environment))))
     (when handle
       (execution-surface-summary session handle active-environment))))
 
@@ -547,7 +904,9 @@
 
 (defun query-execution-surfaces-service (session &key environment surface-kind)
   (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (handles (kernel-execution-registry active-environment))
+         (handles (mapcar (lambda (handle)
+                            (observe-kernel-handle-status session handle active-environment))
+                          (kernel-execution-registry active-environment)))
          (surfaces (remove nil
                            (mapcar (lambda (handle)
                                      (let ((surface (execution-surface-summary session handle active-environment)))
@@ -577,11 +936,28 @@
     (append summary
             (list :compatibility compatibility-target
                   :kind (getf compatibility-target :kind)
+                  :app-id (getf compatibility-target :app-id)
+                  :title (getf compatibility-target :title)
+                  :source-package-id (getf compatibility-target :source-package-id)
+                  :policy-id (getf compatibility-target :policy-id)
+                  :launch-tool-id (getf compatibility-target :launch-tool-id)
                   :backend (getf compatibility-target :backend)
+                  :backend-adapter-id (getf compatibility-target :backend-adapter-id)
+                  :backend-implementation (getf compatibility-target :backend-implementation)
+                  :backend-profile-id (getf compatibility-target :backend-profile-id)
+                  :backend-profile (getf compatibility-target :backend-profile)
+                  :bridge-session-id (getf compatibility-target :bridge-session-id)
+                  :bridge-attached-p (not (null (getf compatibility-target :bridge-attached-p)))
                   :sandbox-profile (getf compatibility-target :sandbox-profile)
                   :filesystem-scope (getf compatibility-target :filesystem-scope)
+                  :filesystem-scope-kind (getf compatibility-target :filesystem-scope-kind)
                   :network-enabled-p (getf compatibility-target :network-enabled-p)
+                  :network-policy (getf compatibility-target :network-policy)
                   :workspace-write-p (getf compatibility-target :workspace-write-p)
+                  :display-surface-kind (getf compatibility-target :display-surface-kind)
+                  :window-state (getf compatibility-target :window-state)
+                  :sandbox-network-enabled-p (getf compatibility-target :sandbox-network-enabled-p)
+                  :sandbox-workspace-write-p (getf compatibility-target :sandbox-workspace-write-p)
                   :registered-at (getf compatibility-target :registered-at)
                   :last-observed-status (or (getf compatibility-target :last-observed-status)
                                             (compatibility-execution-status handle))
@@ -596,13 +972,14 @@
 
 (defun compatibility-execution-status (handle)
   (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+         (backend-profile-id (getf compatibility-target :backend-profile-id))
          (control-token (getf compatibility-target :control-token))
          (stored-status (getf handle :status)))
     (cond
       ((member stored-status '(:stopped :revoked :terminated) :test #'eq)
        stored-status)
       (control-token
-       (compatibility-process-status control-token))
+       (compatibility-backend-status backend-profile-id control-token stored-status))
       (t
        stored-status))))
 
@@ -614,6 +991,7 @@
 (defun compatibility-execution-lifecycle-summary (handle)
   (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
          (status (compatibility-execution-status handle))
+         (backend-profile-id (getf compatibility-target :backend-profile-id))
          (control-token (getf compatibility-target :control-token)))
     (list :status status
           :terminal-p (compatibility-execution-terminal-p handle)
@@ -621,7 +999,12 @@
           :execution-mode (getf compatibility-target :execution-mode)
           :control-token-present-p (not (null control-token))
           :control-token-live-p (and control-token
-                                     (compatibility-process-token-live-p control-token))
+                                     (compatibility-backend-token-live-p backend-profile-id
+                                                                         control-token))
+          :backend-adapter-id (getf compatibility-target :backend-adapter-id)
+          :backend-implementation (getf compatibility-target :backend-implementation)
+          :bridge-session-id (getf compatibility-target :bridge-session-id)
+          :bridge-attached-p (not (null (getf compatibility-target :bridge-attached-p)))
           :registered-at (getf compatibility-target :registered-at)
           :last-observed-status (or (getf compatibility-target :last-observed-status)
                                     status)
@@ -631,44 +1014,98 @@
           :detached-runtime-loss-p (not (null (getf compatibility-target :detached-runtime-loss-p)))
           :loss-acknowledged-p (not (null (getf compatibility-target :loss-acknowledged-p)))
           :loss-acknowledged-at (getf compatibility-target :loss-acknowledged-at)
-          :recovery-note (getf compatibility-target :recovery-note))))
+          :recovery-note (getf compatibility-target :recovery-note)
+          :relaunch-ready-p (member :relaunch
+                                    (getf (compatibility-execution-control-posture handle)
+                                          :supported-actions))
+          :relaunch-app-id (getf compatibility-target :app-id)
+          :relaunch-execution-id (getf compatibility-target :relaunch-execution-id))))
+
+(defun compatibility-display-surface-summary (handle)
+  (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+         (display-surface-kind (getf compatibility-target :display-surface-kind)))
+    (when (and compatibility-target
+               (not (eq display-surface-kind :headless)))
+      (let ((execution-id (execution-handle-execution-id handle))
+            (status (compatibility-execution-status handle))
+            (control-posture (compatibility-execution-control-posture handle)))
+        (list :display-id (format nil "display-~A" execution-id)
+              :execution-id execution-id
+              :app-id (getf compatibility-target :app-id)
+              :title (or (getf compatibility-target :title)
+                         (getf compatibility-target :app-id)
+                         (format nil "Display ~A" execution-id))
+              :display-surface-kind display-surface-kind
+              :status status
+              :window-state (or (getf compatibility-target :window-state)
+                                (if (member status '(:running :in-progress) :test #'eq)
+                                    :visible
+                                    :closed))
+              :source-package-id (getf compatibility-target :source-package-id)
+              :bridge-session-id (getf compatibility-target :bridge-session-id)
+              :bridge-attached-p (not (null (getf compatibility-target :bridge-attached-p)))
+              :control-posture control-posture
+              :compatibility (compatibility-execution-summary handle))))))
+
+(defun compatibility-execution-manifest-available-p (handle)
+  (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+         (app-id (getf compatibility-target :app-id)))
+    (and (eq (getf compatibility-target :kind) :linux-app)
+         app-id
+         (find-compatibility-app app-id))))
 
 (defun compatibility-execution-control-posture (handle)
   (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
-         (backend (getf compatibility-target :backend))
-         (kind (getf compatibility-target :kind))
+         (backend-profile (getf compatibility-target :backend-profile))
+         (backend-profile-id (getf compatibility-target :backend-profile-id))
+         (control-plane-kind (getf backend-profile :control-plane-kind))
          (control-token (getf compatibility-target :control-token))
          (detached-runtime-loss-p (getf compatibility-target :detached-runtime-loss-p))
          (loss-acknowledged-p (getf compatibility-target :loss-acknowledged-p))
-         (token-live-p (and control-token
-                            (compatibility-process-token-live-p control-token)))
+         (token-live-p (compatibility-backend-token-live-p backend-profile-id control-token))
          (terminal-p (compatibility-execution-terminal-p handle))
+         (manifest-available-p (compatibility-execution-manifest-available-p handle))
          (supported-actions
            (cond
+             ((and terminal-p manifest-available-p)
+              '(:relaunch))
              (terminal-p '())
+             ((and detached-runtime-loss-p
+                   (not loss-acknowledged-p)
+                   manifest-available-p)
+              '(:acknowledge-loss :relaunch))
              ((and detached-runtime-loss-p
                    (not loss-acknowledged-p))
               '(:acknowledge-loss))
-             ((and (eq kind :host-process)
-                   (eq backend :sbcl-sandbox-worker)
+             ((and detached-runtime-loss-p
+                   loss-acknowledged-p
+                   manifest-available-p)
+              '(:relaunch))
+             ((and (member control-plane-kind '(:process-token :runtime-token :desktop-session) :test #'eq)
                    token-live-p)
               '(:stop :revoke))
              (t '())))
          (blocked-reason
            (cond
+             ((and terminal-p manifest-available-p)
+              "Compatibility execution is terminal but can be relaunched from its manifest.")
              (terminal-p
               "Compatibility execution is already terminal.")
              ((and detached-runtime-loss-p
+                   loss-acknowledged-p
+                   manifest-available-p)
+              "Compatibility runtime loss was acknowledged; the app can now be relaunched from its manifest.")
+             ((and detached-runtime-loss-p
                    loss-acknowledged-p)
               "Compatibility runtime loss has already been acknowledged.")
-             ((and (eq kind :host-process)
-                   (eq backend :sbcl-sandbox-worker)
+             ((and (member control-plane-kind '(:process-token :runtime-token :desktop-session) :test #'eq)
                    (getf compatibility-target :execution-mode)
                    (not token-live-p))
-              "Compatibility execution is no longer attached to an active runtime control token.")
-             ((and (eq kind :host-process)
-                   (eq backend :sbcl-sandbox-worker))
-              "Synchronous host-process compatibility executions are not yet detachable or revocable.")
+              (if (eq control-plane-kind :desktop-session)
+                  "Compatibility execution is no longer attached to an active desktop bridge session."
+                  "Compatibility execution is no longer attached to an active runtime control token."))
+             ((member control-plane-kind '(:none nil) :test #'eq)
+              "Compatibility execution uses a synchronous backend without detachable governed control.")
              (t
               "Compatibility execution does not advertise any governed control actions."))))
     (list :controllable-p (not (null supported-actions))
@@ -678,7 +1115,7 @@
 
 (defun query-compatibility-execution-detail-service (session execution-id &key environment)
   (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (handle (ensure-kernel-handle execution-id active-environment))
+         (handle (observe-kernel-handle-status session execution-id active-environment))
          (compatibility-target (execution-handle-target-value handle :compatibility-execution)))
     (unless compatibility-target
       (error "Kernel execution ~A is not a compatibility execution" execution-id))
@@ -694,29 +1131,122 @@
                                                                   :environment active-environment
                                                                   :runtime-id (execution-handle-target-value handle :runtime-id)))))
 
-(defun query-compatibility-executions-service (session &key environment kind backend sandbox-profile)
+(defun query-compatibility-executions-service (session
+                                               &key environment kind backend backend-profile-id sandbox-profile app-id)
   (let* ((active-environment (ensure-kernel-bound-environment session environment))
          (handles (remove-if-not (lambda (handle)
                                    (let ((compatibility-target (execution-handle-target-value handle :compatibility-execution)))
                                      (and compatibility-target
                                           (or (null kind)
                                               (eq kind (getf compatibility-target :kind)))
+                                          (or (null app-id)
+                                              (string= app-id
+                                                       (getf compatibility-target :app-id)))
                                           (or (null backend)
                                               (eq backend (getf compatibility-target :backend)))
+                                          (or (null backend-profile-id)
+                                              (eq backend-profile-id
+                                                  (getf compatibility-target :backend-profile-id)))
                                           (or (null sandbox-profile)
                                               (eq sandbox-profile
                                                   (getf compatibility-target :sandbox-profile))))))
-                                 (kernel-execution-registry active-environment)))
+                                 (mapcar (lambda (handle)
+                                           (observe-kernel-handle-status session handle active-environment))
+                                         (kernel-execution-registry active-environment))))
          (summaries (mapcar #'compatibility-execution-summary handles)))
     (make-service-query-response :compatibility
                                  :executions
                                  (list :count (length summaries)
                                        :entries summaries
                                        :filters (list :kind kind
+                                                      :app-id app-id
                                                       :backend backend
+                                                      :backend-profile-id backend-profile-id
                                                       :sandbox-profile sandbox-profile))
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :read-model :compatibility-executions-v1
+                                                                   :session session
+                                                                   :environment active-environment))))
+
+(defun query-compatibility-apps-service (&key app-id session environment)
+  (let* ((entries (if app-id
+                      (let ((definition (find-compatibility-app app-id
+                                                                :session session
+                                                                :environment environment)))
+                        (and definition
+                             (list (compatibility-app-summary definition))))
+                      (list-compatibility-apps :session session
+                                               :environment environment))))
+    (when session
+      (let* ((active-environment (ensure-kernel-bound-environment session environment))
+             (handles (kernel-execution-registry active-environment)))
+        (setf entries
+              (mapcar (lambda (entry)
+                        (let* ((matching-handles
+                                 (remove-if-not
+                                  (lambda (handle)
+                                    (let ((compatibility-target
+                                            (execution-handle-target-value handle :compatibility-execution)))
+                                      (string= (or (getf compatibility-target :app-id) "")
+                                               (or (getf entry :id) ""))))
+                                  handles))
+                               (summaries (mapcar #'compatibility-execution-summary matching-handles))
+                               (sorted (sort (copy-list summaries)
+                                             #'>
+                                             :key (lambda (summary)
+                                                    (or (getf (getf summary :execution) :recorded-at) 0)))))
+                          (append entry
+                                  (list :execution-count (length summaries)
+                                        :running-count (count :running summaries
+                                                              :key (lambda (summary) (getf summary :status))
+                                                              :test #'eq)
+                                        :recent-executions sorted
+                                        :top-execution (first sorted)))))
+                      (or entries '())))))
+    (make-service-query-response :compatibility
+                                 :apps
+                                 (list :count (length (or entries '()))
+                                       :entries (or entries '())
+                                       :selected-app-id app-id)
                                  :metadata (make-service-metadata :authority :environment
-                                                                  :read-model :compatibility-executions-v1
+                                                                  :read-model :compatibility-apps-v1
+                                                                 :session session
+                                                                 :environment environment))))
+
+(defun query-compatibility-display-surfaces-service (session &key environment app-id display-surface-kind)
+  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+         (entries
+           (remove nil
+                   (mapcar (lambda (handle)
+                             (let* ((compatibility-target
+                                      (execution-handle-target-value handle :compatibility-execution))
+                                    (entry (and compatibility-target
+                                                (compatibility-display-surface-summary handle))))
+                               (when (and entry
+                                          (or (null app-id)
+                                              (string= app-id (getf entry :app-id)))
+                                          (or (null display-surface-kind)
+                                              (eq display-surface-kind
+                                                  (getf entry :display-surface-kind))))
+                                 entry)))
+                           (mapcar (lambda (handle)
+                                     (observe-kernel-handle-status session handle active-environment))
+                                   (kernel-execution-registry active-environment)))))
+         (sorted (sort entries #'<
+                       :key (lambda (entry)
+                              (case (getf entry :window-state)
+                                (:visible 0)
+                                (:background 1)
+                                (otherwise 5))))))
+    (make-service-query-response :compatibility
+                                 :display-surfaces
+                                 (list :count (length sorted)
+                                       :top-surface (first sorted)
+                                       :entries sorted
+                                       :filters (list :app-id app-id
+                                                      :display-surface-kind display-surface-kind))
+                                 :metadata (make-service-metadata :authority :environment
+                                                                  :read-model :compatibility-display-surfaces-v1
                                                                   :session session
                                                                   :environment active-environment))))
 
@@ -750,8 +1280,11 @@
 
 (defun compatibility-execution-apply-control (handle action environment)
   (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+         (backend-profile-id (getf compatibility-target :backend-profile-id))
          (control-token (getf compatibility-target :control-token))
-         (result (compatibility-process-stop control-token :revoke-p (eq action :revoke)))
+         (result (compatibility-backend-stop backend-profile-id
+                                             control-token
+                                             :revoke-p (eq action :revoke)))
          (now (get-universal-time))
          (updated-target (copy-list compatibility-target))
          (updated-handle (copy-list handle)))
@@ -759,7 +1292,13 @@
           (getf updated-target :last-control-at) now
           (getf updated-target :last-observed-status) (getf result :status)
           (getf updated-target :last-status-change-at) now
-          (getf updated-target :detached-runtime-loss-p) nil)
+          (getf updated-target :detached-runtime-loss-p) nil
+          (getf updated-target :bridge-session-id) (or (getf result :bridge-session-id)
+                                                       (getf updated-target :bridge-session-id))
+          (getf updated-target :bridge-attached-p) (getf result :bridge-attached-p)
+          (getf updated-target :recovery-note) (or (getf result :recovery-note)
+                                                   (getf updated-target :recovery-note))
+          (getf updated-target :window-state) :closed)
     (setf (getf updated-handle :status) (getf result :status))
     (setf (getf updated-handle :target)
           (kernel-plist-put (copy-list (getf handle :target))
@@ -788,6 +1327,36 @@
                   :loss-acknowledged-p t
                   :loss-acknowledged-at now
                   :recovery-note note))))
+
+(defun compatibility-execution-relaunch-arguments (handle)
+  (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+         (app-id (getf compatibility-target :app-id))
+         (definition (and app-id
+                          (find-compatibility-app app-id)))
+         (stored-argv (copy-list (or (getf compatibility-target :argv) '()))))
+    (unless definition
+      (error "Compatibility execution ~A cannot be relaunched because its manifest is unavailable."
+             (execution-handle-execution-id handle)))
+    (let ((prefix (append (list (compatibility-app-definition-executable definition))
+                          (copy-list (compatibility-app-definition-default-arguments definition)))))
+      (if (and (<= (length prefix) (length stored-argv))
+               (equal prefix (subseq stored-argv 0 (length prefix))))
+          (subseq stored-argv (length prefix))
+          stored-argv))))
+
+(defun compatibility-execution-mark-relaunched (handle environment new-execution-id)
+  (let* ((compatibility-target (copy-list (execution-handle-target-value handle :compatibility-execution)))
+         (updated-handle (copy-list handle))
+         (now (get-universal-time)))
+    (setf (getf compatibility-target :last-control-action) :relaunch
+          (getf compatibility-target :last-control-at) now
+          (getf compatibility-target :relaunch-execution-id) new-execution-id)
+    (setf (getf updated-handle :target)
+          (kernel-plist-put (copy-list (getf handle :target))
+                            :compatibility-execution
+                            compatibility-target))
+    (store-kernel-execution-handle updated-handle environment)
+    updated-handle))
 
 (defun authority-grant-kernel-execution-p (handle)
   (string= (kernel-capability-name (getf handle :capability))
@@ -884,18 +1453,40 @@
                                                                                     work-item-id
                                                                                     :status (or status :passed))))
              ((and compatibility-target
-                   (member action '(:stop :pause :revoke :acknowledge-loss) :test #'eq))
+                   (member action '(:stop :pause :revoke :acknowledge-loss :relaunch) :test #'eq))
               (unless (compatibility-execution-control-ready-p handle action)
                 (error "Kernel control ~A for compatibility execution ~A is not available: ~A"
                        action
                        execution-id
                        (getf (compatibility-execution-control-posture handle) :blocked-reason)))
               (multiple-value-bind (updated-handle compatibility-result)
-                  (if (eq action :acknowledge-loss)
-                      (compatibility-execution-acknowledge-loss handle
-                                                                active-environment
-                                                                :note note)
-                      (compatibility-execution-apply-control handle action active-environment))
+                  (cond
+                    ((eq action :acknowledge-loss)
+                     (compatibility-execution-acknowledge-loss handle
+                                                               active-environment
+                                                               :note note))
+                    ((eq action :relaunch)
+                     (let* ((compatibility-target (execution-handle-target-value handle :compatibility-execution))
+                            (app-id (or (getf compatibility-target :app-id)
+                                        (error "Compatibility execution ~A has no app manifest id to relaunch."
+                                               execution-id)))
+                            (arguments (compatibility-execution-relaunch-arguments handle))
+                            (relaunch-response
+                              (command-invoke-compatibility-app-service session
+                                                                        app-id
+                                                                        (list :arguments arguments)))
+                            (new-execution-id (getf (service-response-metadata relaunch-response)
+                                                    :execution-id))
+                            (new-handle (ensure-kernel-handle new-execution-id active-environment)))
+                       (compatibility-execution-mark-relaunched handle active-environment new-execution-id)
+                       (values new-handle
+                               (list :status :accepted
+                                     :compatibility-action :relaunch
+                                     :previous-execution-id execution-id
+                                     :new-execution-id new-execution-id
+                                     :app-id app-id))))
+                    (t
+                     (compatibility-execution-apply-control handle action active-environment)))
                 (setf resolved-handle updated-handle)
                 (list :compatibility-action action
                       :status :accepted
@@ -907,10 +1498,19 @@
                                                                                  :reason reason)))
              (t
               (error "Unsupported kernel control action ~A for ~A" action execution-id))))
-         (post-state (kernel-control-post-state session resolved-handle)))
+         (recorded-handle (progn
+                            (setf resolved-handle
+                                  (kernel-record-control-event resolved-handle
+                                                               action
+                                                               :status (getf resolved-handle :status)
+                                                               :reason reason
+                                                               :note note
+                                                               :result (getf result :status)))
+                            (store-kernel-execution-handle resolved-handle active-environment)))
+         (post-state (kernel-control-post-state session recorded-handle)))
     (make-service-command-response :kernel
                                    :control
-                                   (list :execution resolved-handle
+                                   (list :execution recorded-handle
                                          :action action
                                          :result result
                                          :post-state post-state
@@ -919,12 +1519,12 @@
                                                                     :command-model :kernel-control-v1
                                                                     :session session
                                                                     :environment active-environment
-                                                                    :policy-id (execution-handle-target-value resolved-handle :policy-id)
-                                                                    :thread-id (execution-handle-target-value resolved-handle :thread-id)
-                                                                    :turn-id (execution-handle-target-value resolved-handle :turn-id)
-                                                                    :work-item-id (execution-handle-target-value resolved-handle :work-item-id)
-                                                                    :incident-id (execution-handle-target-value resolved-handle :incident-id)
-                                                                    :runtime-id (execution-handle-target-value resolved-handle :runtime-id)))))
+                                                                    :policy-id (execution-handle-target-value recorded-handle :policy-id)
+                                                                    :thread-id (execution-handle-target-value recorded-handle :thread-id)
+                                                                    :turn-id (execution-handle-target-value recorded-handle :turn-id)
+                                                                    :work-item-id (execution-handle-target-value recorded-handle :work-item-id)
+                                                                    :incident-id (execution-handle-target-value recorded-handle :incident-id)
+                                                                    :runtime-id (execution-handle-target-value recorded-handle :runtime-id)))))
 
 (defun kernel-invoke (session intention capability &key authority context constraints provider options payload environment)
   (service-response-data

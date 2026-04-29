@@ -169,6 +169,13 @@
               (format stream "\"~A\":" (json-escape-string (keyword->json-key key)))
               (json-write-value val stream))
      (write-char #\} stream))
+    ((vectorp value)
+     (write-char #\[ stream)
+     (loop for index from 0 below (length value)
+           for first = t then nil
+           do (unless first (write-char #\, stream))
+              (json-write-value (aref value index) stream))
+     (write-char #\] stream))
     ((listp value)
      (write-char #\[ stream)
      (loop for item in value

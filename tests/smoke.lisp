@@ -9820,7 +9820,8 @@ fi
 (defun turn-resume-runtime-reload-turn-evidence-test ()
   (let* ((provider (make-instance 'runtime-reload-action-provider))
          (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
-         (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
+         (path (namestring (merge-pathnames #P"tmp/conversation-reload-target.lisp"
+                                           (uiop:ensure-directory-pathname (current-workspace-root))))))
     (ensure-directories-exist path)
     (with-open-file (stream path
                             :direction :output
@@ -9927,7 +9928,8 @@ fi
 (defun mutation-review-cold-validation-test ()
   (let* ((provider (make-instance 'runtime-reload-action-provider))
          (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
-         (path "/Volumes/data/development/sbcl-agent/tmp/conversation-reload-target.lisp"))
+         (path (namestring (merge-pathnames #P"tmp/conversation-reload-target.lisp"
+                                           (uiop:ensure-directory-pathname (current-workspace-root))))))
     (ensure-directories-exist path)
     (with-open-file (stream path
                             :direction :output

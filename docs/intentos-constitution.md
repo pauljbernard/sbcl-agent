@@ -34,6 +34,7 @@ That means:
 - governed execution remains the primary semantic primitive
 - compatibility layers remain subordinate to the native runtime model
 - UX remains a shell over inspectable system objects, not a generic app shell
+- the operating environment may act proactively, but only through governed, inspectable execution
 
 ## Constitutional Rules
 
@@ -52,6 +53,27 @@ Every meaningful system action must be representable as a governed execution wit
 Kernel logic, governance, execution records, lifecycle state, trace, and policy remain owned by the SBCL image substrate.
 
 Foreign runtimes may be hosted, but they do not become independent system authorities.
+
+### 2A. IntentOS is proactive, not merely reactive
+
+Traditional operating systems largely wait for explicit user commands and then react.
+
+IntentOS may also:
+
+- observe continuously
+- prepare continuations
+- stage next actions
+- recommend interventions
+- initiate governed recovery or resumption
+
+But proactivity is only constitutional when it remains:
+
+- policy-bounded
+- attributable
+- inspectable
+- interruptible
+- trace-producing
+- authority-limited
 
 ### 3. No bypass paths
 
@@ -81,6 +103,21 @@ They may execute outside SBCL physically, but they remain governed by SBCL seman
 This is both a UX invariant and a system invariant.
 
 If the user can see it, the system must be able to identify it as an object with inspectable state.
+
+### 6A. Every proactive move must also be inspectable
+
+Proactive system behavior cannot hide in background convenience.
+
+If the system:
+
+- recommends
+- stages
+- resumes
+- monitors
+- recovers
+- intervenes
+
+then that behavior must appear as a governed system object or execution with visible rationale and control posture.
 
 ### 7. Current state and target state must both be documented honestly
 

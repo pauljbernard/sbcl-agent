@@ -166,6 +166,10 @@ The historical transition is easiest to understand if you look at the older base
     <div class="card-title">UX Design System</div>
     <p>The structural UX model for evolving sbcl-agent-ux from an application interface into a shell over governed executions.</p>
   </a>
+  <a class="card" href="https://pauljbernard.github.io/sbcl-agent/desktop-windowing-implementation-plan.html">
+    <div class="card-title">Desktop Windowing Plan</div>
+    <p>The concrete implementation plan for moving from shell framing into a real multitasking desktop with governed windows and concurrent live surfaces.</p>
+  </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/ux-style-guide.html">
     <div class="card-title">UX Style Guide</div>
     <p>The visual and interaction style rules that should reinforce inspectability, governance, and execution-centered interaction.</p>

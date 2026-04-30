@@ -66,6 +66,20 @@ Specify:
 - what approvals or checkpoints apply
 - what evidence and trace are required
 
+### 6A. Proactive Authority Model
+
+If the feature can observe, recommend, stage, resume, recover, or act proactively, specify:
+
+- what level of proactive behavior is allowed:
+  - observe
+  - suggest
+  - stage
+  - request approval
+  - act within existing authority
+- what object or execution represents that proactive behavior
+- how the operator can inspect, interrupt, defer, or deny it
+- what evidence and rationale it must surface
+
 ### 7. UX Surface Model
 
 Specify:
@@ -74,6 +88,7 @@ Specify:
 - what surface it belongs to
 - what object the inspector should show
 - how the user understands status and intervention
+- how proactive posture is exposed without hiding it as silent automation
 
 ### 8. Compatibility Impact
 
@@ -104,6 +119,7 @@ Every feature spec should answer:
 3. Does this improve inspectability and control, or weaken them?
 4. Does this reinforce the shell as a system shell?
 5. Does this preserve the SBCL image substrate as the native authority?
+6. If this feature is proactive, is that proactivity governed, attributable, and interruptible?
 
 ## Disallowed Spec Patterns
 

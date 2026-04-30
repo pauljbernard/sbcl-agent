@@ -89,7 +89,20 @@ Requirements:
 - the operator can see what is conversational, what is governed, what is blocked, and what is mutating
 - every visible element must be inspectable
 
-## R7. Platform Requirements
+## R7. Proactivity Requirements
+
+The operating environment must be able to act proactively without becoming opaque or self-authorizing.
+
+Requirements:
+
+- proactive behavior must be modeled as governed execution or governed system state
+- the system may observe, recommend, stage, request approval, resume, and recover proactively
+- proactive behavior must declare its authority level explicitly
+- proactive behavior must remain visible in the shell as attention, recommendation, staged continuation, monitor, or recovery posture
+- the operator must be able to inspect, interrupt, approve, deny, or defer proactive behavior where appropriate
+- proactive behavior must produce evidence and trace, not only user-facing convenience
+
+## R8. Platform Requirements
 
 The system must grow into a platform, not just a codebase.
 
@@ -101,7 +114,7 @@ Requirements:
 - update and distribution boundaries are defined
 - external capability authors can reason about the system without private architectural knowledge
 
-## R8. Documentation Requirements
+## R9. Documentation Requirements
 
 Documentation must remain architecture-bearing.
 
@@ -111,7 +124,7 @@ Requirements:
 - constitution, requirements, UX system, journeys, and validation strategy stay consistent
 - documentation distinguishes current truth from planned truth
 
-## R9. Validation Requirements
+## R10. Validation Requirements
 
 Validation must prove the architecture, not just feature behavior.
 
@@ -120,6 +133,7 @@ Requirements:
 - test suites must be traceable to kernel and UX invariants
 - validation must cover current-state integrity during transition
 - validation must expand as kernel, shell, and compatibility layers mature
+- validation must prove that proactive behaviors remain governed, attributable, and interruptible
 
 ## Acceptance Discipline
 

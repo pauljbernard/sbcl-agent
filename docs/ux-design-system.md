@@ -108,6 +108,9 @@ Target:
 - the shell opens into a workspace of governed executions
 - execution surfaces become first-class
 - the inspector becomes universal rather than local
+- real desktop windowing replaces single-canvas dominance for primary residents
+
+The concrete implementation sequence for that transition is captured in [IntentOS Desktop Windowing Plan](https://pauljbernard.github.io/sbcl-agent/desktop-windowing-implementation-plan.html).
 
 ## Design Review Questions
 

@@ -16,14 +16,13 @@
         </div>
         <nav class="top-nav" aria-label="Top navigation">
           <a href="{{ '/' | relative_url }}"{% if page.url == '/' %} aria-current="page"{% endif %}>Home</a>
+          <a href="{{ '/getting-started.html' | relative_url }}"{% if page.url == '/getting-started.html' %} aria-current="page"{% endif %}>Start</a>
+          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>Use</a>
           <a href="{{ '/problem.html' | relative_url }}"{% if page.url == '/problem.html' %} aria-current="page"{% endif %}>Problem</a>
           <a href="{{ '/foundation.html' | relative_url }}"{% if page.url == '/foundation.html' %} aria-current="page"{% endif %}>Foundation</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture</a>
-          <a href="{{ '/getting-started.html' | relative_url }}"{% if page.url == '/getting-started.html' %} aria-current="page"{% endif %}>Start</a>
-          <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>Operator</a>
           <a href="{{ '/safety-and-risk.html' | relative_url }}"{% if page.url == '/safety-and-risk.html' %} aria-current="page"{% endif %}>Safety</a>
-          <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' or page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Vision</a>
-          <a href="{{ '/implementation-plan.html' | relative_url }}"{% if page.url == '/implementation-plan.html' %} aria-current="page"{% endif %}>Plan</a>
+          <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' or page.url == '/roadmap/environment-model.html' %} aria-current="page"{% endif %}>Roadmap</a>
         </nav>
       </header>
 
@@ -42,8 +41,8 @@
           <a href="{{ '/documentation-principles.html' | relative_url }}"{% if page.url == '/documentation-principles.html' %} aria-current="page"{% endif %}>Documentation Principles</a>
           <p class="sidebar-label">Use It</p>
           <a href="{{ '/getting-started.html' | relative_url }}"{% if page.url == '/getting-started.html' %} aria-current="page"{% endif %}>Getting Started</a>
-          <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
           <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
+          <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
           <a href="{{ '/conversation-architecture.html' | relative_url }}"{% if page.url == '/conversation-architecture.html' %} aria-current="page"{% endif %}>Conversation Runtime</a>
           <a href="{{ '/streaming-event-model.html' | relative_url }}"{% if page.url == '/streaming-event-model.html' %} aria-current="page"{% endif %}>Streaming Event Model</a>
           <p class="sidebar-label">Roadmap</p>

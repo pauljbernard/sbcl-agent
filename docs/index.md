@@ -10,11 +10,26 @@ description: Documentation landing page for sbcl-agent.
 
 <div class="callout"><strong>Current status:</strong> sbcl-agent now has the accepted IntentOS target architecture in code: an SBCL-native execution kernel with <code>invoke</code>, <code>inspect</code>, and <code>control</code>; governed execution handles and execution surfaces; a compatibility kernel with Linux app manifests, lifecycle, and display bridging; a shell/desktop host contract; and a real developer-platform package layer. The current program is now enhancement, hardening, and backend evolution rather than target-architecture gap closure.</div>
 
+## Start Here
+
+If you are new to the project, do not start with the roadmap.
+
+Use this order instead:
+
+1. [The Problem](https://pauljbernard.github.io/sbcl-agent/problem.html)
+2. [Foundation](https://pauljbernard.github.io/sbcl-agent/foundation.html)
+3. [Getting Started](https://pauljbernard.github.io/sbcl-agent/getting-started.html)
+4. [User Guide](https://pauljbernard.github.io/sbcl-agent/user-guide.html)
+5. [Architecture](https://pauljbernard.github.io/sbcl-agent/architecture.html)
+
+If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
+
 <div class="quick-links">
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/problem.html"><strong>The Problem</strong>Understand why the old model worked, why it now constrains understanding, and why this project exists.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/getting-started.html"><strong>Getting Started</strong>Run the shell, create a thread, and execute a first turn.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/user-guide.html"><strong>User Guide</strong>Use the actual operator surface: CLI commands, shell commands, conversation flow, approvals, and incident inspection.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/application-domains.html"><strong>Application Domains</strong>See where governed, runtime-aware causality becomes necessary rather than optional.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/foundation.html"><strong>Foundation</strong>Learn the three-truth model and the environment-first framing.</a>
-  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/getting-started.html"><strong>Getting Started</strong>Run the shell, create a thread, and execute a first turn.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/architecture.html"><strong>Architecture</strong>Map the conceptual model onto the code that exists today.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html"><strong>Safety and Risk</strong>Read the system's strengths, weaknesses, and governance model directly.</a>
 </div>
@@ -35,6 +50,16 @@ If you are new to the project, read in this order:
 
 Then use the roadmap and transition documents as enhancement and evolution context rather than as explanations of still-missing core architecture.
 
+## Use It Now
+
+If your goal is not architectural orientation but immediate use, go directly to:
+
+- [Getting Started](https://pauljbernard.github.io/sbcl-agent/getting-started.html)
+- [User Guide](https://pauljbernard.github.io/sbcl-agent/user-guide.html)
+- [Conversation Runtime](https://pauljbernard.github.io/sbcl-agent/conversation-architecture.html)
+- [Streaming Event Model](https://pauljbernard.github.io/sbcl-agent/streaming-event-model.html)
+- [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html)
+
 ## Historical Baseline And Current Target
 
 The historical transition is easiest to understand if you look at the older baseline diagram next to the accepted target architecture that now describes the implemented system:
@@ -54,6 +79,18 @@ The historical transition is easiest to understand if you look at the older base
     <img src="https://pauljbernard.github.io/sbcl-agent/assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram" style="display: block; width: 100%; height: auto;">
   </a>
 </div>
+
+## Deeper Reference And Archive
+
+The remainder of this front door is reference-heavy material:
+
+- historical transition context
+- architecture and subsystem references
+- roadmap and implementation plans
+- validation and journey analysis
+- Common Lisp runtime/reference material
+
+That material is useful, but it should normally come after you understand the basic operating model and the current user surface.
 
 ## Documentation Layers
 

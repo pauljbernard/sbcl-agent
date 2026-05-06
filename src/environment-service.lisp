@@ -1,5 +1,45 @@
 (in-package #:sbcl-agent)
 
+(defparameter +environment-desktop-preferences-key+ :desktop-preferences)
+
+(defparameter +desktop-preferences-legacy-key-map+
+  '((:THEMEPREFERENCE . :THEME-PREFERENCE)
+    (:DESKTOPSURFACEVIEW . :DESKTOP-SURFACE-VIEW)
+    (:TOOLTIPSCALEPERCENT . :TOOLTIP-SCALE-PERCENT)
+    (:CONTROLICONSCALEPERCENT . :CONTROL-ICON-SCALE-PERCENT)
+    (:DOCKICONSCALEPERCENT . :DOCK-ICON-SCALE-PERCENT)
+    (:CONVERSATIONTEXTSCALEPERCENT . :CONVERSATION-TEXT-SCALE-PERCENT)
+    (:LISPCODEVIEW . :LISP-CODE-VIEW)
+    (:PARENDEPTHCOLORS . :PAREN-DEPTH-COLORS)
+    (:LASTWORKSPACE . :LAST-WORKSPACE)
+    (:SIDEBARPINNED . :SIDEBAR-PINNED)
+    (:SIDEBARWIDTH . :SIDEBAR-WIDTH)
+    (:SIDEBARACTIVEPANELID . :SIDEBAR-ACTIVE-PANEL-ID)
+    (:SIDEBARDOCKEDPANELIDS . :SIDEBAR-DOCKED-PANEL-IDS)
+    (:CANVASPINNED . :CANVAS-PINNED)
+    (:INSPECTORPINNED . :INSPECTOR-PINNED)
+    (:INSPECTORWIDTH . :INSPECTOR-WIDTH)
+    (:INSPECTORACTIVEPANELID . :INSPECTOR-ACTIVE-PANEL-ID)
+    (:INSPECTORDOCKEDPANELIDS . :INSPECTOR-DOCKED-PANEL-IDS)
+    (:CURRENTPROJECTID . :CURRENT-PROJECT-ID)
+    (:SELECTEDCONVERSATIONTHREADBYPROJECT . :SELECTED-CONVERSATION-THREAD-BY-PROJECT)
+    (:CONVERSATIONDRAFT . :CONVERSATION-DRAFT)
+    (:REPLSESSIONSBYPROJECT . :REPL-SESSIONS-BY-PROJECT)
+    (:CURRENTREPLSESSIONIDBYPROJECT . :CURRENT-REPL-SESSION-ID-BY-PROJECT)
+    (:EDITORBUFFERSBYPROJECT . :EDITOR-BUFFERS-BY-PROJECT)
+    (:SELECTEDEDITORBUFFERIDBYPROJECT . :SELECTED-EDITOR-BUFFER-ID-BY-PROJECT)
+    (:WORKSPACEPACKAGEBYPROJECT . :WORKSPACE-PACKAGE-BY-PROJECT)
+    (:WORKSPACEDRAFTBYPROJECT . :WORKSPACE-DRAFT-BY-PROJECT)
+    (:WORKSPACERESULTBYPROJECT . :WORKSPACE-RESULT-BY-PROJECT)
+    (:WORKSPACEHISTORYBYPROJECT . :WORKSPACE-HISTORY-BY-PROJECT)
+    (:RUNTIMESUMMARY . :RUNTIME-SUMMARY)
+    (:RUNTIMEID . :RUNTIME-ID)
+    (:BUFFERID . :BUFFER-ID)
+    (:PACKAGENAME . :PACKAGE-NAME)
+    (:DRAFTFORM . :DRAFT-FORM)
+    (:LASTSUMMARY . :LAST-SUMMARY)
+    (:BASELINEDRAFT . :BASELINE-DRAFT)))
+
 (defun environment-remove-metadata-key (plist key)
   (cond
     ((null plist) '())
@@ -23,6 +63,63 @@
     (when value
       (setf metadata (append metadata (list key value))))
     (setf (environment-metadata environment) metadata)))
+
+(defun canonical-desktop-preferences-key (key)
+  (or (cdr (assoc key +desktop-preferences-legacy-key-map+))
+      key))
+
+(defun desktop-preferences-property-list-p (value)
+  (and (listp value)
+       (evenp (length value))
+       (loop for tail on value by #'cddr
+             for key = (first tail)
+             always (keywordp key))))
+
+(defun canonicalize-desktop-preferences-value (value)
+  (cond
+    ((desktop-preferences-property-list-p value)
+     (let ((result '()))
+       (loop for tail on value by #'cddr
+             for key = (canonical-desktop-preferences-key (first tail))
+             for val = (canonicalize-desktop-preferences-value (second tail))
+             do (setf (getf result key) val))
+       result))
+    ((listp value)
+     (mapcar #'canonicalize-desktop-preferences-value value))
+    (t
+     value)))
+
+(defun environment-desktop-preferences (&optional environment)
+  (copy-tree
+   (canonicalize-desktop-preferences-value
+    (or (environment-metadata-value (ensure-environment environment)
+                                    +environment-desktop-preferences-key+)
+        '()))))
+
+(defun set-environment-desktop-preferences (environment preferences)
+  (set-environment-metadata-value (ensure-environment environment)
+                                  +environment-desktop-preferences-key+
+                                  (copy-tree
+                                   (canonicalize-desktop-preferences-value preferences))))
+
+(defun query-environment-desktop-preferences-service (&optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (make-service-query-response :environment
+                                 :desktop-preferences
+                                 (environment-desktop-preferences active-environment)
+                                 :metadata (make-service-metadata :authority :environment
+                                                                  :read-model :environment-desktop-preferences-v1
+                                                                  :environment active-environment))))
+
+(defun command-environment-set-desktop-preferences-service (preferences &optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (set-environment-desktop-preferences active-environment preferences)
+    (make-service-command-response :environment
+                                   :set-desktop-preferences
+                                   (environment-desktop-preferences active-environment)
+                                   :metadata (make-service-metadata :authority :environment
+                                                                    :command-model :environment-desktop-preferences-v1
+                                                                    :environment active-environment))))
 
 (defun normalize-provider-profile-name (name)
   (or (normalize-config-string name) "default"))
@@ -587,11 +684,16 @@
                                                                     :command-model :environment-provider-routing-command-v1
                                                                     :environment active-environment))))
 
-(defun query-environment-summary-service (&optional environment)
+(defun query-environment-summary-service (&optional environment
+                                            &key
+                                              (include-alignment-state-p t)
+                                              (include-reconciliation-decision-p t))
   (let ((active-environment (ensure-environment environment)))
     (make-service-query-response :environment
                                  :summary
-                                 (environment-summary active-environment)
+                                 (environment-summary active-environment
+                                                      :include-alignment-state-p include-alignment-state-p
+                                                      :include-reconciliation-decision-p include-reconciliation-decision-p)
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :environment-summary-v1
                                                                   :environment active-environment))))
@@ -637,7 +739,9 @@
                             :object-kind "work-item"
                             :work-item-id work-item-id
                             :primary-execution-handle (first handles)))))
-    (compact-execution-surface-summary surface)))
+    (append (compact-execution-surface-summary surface)
+            (when work-item
+              (list :corrective-context (work-item-corrective-context work-item))))))
 
 (defun compact-work-item-surfaces-data (session summaries filter &optional environment)
   (let* ((items (mapcar (lambda (summary)
@@ -649,10 +753,15 @@
           :items items
           :filter filter)))
 
-(defun query-environment-status-service (&optional environment)
+(defun query-environment-status-service (&optional environment
+                                           &key
+                                             (include-alignment-state-p t)
+                                             (include-reconciliation-decision-p t))
   (let* ((active-environment (ensure-environment environment))
          (session (environment-session active-environment))
-         (base-status (environment-status active-environment))
+         (base-status (environment-status active-environment
+                                          :include-alignment-state-p include-alignment-state-p
+                                          :include-reconciliation-decision-p include-reconciliation-decision-p))
          (execution-surfaces (and session
                                   (service-response-data
                                    (query-execution-surfaces-service

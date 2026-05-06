@@ -74,13 +74,17 @@
   (eq (provider-event-effective-type event) :text-complete))
 
 (defun provider-summary-content (content &key (limit 240))
-  (cond
-    ((stringp content)
-     (if (> (length content) limit)
-         (concatenate 'string (subseq content 0 limit) "...")
-         content))
-    (t
-     content)))
+  (labels ((truncate-string (text)
+             (if (> (length text) limit)
+                 (concatenate 'string (subseq text 0 limit) "...")
+                 text)))
+    (cond
+      ((stringp content)
+       (truncate-string content))
+      ((null content)
+       "")
+      (t
+       content))))
 
 (defun provider-transcript-entry (entry)
   (list :role (getf entry :role)
@@ -166,15 +170,45 @@
           (> (length value) 0)
           (char= (char value 0) #\:))
      (intern (string-upcase (subseq value 1)) :keyword))
-    ((and (listp value) (every #'consp value))
+    ((json-object-p value)
      (json-object->keyword-plist value))
     ((listp value)
      (mapcar #'normalize-json-derived-value value))
     (t
      value)))
 
+(defun json-object-p (value)
+  (and (listp value)
+       (every (lambda (entry)
+                (and (consp entry)
+                     (stringp (car entry))))
+              value)))
+
+(defun camel-json-key->hyphenated-string (key)
+  (with-output-to-string (stream)
+    (loop for index from 0 below (length key)
+          for char = (char key index)
+          for previous = (and (> index 0) (char key (1- index)))
+          for next = (and (< (1+ index) (length key)) (char key (1+ index)))
+          do (cond
+               ((char= char #\_)
+                (write-char #\- stream))
+               ((and (upper-case-p char)
+                     (> index 0)
+                     (or (and previous
+                              (or (lower-case-p previous)
+                                  (digit-char-p previous)))
+                         (and previous
+                              next
+                              (upper-case-p previous)
+                              (lower-case-p next))))
+                (write-char #\- stream)
+                (write-char char stream))
+               (t
+                (write-char char stream))))))
+
 (defun json-key->keyword (key)
-  (intern (string-upcase (substitute #\- #\_ key)) :keyword))
+  (intern (string-upcase (camel-json-key->hyphenated-string key)) :keyword))
 
 (defun json-object->keyword-plist (object)
   (loop for (key . value) in object
@@ -185,7 +219,7 @@
   (let ((payload (json-object-value object "payload")))
     (make-assistant-action
      :type (normalize-action-type (json-object-value object "type"))
-     :payload (if (and (listp payload) (every #'consp payload))
+     :payload (if (json-object-p payload)
                   (json-object->keyword-plist payload)
                   (normalize-json-derived-value payload)))))
 

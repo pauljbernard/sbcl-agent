@@ -123,6 +123,153 @@
                    :payload '(:tool-id :git/add :arguments (:paths ("README.md")))))
    :metadata '(:provider :git-write-action-test)))
 
+(defclass project-create-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider project-create-action-provider))
+  "project-create-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider project-create-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider project-create-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Prepared a governed project creation action that requires approval."
+   :actions
+   (list
+    (sbcl-agent::make-assistant-action
+     :type :tool
+     :payload
+     '(:tool-id :project/create
+       :arguments
+       (:title "Agent Governed Project"
+        :summary "Created through a governed conversation tool action."
+        :constitution (:purpose "Deliver an end-to-end governed SDLC loop."
+                       :principles ("traceability" "quality gates" "operational evidence"))
+        :requirements ((:id "req-agent-governance"
+                        :title "Capture governed requirements"
+                        :summary "Project requirements must persist through the project record."
+                        :kind "functional"
+                        :priority "high"
+                        :status "proposed"
+                        :verification-kind "acceptance-test")
+                       (:id "nfr-agent-latency"
+                        :title "Maintain responsive governed tooling"
+                        :summary "Authoring flows should stay operationally responsive."
+                        :kind "constraint"
+                        :priority "medium"
+                        :status "proposed"
+                        :verification-kind "performance"
+                        :non-functional-p t))
+        :feature-specifications ((:id "spec-thread-authoring"
+                                  :title "Thread-driven project authoring"
+                                  :summary "Conversation threads can create governed project artifacts."
+                                  :status "draft"
+                                  :acceptance-criteria ("Create a project from a conversation."
+                                                        "Persist requirements and architecture.")
+                                  :linked-requirement-ids ("req-agent-governance")))
+        :design-system (:surface "projects" :density "high")
+        :style-guide (:tone "direct" :formatting ("dense"))
+        :user-journeys ((:id "journey-project-authoring"
+                         :title "Author project governance through the thread"
+                         :summary "An operator directs the agent to establish project governance."
+                         :actors ("operator" "agent")
+                         :steps ("Create the project."
+                                 "Persist requirements."
+                                 "Attach architecture evidence.")
+                         :outcomes ("Governed project record available to the shell.")))
+        :architecture-decisions ((:id "adr-thread-authoring"
+                                  :title "Route project authoring through governed tools"
+                                  :status "accepted"
+                                  :summary "Project artifact creation must use governed tool execution."
+                                  :drivers ("traceability" "agent parity")
+                                  :linked-requirement-ids ("req-agent-governance")))
+        :source-roots ("/tmp/agent-governed-project/src")
+        :metadata (:origin "conversation-tooling-test")))))
+   :metadata '(:provider :project-create-action-test)))
+
+(defclass project-augment-action-provider (sbcl-agent::provider)
+  ((requirement-id :initarg :requirement-id :reader project-augment-requirement-id)))
+
+(defmethod sbcl-agent::provider-name ((provider project-augment-action-provider))
+  "project-augment-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider project-augment-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider project-augment-action-provider) request)
+  (declare (ignore request))
+  (let ((requirement-id (project-augment-requirement-id provider)))
+    (sbcl-agent::make-assistant-response
+     :message "Prepared governed project authoring actions that require approval."
+     :actions
+     (list
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/set-design-system
+         :arguments (:design-system (:surface "projects" :mode "governed" :density "high"))))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/set-style-guide
+         :arguments (:style-guide (:tone "precise" :principles ("evidence-first" "minimal chrome")))))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       `(:tool-id :project/append-feature-specification
+         :arguments (:title "Conversation-managed authoring"
+                     :summary "The thread can expand governed project artifacts."
+                     :status "draft"
+                     :acceptance-criteria ("Append specification from the thread."
+                                           "Link the specification to requirements.")
+                     :linked-requirement-ids (,requirement-id))))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/append-user-journey
+         :arguments (:title "Iterate governance through a conversation"
+                     :summary "An operator steers design intent while the agent persists artifacts."
+                     :actors ("operator" "agent")
+                     :steps ("Review requirement." "Add specification." "Add quality gate.")
+                     :outcomes ("Project governance becomes operationally testable."))))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       `(:tool-id :project/append-architecture-decision
+         :arguments (:title "Use governed tool execution for project authoring"
+                     :summary "Project artifact mutations must remain approval-gated and traceable."
+                     :status "accepted"
+                     :drivers ("governance" "traceability")
+                     :linked-requirement-ids (,requirement-id))))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/append-source-root
+         :arguments (:source-root "/tmp/agent-governed-project/tests")))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/bind-testing-harness
+         :arguments (:harness-id "full-suite")))
+      (sbcl-agent::make-assistant-action
+       :type :tool
+       :payload
+       '(:tool-id :project/append-quality-gate
+         :arguments (:title "Governed delivery gate"
+                     :summary "Project completion requires traceable testing and source evidence."
+                     :status "active"
+                     :required-harness-ids ("full-suite")
+                     :require-source-roots-p t
+                     :required-trace-target-kinds ("feature-specification"
+                                                   "architecture-decision"
+                                                   "source-root"
+                                                   "testing-harness")
+                     :minimum-linked-work-items 0
+                     :maximum-failed-tests 0
+                     :require-recovery-ready-p t))))
+     :metadata '(:provider :project-augment-action-test))))
+
 (defclass runtime-reload-action-provider (sbcl-agent::provider) ())
 
 (defmethod sbcl-agent::provider-name ((provider runtime-reload-action-provider))

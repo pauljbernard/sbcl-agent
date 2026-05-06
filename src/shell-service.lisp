@@ -61,7 +61,8 @@
           :thread-id (getf surface :thread-id)
           :turn-id (getf surface :turn-id)
           :title (getf surface :title)
-          :status (getf surface :status))))
+          :status (getf surface :status)
+          :corrective-context (getf surface :corrective-context))))
 
 (defun compact-shell-governance-item (item)
   (when item
@@ -76,6 +77,7 @@
           :turn-id (getf item :turn-id)
           :title (getf item :title)
           :status (getf item :status)
+          :corrective-context (getf item :corrective-context)
           :surface (compact-execution-surface-summary
                     (getf item :surface)))))
 

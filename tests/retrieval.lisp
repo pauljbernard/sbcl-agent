@@ -34,6 +34,52 @@
     (assert-true (sbcl-agent::retrieval-intent-mutation-likely-p intent)
                  "code change intent should mark mutation likely")))
 
+(defun retrieval-intent-testing-feedback-test ()
+  (let* ((intent (sbcl-agent::classify-retrieval-intent
+                  "Run the tests, inspect coverage, and review the failing benchmarks."
+                  :operator-mode :conversation))
+         (domains (sbcl-agent::retrieval-intent-domains intent)))
+    (assert-equal :testing-feedback
+                  (sbcl-agent::retrieval-intent-category intent)
+                  "testing prompts should classify as testing feedback")
+    (assert-true (find :testing domains)
+                 "testing prompts should include the testing domain")
+    (assert-true (find :events domains)
+                 "testing prompts should include events for recent validation evidence")
+    (assert-true (sbcl-agent::retrieval-intent-testing-context-p intent)
+                 "testing prompts should request testing context")
+    (assert-true (search "testing" (string-downcase (sbcl-agent::retrieval-intent-explanation intent)))
+                 "testing intent should explain the classification")))
+
+(defun retrieval-intent-project-governance-test ()
+  (let* ((intent (sbcl-agent::classify-retrieval-intent
+                  "Review the project constitution, requirements, user journeys, and architecture decisions before selecting the technology stack."
+                  :operator-mode :conversation))
+         (domains (sbcl-agent::retrieval-intent-domains intent)))
+    (assert-equal :project-governance
+                  (sbcl-agent::retrieval-intent-category intent)
+                  "project-governance prompts should classify as project governance")
+    (assert-true (find :project domains)
+                 "project-governance prompts should include the project domain")
+    (assert-true (sbcl-agent::retrieval-intent-project-context-p intent)
+                 "project-governance prompts should request project context")
+    (assert-true (search "project governance"
+                         (string-downcase (sbcl-agent::retrieval-intent-explanation intent)))
+                 "project-governance intent should explain the classification")))
+
+(defun retrieval-intent-alignment-analysis-test ()
+  (let* ((intent (sbcl-agent::classify-retrieval-intent
+                  "Compare runtime behavior to the current intent, explain divergence, and reconcile the misalignment."
+                  :operator-mode :conversation))
+         (domains (sbcl-agent::retrieval-intent-domains intent)))
+    (assert-true (find :intent domains)
+                 "alignment prompts should include the durable intent domain")
+    (assert-true (sbcl-agent::retrieval-intent-intent-context-p intent)
+                 "alignment prompts should request durable intent context")
+    (assert-true (search "intent"
+                         (string-downcase (sbcl-agent::retrieval-intent-explanation intent)))
+                 "alignment intent should explain durable intent classification")))
+
 (defun retrieval-plan-compact-first-test ()
   (let* ((plan (sbcl-agent::build-retrieval-plan
                 "Summarize the current thread and explain the latest code."
@@ -207,6 +253,664 @@
                  "retrieval dossier service should return ranking metadata")
     (assert-true (listp (getf payload :environment-context))
                  "retrieval dossier service should return environment context")))
+
+(defun retrieval-dossier-testing-context-test ()
+  (let* ((session (make-test-session :cwd "/tmp/retrieval-testing-context/"))
+         (work-item (sbcl-agent::create-work-item session "Testing-linked work item" :transaction-scope :test))
+         (report-root (merge-pathnames #P"tmp/test-results/"
+                                       (uiop:ensure-directory-pathname
+                                        (uiop:getcwd))))
+         (coverage-root (merge-pathnames #P"tmp/coverage/"
+                                         (uiop:ensure-directory-pathname
+                                          (uiop:getcwd))))
+         (performance-root (merge-pathnames #P"tmp/performance/"
+                                            (uiop:ensure-directory-pathname
+                                             (uiop:getcwd))))
+         (report-path (merge-pathnames #P"latest-report.json" report-root))
+         (coverage-path (merge-pathnames #P"cover-index.html" coverage-root))
+         (performance-path (merge-pathnames #P"latest.sexp" performance-root)))
+    (ensure-directories-exist report-path)
+    (ensure-directories-exist coverage-path)
+    (ensure-directories-exist performance-path)
+    (with-open-file (stream report-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string
+       (sbcl-agent::emit-json
+        (sbcl-agent::platform-json-safe-value
+         '(:generatedAt 123456
+           :suiteId "sbcl-agent"
+           :summary (:total 2 :passed 1 :failed 1 :durationSeconds 1.25)
+           :results ((:name "workflow-record-test"
+                      :category :workflow-and-governance
+                      :status :failed
+                      :durationSeconds 0.6
+                      :error "workflow regression")
+                     (:name "runtime-smoke-test"
+                      :category :core-cli
+                      :status :passed
+                      :durationSeconds 0.65)))))
+       stream))
+    (with-open-file (stream coverage-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string "<html><body>coverage</body></html>" stream))
+    (with-open-file (stream performance-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (let ((*print-circle* t)
+            (*print-pretty* t))
+        (write '(:generated-at 123456
+                 :say-turn-latency (:avg-seconds 0.02 :min-seconds 0.01 :max-seconds 0.03 :count 3))
+               :stream stream)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (setf (sbcl-agent::work-item-status work-item) :awaiting-cold-validation)
+    (sbcl-agent::refresh-work-item-pending-validations session work-item)
+    (let* ((dossier (sbcl-agent::build-retrieval-dossier
+                     session
+                     "Run tests, inspect coverage, and review workflow regressions."
+                     :operator-mode :conversation))
+           (testing-context (sbcl-agent::retrieval-dossier-testing-context dossier)))
+      (assert-true (listp testing-context)
+                   "testing prompts should assemble testing context")
+      (assert-true (> (length (or (getf testing-context :harnesses) '())) 0)
+                   "testing context should expose harness inventory")
+      (assert-equal 1
+                    (length (or (getf testing-context :failures) '()))
+                    "testing context should surface recent failures")
+      (assert-true (getf (getf testing-context :coverage) :present-p)
+                   "testing context should surface coverage artifact presence")
+      (assert-true (listp (getf testing-context :performance))
+                   "testing context should surface performance evidence")
+      (assert-true (> (length (or (getf testing-context :linked-work-items) '())) 0)
+                   "testing context should correlate testing evidence back to linked work items"))))
+
+(defun retrieval-dossier-project-context-test ()
+  (let* ((session (make-test-session :cwd "/tmp/retrieval-project-context/"))
+         (work-item (sbcl-agent::create-work-item session "Testing Surface rollout" :transaction-scope :test))
+         (report-root (merge-pathnames #P"tmp/test-results/"
+                                       (uiop:ensure-directory-pathname
+                                        (uiop:getcwd))))
+         (coverage-root (merge-pathnames #P"tmp/coverage/"
+                                         (uiop:ensure-directory-pathname
+                                          (uiop:getcwd))))
+         (performance-root (merge-pathnames #P"tmp/performance/"
+                                            (uiop:ensure-directory-pathname
+                                             (uiop:getcwd))))
+         (report-path (merge-pathnames #P"latest-report.json" report-root))
+         (coverage-path (merge-pathnames #P"cover-index.html" coverage-root))
+         (performance-path (merge-pathnames #P"latest.sexp" performance-root))
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "Project Atlas"
+                   :summary "Project-governance retrieval test."))
+         (project-id (sbcl-agent::project-record-id project))
+         (incident (sbcl-agent::create-incident session
+                                                :runtime-eval-failure
+                                                "Testing Surface regression"
+                                                "Project evidence should bind back to incidents."
+                                                :work-item work-item))
+         (_constitution (sbcl-agent::command-project-constitution-service
+                         session
+                         '(:mission "Keep product, architecture, and execution aligned."
+                           :principles ("governance-first" "traceability"))
+                         :project-id project-id))
+         (_design-system (sbcl-agent::command-project-design-system-service
+                          session
+                          '(:tokens ("surface-accent" "state-warning")
+                            :components ("metric-tile" "workspace-rail"))
+                          :project-id project-id))
+         (_style-guide (sbcl-agent::command-project-style-guide-service
+                        session
+                        '(:voice "direct"
+                          :rules ("no marketing copy" "dense labels"))
+                        :project-id project-id))
+         (_requirement (sbcl-agent::command-project-requirement-service
+                        session
+                        :project-id project-id
+                        :id "req-project-1"
+                        :title "Traceable Requirements"
+                        :summary "Requirements must connect to work and tests."
+                        :scope :project
+                        :kind :functional
+                        :priority :high
+                        :status :accepted
+                        :verification-kind :test-suite))
+         (_nfr (sbcl-agent::command-project-requirement-service
+                session
+                :project-id project-id
+                :id "nfr-project-1"
+                :title "Governance Auditability"
+                :summary "Every change must be linked to evidence."
+                :scope :system
+                :kind :non-functional
+                :priority :high
+                :status :accepted
+                :verification-kind :replay
+                :non-functional-p t))
+         (_journey (sbcl-agent::command-project-user-journey-service
+                    session
+                    :project-id project-id
+                    :id "journey-project-1"
+                    :title "Trace a feature from spec to evidence"
+                    :summary "Move from intent to tests and runtime feedback."
+                    :actors '("operator" "agent")
+                    :entrypoints '("projects" "testing")
+                    :steps '("review requirements" "run tests" "inspect evidence")
+                    :outcomes '("feedback captured")
+                    :edge-cases '("flaky test suite")))
+         (_feature-spec (sbcl-agent::command-project-feature-spec-service
+                         session
+                         :project-id project-id
+                         :id "spec-project-1"
+                         :title "Testing Surface"
+                         :summary "Expose test suites, failures, and coverage."
+                         :status :planned
+                         :acceptance-criteria '("show suites" "show failures")
+                         :linked-requirement-ids '("req-project-1")
+                         :linked-journey-ids '("journey-project-1")))
+         (_adr (sbcl-agent::command-project-architecture-decision-service
+                session
+                :project-id project-id
+                :id "adr-project-1"
+                :title "Environment-first design"
+                :status :accepted
+                :summary "The environment remains the system of record."
+                :drivers '("traceability" "shared introspection")
+                :consequences '("strong environment model")
+                :stack-choices '("sbcl" "electron")
+                :linked-requirement-ids '("req-project-1")))
+         (_bound-work-item (sbcl-agent::command-project-bind-work-item-service
+                            session
+                            (sbcl-agent::work-item-id work-item)
+                            :project-id project-id))
+         (_bound-project (sbcl-agent::command-project-bind-incident-service
+                          session
+                          (sbcl-agent::incident-id incident)
+                          :project-id project-id))
+         (_bound-testing-one (sbcl-agent::command-project-bind-testing-harness-service
+                              session
+                              :full-suite
+                              :project-id project-id))
+         (_bound-testing-two (sbcl-agent::command-project-bind-testing-harness-service
+                              session
+                              :coverage
+                              :project-id project-id))
+         (_testing-artifacts
+           (progn
+             (ensure-directories-exist report-path)
+             (ensure-directories-exist coverage-path)
+             (ensure-directories-exist performance-path)
+             (with-open-file (stream report-path
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create)
+               (write-string
+                (sbcl-agent::emit-json
+                 (sbcl-agent::platform-json-safe-value
+                  '(:generatedAt 123456
+                    :suiteId "sbcl-agent"
+                    :summary (:total 2 :passed 2 :failed 0 :durationSeconds 1.25)
+                    :results ((:name "project-governance-smoke"
+                               :category :service-contracts
+                               :status :passed
+                               :durationSeconds 0.6)
+                              (:name "runtime-smoke-test"
+                               :category :core-cli
+                               :status :passed
+                               :durationSeconds 0.65)))))
+                stream))
+             (with-open-file (stream coverage-path
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create)
+               (write-string "<html><body>coverage</body></html>" stream))
+             (with-open-file (stream performance-path
+                                     :direction :output
+                                     :if-exists :supersede
+                                     :if-does-not-exist :create)
+               (let ((*print-circle* t)
+                     (*print-pretty* t))
+                 (write '(:generated-at 123456
+                          :say-turn-latency (:avg-seconds 0.02 :min-seconds 0.01 :max-seconds 0.03 :count 3)
+                          :environment-save-load (:save-seconds 0.03 :load-seconds 0.04 :total-seconds 0.07))
+                        :stream stream)))))
+         (_quality-gate (sbcl-agent::command-project-quality-gate-service
+                         session
+                         :project-id project-id
+                         :title "Spec To Evidence"
+                         :summary "Requirements, work, incidents, testing, and source roots must all be attached."
+                         :required-harness-ids '(:full-suite)
+                         :minimum-linked-work-items 1
+                         :minimum-linked-incidents 1
+                         :require-source-roots-p t
+                         :required-trace-target-kinds '(:requirement :work-item :incident :testing-harness)
+                         :maximum-failed-tests 0
+                         :require-coverage-p t
+                         :maximum-say-turn-latency-seconds 0.05
+                         :maximum-environment-save-load-seconds 0.10
+                         :require-recovery-ready-p t))
+         (_source-root-one (sbcl-agent::command-project-source-root-service
+                            session
+                            "/Volumes/data/development/sbcl-agent/"
+                            :project-id project-id))
+         (_source-root-two (sbcl-agent::command-project-source-root-service
+                            session
+                            "/Volumes/data/development/sbcl-agent-ux/"
+                            :project-id project-id))
+         (dossier (sbcl-agent::build-retrieval-dossier
+                   session
+                   "Review the project constitution, requirements, user journeys, and architecture decisions."
+                   :operator-mode :conversation))
+         (project-context (sbcl-agent::retrieval-dossier-project-context dossier))
+         (trace-context (sbcl-agent::retrieval-dossier-trace-context dossier)))
+    (declare (ignore project _constitution _design-system _style-guide _requirement _nfr
+                     _journey _feature-spec _adr _bound-work-item _bound-project
+                     _bound-testing-one _bound-testing-two _testing-artifacts _quality-gate
+                     _source-root-one _source-root-two))
+    (assert-true (listp project-context)
+                 "project-governance prompts should assemble project context")
+    (assert-true (listp trace-context)
+                 "project-governance prompts should assemble trace context")
+    (assert-equal "Project Atlas"
+                  (getf (getf project-context :summary) :title)
+                  "project context should expose the current project summary")
+    (assert-true (>= (length (or (getf project-context :requirements) '())) 1)
+                 "project context should expose project requirements")
+    (assert-equal 1
+                  (length (or (getf project-context :feature-specifications) '()))
+                  "project context should expose feature specifications")
+    (assert-equal 1
+                  (length (or (getf project-context :user-journeys) '()))
+                  "project context should expose user journeys")
+    (assert-equal 1
+                  (length (or (getf project-context :architecture-decisions) '()))
+                  "project context should expose architecture decisions")
+    (assert-true (listp (getf project-context :constitution))
+                 "project context should expose constitution data")
+    (assert-equal 1
+                  (length (or (getf project-context :linked-work-items) '()))
+                  "project context should expose linked work-item evidence")
+    (assert-equal 1
+                  (length (or (getf project-context :linked-incidents) '()))
+                  "project context should expose linked incident evidence")
+    (assert-equal 2
+                  (length (or (getf project-context :linked-testing-harnesses) '()))
+                  "project context should expose linked testing harnesses")
+    (assert-true (listp (getf project-context :testing-evidence))
+                 "project context should expose testing evidence posture")
+    (assert-true (listp (getf project-context :quality-gate-evidence))
+                 "project context should expose quality-gate posture")
+    (assert-true (listp (getf project-context :release-readiness))
+                 "project context should expose persisted release readiness records")
+    (assert-true (listp (getf project-context :readiness-obligations))
+                 "project context should expose persisted readiness obligations")
+    (assert-equal :ready
+                  (getf (getf (getf project-context :quality-gate-evidence) :quality-gate-summary) :readiness)
+                  "project context should expose ready quality-gate posture when linked evidence is present")
+    (assert-equal :ready
+                  (getf (getf project-context :readiness-summary) :status)
+                  "project context should expose ready project readiness posture when evidence, gates, and recovery are satisfied")
+    (assert-equal :not-started
+                  (getf (getf project-context :readiness-summary) :release-review-state)
+                  "project context should expose a not-started release workflow when no release record exists")
+    (assert-equal :candidate
+                  (getf (getf project-context :readiness-summary) :release-target-phase)
+                  "project context should expose candidate as the first release transition target when no release record exists")
+    (assert-equal :not-required
+                  (getf (getf project-context :readiness-summary) :release-signoff-state)
+                  "project context should expose explicit signoff progression state even before release readiness is defined")
+    (assert-true (listp (getf (getf project-context :readiness-summary) :release-required-approvers))
+                 "project context should expose derived release approver coverage state")
+    (assert-true (listp (getf (getf project-context :readiness-summary) :release-next-actions))
+                 "project context should expose derived release workflow next actions")
+    (assert-equal 0
+                  (getf (first (getf (getf project-context :quality-gate-evidence) :quality-gates))
+                        :maximum-failed-tests)
+                  "project context should expose bounded quality-gate threshold criteria")
+    (assert-true (> (getf (getf trace-context :project-neighborhood) :count) 0)
+                 "trace context should expose a project-centered neighborhood")
+    (assert-true (> (length (or (getf trace-context :work-item-neighborhoods) '())) 0)
+                 "trace context should expose linked work-item neighborhoods")
+    (assert-true (> (length (or (getf trace-context :incident-neighborhoods) '())) 0)
+                 "trace context should expose linked incident neighborhoods")))
+
+(defun retrieval-dossier-intent-context-test ()
+  (let* ((session (make-test-session :cwd "/tmp/retrieval-intent-context/"))
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "Alignment Anchor"
+                   :summary "Project linked to a durable intent record."))
+         (project-id (sbcl-agent::project-record-id project))
+         (intent (sbcl-agent::create-intent-record
+                  session
+                  :description "Keep runtime behavior aligned with the approved project contract."
+                  :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                           :systems ("sbcl-agent")
+                           :workflows ("alignment-loop"))
+                  :constraints '((:invariant "runtime-is-authoritative"))
+                  :expected-behaviors '("Compare observed runtime behavior to approved intent")
+                  :non-goals '("Hide reconciliation decisions")
+                  :priority :critical
+                  :linked-runtime-objects '("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                  :linked-source-artifacts '("/Volumes/data/development/sbcl-agent/src/execution-service.lisp")
+                  :linked-event-ids '("event-alignment-1")
+                  :linked-mutation-ids '("mutation-alignment-1")))
+         (_trace-project (sbcl-agent::create-trace-link
+                          session
+                          :relation :governs
+                          :source-kind :intent
+                          :source-id (sbcl-agent::intent-record-id intent)
+                          :target-kind :project
+                          :target-id project-id))
+         (_trace-runtime (sbcl-agent::create-trace-link
+                          session
+                          :relation :constrains
+                          :source-kind :intent
+                          :source-id (sbcl-agent::intent-record-id intent)
+                          :target-kind :runtime-object
+                          :target-id "SBCL-AGENT::RUN-CONVERSATION-TURN"))
+         (dossier (sbcl-agent::build-retrieval-dossier
+                   session
+                   "Compare runtime behavior to the current intent and explain any alignment divergence."
+                   :operator-mode :conversation))
+         (intent-context (sbcl-agent::retrieval-dossier-alignment-intent-context dossier))
+         (trace-context (sbcl-agent::retrieval-dossier-trace-context dossier)))
+    (declare (ignore _trace-project _trace-runtime))
+    (assert-true (listp intent-context)
+                 "alignment prompts should assemble durable intent context")
+    (assert-equal (sbcl-agent::intent-record-id intent)
+                  (getf intent-context :current-intent-id)
+                  "intent context should expose the selected durable intent id")
+    (assert-equal "Keep runtime behavior aligned with the approved project contract."
+                  (getf (getf intent-context :summary) :description)
+                  "intent context should expose the selected durable intent summary")
+    (assert-true (listp (getf intent-context :scope))
+                 "intent context should expose scope detail")
+    (assert-true (>= (length (or (getf intent-context :linked-runtime-objects) '())) 1)
+                 "intent context should expose linked runtime objects")
+    (assert-true (>= (length (or (getf intent-context :linked-source-artifacts) '())) 1)
+                 "intent context should expose linked source artifacts")
+    (assert-true (listp trace-context)
+                 "alignment prompts should assemble trace context when intent links exist")
+    (assert-true (> (getf (getf trace-context :intent-neighborhood) :count) 0)
+                 "trace context should expose an intent-centered neighborhood")))
+
+(defun alignment-context-packet-service-test ()
+  (let* ((session (make-test-session :cwd "/tmp/alignment-context-packet/"))
+         (thread (sbcl-agent::create-thread session :title "Alignment packet"))
+         (user-message (sbcl-agent::create-message session thread :user "check alignment"))
+         (turn (sbcl-agent::start-turn session thread user-message))
+         (operation (sbcl-agent::start-operation session
+                                                 thread
+                                                 turn
+                                                 :tool
+                                                 "alignment-check"
+                                                 '(:tool-id :session/summary)))
+         (linked-event (sbcl-agent::append-session-event
+                        session
+                        :alignment-signal
+                        '(:status :observed)
+                        :family :conversation
+                        :entity-id "alignment-signal-1"
+                        :thread-id (sbcl-agent::thread-id thread)
+                        :turn-id (sbcl-agent::turn-id turn)
+                        :operation-id (sbcl-agent::operation-id operation)))
+         (_completed (sbcl-agent::complete-operation
+                      session
+                      thread
+                      turn
+                      operation
+                      '(:status :ok)))
+         (intent (sbcl-agent::create-intent-record
+                  session
+                  :description "Continuously compare runtime behavior to the approved system intent."
+                  :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                           :systems ("sbcl-agent")
+                           :workflows ("alignment-loop"))
+                  :constraints '((:invariant "runtime-is-authoritative")
+                                 (:policy "governance-required"))
+                  :expected-behaviors '("Observe runtime changes" "Detect divergence")
+                  :non-goals '("Let the model mutate runtime directly")
+                  :priority :critical
+                  :linked-runtime-objects '("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                  :linked-source-artifacts '("/Volumes/data/development/sbcl-agent/src/execution-service.lisp")
+                  :linked-event-ids (list (sbcl-agent::event-id linked-event))
+                  :linked-mutation-ids (list (sbcl-agent::operation-id operation))))
+         (packet-response
+           (sbcl-agent::query-alignment-context-packet-service
+            session
+            "Compare runtime behavior to the current intent and summarize alignment risk."
+            :operator-mode :conversation))
+         (packet (sbcl-agent::service-response-data packet-response)))
+    (assert-equal :retrieval
+                  (getf packet-response :domain)
+                  "alignment context packet service should report the retrieval domain")
+    (assert-equal :alignment-context-packet
+                  (getf packet-response :operation)
+                  "alignment context packet service should identify the packet operation")
+    (assert-equal :alignment-context-packet-v1
+                  (getf (sbcl-agent::service-response-metadata packet-response) :read-model)
+                  "alignment context packet service should declare the packet read model")
+    (assert-equal (sbcl-agent::intent-record-id intent)
+                  (getf (getf packet :intent) :current-intent-id)
+                  "alignment context packet should expose the current durable intent")
+    (assert-true (listp (getf packet :agent))
+                 "alignment context packet should include agent/runtime identity")
+    (assert-true (listp (getf packet :runtime-scope))
+                 "alignment context packet should include runtime scope")
+    (assert-true (listp (getf packet :constraints))
+                 "alignment context packet should include active alignment constraints")
+    (assert-equal "runtime-is-authoritative"
+                  (getf (first (getf packet :constraints)) :invariant)
+                  "alignment context packet should preserve durable intent constraints")
+    (assert-true (listp (getf packet :relevant-events))
+                 "alignment context packet should include relevant events")
+    (assert-equal 1
+                  (length (getf (getf packet :relevant-events) :resolved-linked-events))
+                  "alignment context packet should resolve linked event ids into concrete event evidence")
+    (assert-equal 1
+                  (length (getf (getf packet :mutation-scope) :resolved-linked-mutations))
+                  "alignment context packet should resolve linked mutation ids into concrete operation evidence")
+    (assert-equal 1
+                  (getf (getf packet :linkage-state) :resolved-event-count)
+                  "alignment linkage state should report resolved linked events")
+    (assert-equal 1
+                  (getf (getf packet :linkage-state) :resolved-mutation-count)
+                  "alignment linkage state should report resolved linked mutations")
+    (assert-true (listp (getf packet :history))
+                 "alignment context packet should include history slices")
+    (assert-true (listp (getf packet :validation-state))
+                 "alignment context packet should include validation state")
+    (assert-true (listp (getf packet :alignment-gaps))
+                 "alignment context packet should include explicit alignment gaps even when empty")
+    (assert-true (not (find :missing-linked-event
+                            (getf packet :alignment-gaps)
+                            :key (lambda (entry) (and (listp entry) (getf entry :type)))))
+                 "alignment context packet should not report a missing linked event when the referenced event resolves")
+    (assert-true (not (find :missing-linked-mutation
+                            (getf packet :alignment-gaps)
+                            :key (lambda (entry) (and (listp entry) (getf entry :type)))))
+                 "alignment context packet should not report a missing linked mutation when the referenced operation resolves")))
+
+(defun alignment-state-service-test ()
+  (let* ((session (make-test-session :cwd "/tmp/alignment-state-service/"))
+         (thread (sbcl-agent::create-thread session :title "Alignment state"))
+         (user-message (sbcl-agent::create-message session thread :user "evaluate alignment"))
+         (turn (sbcl-agent::start-turn session thread user-message))
+         (operation (sbcl-agent::start-operation session
+                                                 thread
+                                                 turn
+                                                 :tool
+                                                 "alignment-check"
+                                                 '(:tool-id :session/summary)))
+         (linked-event (sbcl-agent::append-session-event
+                        session
+                        :alignment-signal
+                        '(:status :observed)
+                        :family :conversation
+                        :entity-id "alignment-signal-2"
+                        :thread-id (sbcl-agent::thread-id thread)
+                        :turn-id (sbcl-agent::turn-id turn)
+                        :operation-id (sbcl-agent::operation-id operation)))
+         (_completed (sbcl-agent::complete-operation
+                      session
+                      thread
+                      turn
+                      operation
+                      '(:status :ok)))
+         (_aligned-intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved system contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                     :systems ("sbcl-agent"))
+            :constraints '((:invariant "runtime-is-authoritative"))
+            :expected-behaviors '("Observe runtime changes" "Recompute alignment continuously")
+            :linked-runtime-objects '("SBCL-AGENT::RUN-CONVERSATION-TURN")
+            :linked-source-artifacts '("/Volumes/data/development/sbcl-agent/src/execution-service.lisp")
+            :linked-event-ids (list (sbcl-agent::event-id linked-event))
+            :linked-mutation-ids (list (sbcl-agent::operation-id operation))))
+         (aligned-response
+           (sbcl-agent::query-alignment-state-service
+            session
+            "Compare runtime behavior to the current intent and summarize alignment state."
+            :operator-mode :conversation))
+         (aligned-state (sbcl-agent::service-response-data aligned-response)))
+    (assert-equal :alignment
+                  (getf aligned-response :domain)
+                  "alignment state service should report the alignment domain")
+    (assert-equal :state
+                  (getf aligned-response :operation)
+                  "alignment state service should identify the state operation")
+    (assert-equal :alignment-state-v1
+                  (getf (sbcl-agent::service-response-metadata aligned-response) :read-model)
+                  "alignment state service should declare the alignment-state read model")
+    (assert-equal :aligned
+                  (getf aligned-state :status)
+                  "resolved evidence with a complete intent should yield an aligned state")
+    (assert-true (>= (getf aligned-state :score) 0.90)
+                 "resolved evidence should yield a high alignment score")
+    (assert-true (null (getf aligned-state :divergence-types))
+                 "aligned state should not project divergence types when no gaps are present"))
+  (let* ((session (make-test-session :cwd "/tmp/alignment-state-degraded/"))
+         (_degraded-intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Outdated intent with unresolved evidence references."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints nil
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids '("event-missing")
+            :linked-mutation-ids '("mutation-missing")))
+         (degraded-response
+           (sbcl-agent::query-alignment-state-service
+            session
+            "Compare runtime behavior to the current intent and summarize alignment state."
+            :operator-mode :conversation))
+         (degraded-state (sbcl-agent::service-response-data degraded-response)))
+    (assert-equal :alignment
+                  (getf degraded-response :domain)
+                  "degraded alignment state service should still report the alignment domain")
+    (assert-true (< (getf degraded-state :score) 0.90)
+                 "missing linked evidence and deprecated intent should lower the alignment score")
+    (assert-true (find :outdated-intent
+                       (getf degraded-state :divergence-types))
+                 "deprecated intent should surface outdated-intent divergence")
+    (assert-true (find :incomplete-specification
+                       (getf degraded-state :divergence-types))
+                 "missing constraints and expected behaviors should surface incomplete-specification divergence")
+    (assert-true (find :missing-capability
+                       (getf degraded-state :divergence-types))
+                 "missing linked mutations should surface missing-capability divergence")))
+
+(defun reconciliation-decision-service-test ()
+  (let* ((session (make-test-session :cwd "/tmp/reconciliation-decision-aligned/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with approved constraints."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:invariant "runtime-is-authoritative"))
+            :expected-behaviors '("Observe runtime changes" "Continue alignment monitoring")))
+         (response
+           (sbcl-agent::query-reconciliation-decision-service
+            session
+            "Recommend how the system should reconcile current alignment divergence."
+            :operator-mode :conversation))
+         (payload (sbcl-agent::service-response-data response)))
+    (assert-equal :alignment
+                  (getf response :domain)
+                  "reconciliation decision service should report the alignment domain")
+    (assert-equal :reconciliation-decision
+                  (getf response :operation)
+                  "reconciliation decision service should report the reconciliation-decision operation")
+    (assert-equal :reconciliation-decision-v1
+                  (getf (sbcl-agent::service-response-metadata response) :read-model)
+                  "reconciliation decision service should declare the reconciliation decision read model")
+    (assert-equal :maintain
+                  (getf payload :decision)
+                  "an aligned state should recommend maintaining the current posture")
+    (assert-true (not (getf payload :requires-approval-p))
+                 "maintain decisions should not require approval by default")
+    (assert-equal :observe
+                  (getf payload :approval-posture)
+                  "aligned maintain posture should remain observational")
+    (assert-true (find :monitor-alignment
+                       (getf payload :proposed-actions)
+                       :key (lambda (entry) (and (listp entry) (getf entry :kind))))
+                 "aligned reconciliation should still propose alignment monitoring"))
+  (let* ((session (make-test-session :cwd "/tmp/reconciliation-decision-coevolve/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Outdated and under-specified intent with missing capability evidence."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-mutation-ids '("mutation-missing")))
+         (project (sbcl-agent::create-project-record session :title "Readiness blocked"))
+         (project-id (sbcl-agent::project-record-id project))
+         (_quality-gate
+           (sbcl-agent::command-project-quality-gate-service
+            session
+            :project-id project-id
+            :title "Ship gate"
+            :minimum-linked-work-items 1))
+         (_selected
+           (sbcl-agent::select-project-record session project-id))
+         (response
+           (sbcl-agent::query-reconciliation-decision-service
+            session
+            "Explain the alignment divergence and decide whether runtime, intent, or both must change."
+            :operator-mode :conversation))
+         (payload (sbcl-agent::service-response-data response)))
+    (assert-equal :co-evolve
+                  (getf payload :decision)
+                  "mixed runtime and intent divergence should require co-evolution")
+    (assert-true (getf payload :requires-approval-p)
+                 "governed co-evolution should require approval")
+    (assert-equal :governed-review
+                  (getf payload :approval-posture)
+                  "governed co-evolution should project governed review posture")
+    (assert-true (find :revise-intent
+                       (getf payload :proposed-actions)
+                       :key (lambda (entry) (and (listp entry) (getf entry :kind))))
+                 "co-evolution should propose revising intent")
+    (assert-true (find :add-missing-capability
+                       (getf payload :proposed-actions)
+                       :key (lambda (entry) (and (listp entry) (getf entry :kind))))
+                 "co-evolution should propose filling missing capability evidence")
+    (assert-true (listp (getf payload :trigger-events))
+                 "reconciliation decision should expose trigger event evidence even when no resolved events are linked")
+    (assert-true (find :outdated-intent
+                       (getf (getf payload :alignment-state) :divergence-types))
+                 "embedded alignment state should expose the underlying divergence types")))
 
 (defun retrieval-ranking-history-dossier-test ()
   (let* ((session (make-test-session :cwd "/tmp/retrieval-ranking-history/"))

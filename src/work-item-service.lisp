@@ -8,13 +8,48 @@
                                                 (work-item-id work-item)
                                                 environment)))))
 
+(defun work-item-linked-incident-count (session work-item)
+  (count (work-item-id work-item)
+         (agent-session-incidents session)
+         :key #'incident-work-item-id
+         :test #'string=))
+
+(defun work-item-linked-artifact-count (session work-item)
+  (count (work-item-id work-item)
+         (agent-session-artifacts session)
+         :key #'artifact-work-item-id
+         :test #'string=))
+
 (defun enrich-work-item-summary-with-executions (session summary)
   (let* ((work-item-id (getf summary :id))
          (work-item (and work-item-id
                          (find-work-item session work-item-id)))
+         (record (and work-item
+                      (work-item-workflow-record session work-item)))
+         (pending-validations (or (getf summary :pending-validations) '()))
+         (waiting-on (and record (workflow-record-waiting-on record)))
+         (wait-reason (cond
+                        ((eq waiting-on :approval) :approval-required)
+                        ((eq waiting-on :operator-review) :operator-review-required)
+                        ((eq (work-item-status work-item) :awaiting-cold-validation)
+                         :cold-validation-required)
+                        ((equal pending-validations '(:cold))
+                         :cold-validation-required)
+                        ((null pending-validations) :ready)
+                        (t :pending-validation)))
          (handles (and work-item
-                       (work-item-associated-execution-summaries session work-item))))
+                       (work-item-associated-execution-summaries session work-item)))
+         (incident-count (and work-item
+                              (work-item-linked-incident-count session work-item)))
+         (artifact-count (and work-item
+                              (work-item-linked-artifact-count session work-item))))
     (append summary
+            (when work-item
+              (list :waiting-on waiting-on
+                    :wait-reason wait-reason
+                    :incident-count incident-count
+                    :artifact-count artifact-count
+                    :approval-requirements (and record (workflow-record-approval-requirements record))))
             (list :primary-execution-handle (first handles)
                   :execution-handles (or handles '())
                   :execution-surface (compact-execution-surface-summary
@@ -31,7 +66,9 @@
               (list :primary-execution-handle (first handles)
                     :execution-handles handles
                     :execution-surface (compact-execution-surface-summary
-                                        (primary-execution-surface-summary session handles)))))))
+                                        (primary-execution-surface-summary session handles))
+                    :trace-neighborhood
+                    (trace-neighborhood-summary session :work-item (work-item-id work-item)))))))
 
 (defun query-work-item-list-service (session)
   (make-service-query-response :work-item

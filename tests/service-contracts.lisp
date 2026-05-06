@@ -64,6 +64,101 @@
                     (getf (getf response :metadata) :environment-id)
                     "environment status metadata should include the environment id"))))
 
+(defun environment-desktop-preferences-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/environment-desktop-preferences-service-contract/"))
+         (environment (sbcl-agent::ensure-environment))
+         (preferences '(:theme-preference "dark"
+                        :desktop-surface-view
+                        (:conversation-text-scale-percent 145)
+                        :conversation-draft "service contract draft")))
+    (declare (ignore session))
+    (let ((command-response
+            (sbcl-agent::command-environment-set-desktop-preferences-service preferences environment)))
+      (assert-service-metadata-shape command-response "environment desktop preferences command service")
+      (assert-equal :environment
+                    (getf command-response :domain)
+                    "environment desktop preferences command service should report the environment domain")
+      (assert-equal :set-desktop-preferences
+                    (getf command-response :operation)
+                    "environment desktop preferences command service should identify the set-desktop-preferences operation")
+      (assert-equal :environment-desktop-preferences-v1
+                    (getf (sbcl-agent::service-response-metadata command-response) :command-model)
+                    "environment desktop preferences command service should declare the desktop preferences command model")
+      (assert-equal "dark"
+                    (getf (sbcl-agent::service-response-data command-response) :theme-preference)
+                    "environment desktop preferences command service should echo the canonical theme preference"))
+    (let ((query-response (sbcl-agent::query-environment-desktop-preferences-service environment)))
+      (assert-service-metadata-shape query-response "environment desktop preferences query service")
+      (assert-equal :desktop-preferences
+                    (getf query-response :operation)
+                    "environment desktop preferences query service should identify the desktop-preferences operation")
+      (assert-equal :environment-desktop-preferences-v1
+                    (getf (sbcl-agent::service-response-metadata query-response) :read-model)
+                    "environment desktop preferences query service should declare the desktop preferences read model")
+      (assert-equal 145
+                    (getf (getf (sbcl-agent::service-response-data query-response) :desktop-surface-view)
+                          :conversation-text-scale-percent)
+                    "environment desktop preferences query service should preserve nested desktop surface values")
+      (assert-equal "service contract draft"
+                    (getf (sbcl-agent::service-response-data query-response) :conversation-draft)
+                    "environment desktop preferences query service should preserve the conversation draft"))))
+
+(defun environment-image-service-contract-test ()
+  (let* ((root (make-temporary-directory "/tmp/environment-image-service-contract-XXXXXX"))
+         (root-path (namestring root))
+         (session (make-test-session :cwd root-path))
+         (environment (sbcl-agent::ensure-environment)))
+    (declare (ignore session))
+    (let ((save-response
+            (sbcl-agent::command-environment-save-image-service
+             "contract-image"
+             :environment environment)))
+      (assert-service-metadata-shape save-response "environment image save command service")
+      (assert-equal :save-image
+                    (getf save-response :operation)
+                    "environment image save command service should identify the save-image operation")
+      (assert-equal :environment-image-command-v1
+                    (getf (sbcl-agent::service-response-metadata save-response) :command-model)
+                    "environment image save command service should declare the image command model")
+      (assert-equal "contract-image"
+                    (getf (getf (sbcl-agent::service-response-data save-response) :image) :name)
+                    "environment image save command service should return the saved image name"))
+    (let ((query-response (sbcl-agent::query-environment-image-registry-service environment)))
+      (assert-service-metadata-shape query-response "environment image registry query service")
+      (assert-equal :image-registry
+                    (getf query-response :operation)
+                    "environment image registry query service should identify the image-registry operation")
+      (assert-equal :environment-image-registry-v1
+                    (getf (sbcl-agent::service-response-metadata query-response) :read-model)
+                    "environment image registry query service should declare the image registry read model")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data query-response) :images))
+                    "environment image registry query service should surface the saved image list")))
+  (let* ((root (make-temporary-directory "/tmp/environment-image-load-service-contract-XXXXXX"))
+         (root-path (namestring root))
+         (session (make-test-session :cwd root-path))
+         (environment (sbcl-agent::ensure-environment)))
+    (declare (ignore session))
+    (sbcl-agent::command-environment-save-image-service "loadable-image" :environment environment)
+    (let ((load-response
+            (sbcl-agent::command-environment-load-image-service
+             "loadable-image"
+             environment)))
+      (assert-service-metadata-shape load-response "environment image load command service")
+      (assert-equal :load-image
+                    (getf load-response :operation)
+                    "environment image load command service should identify the load-image operation")
+      (assert-equal "loadable-image"
+                    (getf (sbcl-agent::service-response-data load-response) :image-name)
+                    "environment image load command service should return the loaded image name")
+      (assert-true (member (getf (getf (sbcl-agent::service-response-data load-response) :recovery-summary)
+                                 :status)
+                           '(:steady :recovering :degraded))
+                   "environment image load command service should return an explicit recovery summary")
+      (assert-true (listp (getf (getf (sbcl-agent::service-response-data load-response) :recovery-summary)
+                                :runtime-replay))
+                   "environment image load command service should surface runtime replay evidence"))))
+
 (defun environment-provider-service-contract-test ()
   (let ((sbcl-agent::*current-environment* nil)
         (sbcl-agent::*current-session* nil))
@@ -159,6 +254,1132 @@
         (assert-equal "local-fast"
                       (getf last-route :selected-profile-name)
                       "environment provider preview service should not mutate the last recorded route")))))))
+
+(defun intent-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/intent-service-contract/"))
+         (create-response
+           (sbcl-agent::command-intent-create-service
+            session
+            :description "Keep runtime and intent continuously aligned"
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN")
+                     :systems ("sbcl-agent")
+                     :workflows ("alignment-loop"))
+            :constraints '((:invariant "runtime-is-authoritative")
+                           (:policy "governed-mutation"))
+            :expected-behaviors '("Observe runtime changes"
+                                  "Recompute alignment continuously")
+            :non-goals '("Treat code as the only source of truth")
+            :priority :critical
+            :version 1
+            :status :active
+            :linked-runtime-objects '("SBCL-AGENT::RUN-CONVERSATION-TURN")
+            :linked-source-artifacts '("/Volumes/data/development/sbcl-agent/src/execution-service.lisp")
+            :linked-event-ids '("event-1")
+            :linked-mutation-ids '("mutation-1")
+            :metadata '(:owner "cas"))))
+    (assert-service-metadata-shape create-response "intent create service")
+    (assert-equal :intent
+                  (getf create-response :domain)
+                  "intent create service should report the intent domain")
+    (assert-equal :create
+                  (getf create-response :operation)
+                  "intent create service should identify the create operation")
+    (assert-equal :intent-command-v1
+                  (getf (sbcl-agent::service-response-metadata create-response) :command-model)
+                  "intent create service should declare the intent command model")
+    (let* ((created (sbcl-agent::service-response-data create-response))
+           (intent-id (getf created :id))
+           (list-response (sbcl-agent::query-intent-list-service session))
+           (detail-response (sbcl-agent::query-intent-detail-service session intent-id))
+           (update-response
+             (sbcl-agent::command-intent-update-service
+              session
+              intent-id
+              :description "Keep runtime, intent, and reconciliation continuously aligned"
+              :status :evolving
+              :version 2))
+           (select-response (sbcl-agent::command-intent-select-service session intent-id)))
+      (assert-true (stringp intent-id)
+                   "intent create service should allocate a durable id")
+      (assert-true (getf created :current-p)
+                   "intent create service should select the created intent")
+      (assert-equal :critical
+                    (getf created :priority)
+                    "intent create service should preserve priority")
+      (assert-equal 1
+                    (getf created :version)
+                    "intent create service should preserve version")
+      (assert-service-metadata-shape list-response "intent list service")
+      (assert-equal :list
+                    (getf list-response :operation)
+                    "intent list service should identify the list operation")
+      (assert-equal :intent-list-v1
+                    (getf (sbcl-agent::service-response-metadata list-response) :read-model)
+                    "intent list service should declare the intent list read model")
+      (assert-equal intent-id
+                    (getf (sbcl-agent::service-response-data list-response) :current-intent-id)
+                    "intent list service should expose the selected current intent id")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data list-response) :intents))
+                    "intent list service should return the created intent")
+      (let ((trace-links (sbcl-agent::entity-trace-links session :intent intent-id)))
+        (assert-true (>= (length trace-links) 4)
+                     "intent creation should sync linked runtime, source, event, and mutation references into trace links"))
+      (assert-service-metadata-shape detail-response "intent detail service")
+      (assert-equal :detail
+                    (getf detail-response :operation)
+                    "intent detail service should identify the detail operation")
+      (assert-equal :intent-detail-v1
+                    (getf (sbcl-agent::service-response-metadata detail-response) :read-model)
+                    "intent detail service should declare the intent detail read model")
+      (assert-equal "Keep runtime and intent continuously aligned"
+                    (getf (sbcl-agent::service-response-data detail-response) :description)
+                    "intent detail service should preserve description")
+      (assert-equal 1
+                    (length (getf (getf (sbcl-agent::service-response-data detail-response) :scope)
+                                  :systems))
+                    "intent detail service should preserve scoped systems")
+      (assert-service-metadata-shape update-response "intent update service")
+      (assert-equal :update
+                    (getf update-response :operation)
+                    "intent update service should identify the update operation")
+      (assert-equal :intent-command-v1
+                    (getf (sbcl-agent::service-response-metadata update-response) :command-model)
+                    "intent update service should declare the intent command model")
+      (assert-equal :evolving
+                    (getf (sbcl-agent::service-response-data update-response) :status)
+                    "intent update service should persist updated status")
+      (assert-equal 2
+                    (getf (sbcl-agent::service-response-data update-response) :version)
+                    "intent update service should persist updated version")
+      (assert-true (find :description (getf (sbcl-agent::service-response-data update-response) :diff)
+                         :key (lambda (entry) (getf entry :field)))
+                   "intent update service should report description changes in the diff")
+      (assert-true (find :status (getf (sbcl-agent::service-response-data update-response) :diff)
+                         :key (lambda (entry) (getf entry :field)))
+                   "intent update service should report status changes in the diff")
+      (assert-service-metadata-shape select-response "intent select service")
+      (assert-equal :select
+                    (getf select-response :operation)
+                    "intent select service should identify the select operation")
+      (assert-true (getf (sbcl-agent::service-response-data select-response) :current-p)
+                   "intent select service should mark the selected intent as current"))))
+
+(defun reconciliation-correction-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/reconciliation-correction-service-contract/"))
+         (thread (sbcl-agent::create-thread session :title "CAS correction"))
+         (user-message (sbcl-agent::create-message session thread :user "reconcile the drift"))
+         (turn (sbcl-agent::start-turn session thread user-message))
+         (linked-event (sbcl-agent::append-session-event
+                        session
+                        :runtime-drift-detected
+                        '(:status :observed)
+                        :family :runtime
+                        :entity-id "runtime-drift-1"
+                        :thread-id (sbcl-agent::thread-id thread)
+                        :turn-id (sbcl-agent::turn-id turn)))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids (list (sbcl-agent::event-id linked-event))
+            :linked-mutation-ids '("mutation-missing")))
+         (response
+           (sbcl-agent::command-materialize-reconciliation-correction-service
+            session
+            "Explain the alignment divergence and materialize the governed correction."
+            :operator-mode :conversation))
+         (payload (sbcl-agent::service-response-data response))
+         (decision (getf payload :reconciliation-decision))
+         (work-item (getf payload :work-item))
+         (workflow-record (getf payload :workflow-record))
+         (work-item-id (getf work-item :id))
+         (_environment (sbcl-agent::bind-session-to-environment session))
+         (session-summary (sbcl-agent::service-response-data
+                           (sbcl-agent::query-session-summary-service session)))
+         (approval-surface (getf (getf (getf session-summary :approval-surfaces) :top-surface)
+                                 :corrective-context))
+         (governance-queue (sbcl-agent::service-response-data
+                            (sbcl-agent::query-shell-governance-queue-service session)))
+         (queue-item (find work-item-id
+                           (or (getf governance-queue :items) '())
+                           :key #'(lambda (entry) (getf entry :work-item-id))
+                           :test #'string=))
+         (work-item-trace-links (getf (sbcl-agent::service-response-data
+                                       (sbcl-agent::query-trace-link-list-service session
+                                                                                  :entity-kind :work-item
+                                                                                  :entity-id work-item-id))
+                                      :trace-links))
+         (intent-trace-links (getf (sbcl-agent::service-response-data
+                                    (sbcl-agent::query-trace-link-list-service session
+                                                                               :entity-kind :intent
+                                                                               :entity-id (getf decision :intent-id)))
+                                   :trace-links)))
+    (assert-equal :alignment
+                  (getf response :domain)
+                  "reconciliation correction service should report the alignment domain")
+    (assert-service-metadata-shape response "reconciliation correction service")
+    (assert-equal :materialize-reconciliation-correction
+                  (getf response :operation)
+                  "reconciliation correction service should identify the materialization operation")
+    (assert-equal :awaiting-approval
+                  (getf response :status)
+                  "governed corrective materialization should wait on approval when required")
+    (assert-equal :awaiting-approval
+                  (getf payload :outcome)
+                  "governed corrective materialization should report awaiting approval outcome")
+    (assert-equal :alignment-reconciliation-execute
+                  (getf (sbcl-agent::service-response-metadata response) :policy-id)
+                  "reconciliation correction service should expose the corrective execution policy")
+    (assert-equal :awaiting-approval
+                  (getf work-item :status)
+                  "corrective work item should enter awaiting approval")
+    (assert-equal :awaiting-approval
+                  (getf workflow-record :status)
+                  "corrective workflow record should enter awaiting approval")
+    (assert-equal :governed-review
+                  (getf decision :approval-posture)
+                  "materialized corrective execution should preserve governed review posture")
+    (assert-equal :alignment-reconciliation
+                  (getf (getf work-item :corrective-context) :kind)
+                  "corrective work item detail should expose alignment reconciliation context")
+    (assert-equal :alignment-reconciliation
+                  (getf approval-surface :kind)
+                  "session approval surfaces should preserve corrective work context")
+    (assert-equal :alignment-reconciliation
+                  (getf (getf queue-item :corrective-context) :kind)
+                  "shell governance queue should preserve corrective work context")
+    (assert-true (find :triggered-corrective-work
+                       work-item-trace-links
+                       :key (lambda (entry) (getf entry :relation)))
+                 "corrective work item should be trace-linked back to the triggering event")
+    (assert-true (find :reconciled-by-work-item
+                       intent-trace-links
+                       :key (lambda (entry) (getf entry :relation)))
+                 "intent should be trace-linked to the corrective work item")))
+
+(defun continuous-alignment-event-loop-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/continuous-alignment-event-loop-service-contract/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids '("event-missing")
+            :linked-mutation-ids '("mutation-missing"))))
+    (sbcl-agent::append-session-event
+     session
+     :incident-created
+     '(:kind :runtime-drift :summary "Observed drift requires governed reconciliation.")
+     :family :incident
+     :entity-id "incident-loop-1")
+    (let* ((corrective-items
+             (remove-if-not #'sbcl-agent::work-item-corrective-context
+                            (sbcl-agent::agent-session-work-items session)))
+           (first-corrective (first corrective-items)))
+      (assert-equal 1
+                    (length corrective-items)
+                    "incident trigger should auto-materialize exactly one governed corrective work item")
+      (assert-true first-corrective
+                   "continuous alignment loop should materialize a corrective work item")
+      (assert-equal :alignment-reconciliation
+                    (getf (sbcl-agent::work-item-corrective-context first-corrective) :kind)
+                    "auto-materialized work should preserve corrective context")
+      (assert-equal :awaiting-approval
+                    (sbcl-agent::work-item-status first-corrective)
+                    "auto-materialized corrective work should enter governed approval")
+      (assert-equal 1
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "continuous alignment loop should emit a single corrective creation event"))
+    (sbcl-agent::append-session-event
+     session
+     :validation-completed
+     '(:work-item-id "validation-loop-1" :live (:status :failed) :cold (:status :failed))
+     :family :workflow
+     :entity-id "validation-loop-1"
+     :work-item-id "validation-loop-1")
+    (let ((corrective-items-after
+            (remove-if-not #'sbcl-agent::work-item-corrective-context
+                           (sbcl-agent::agent-session-work-items session))))
+      (assert-equal 1
+                    (length corrective-items-after)
+                    "a second trigger should reuse actionable corrective work instead of duplicating it")
+      (assert-equal 1
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "deduped alignment loop should not emit an extra corrective creation event"))))
+
+(defun continuous-alignment-event-loop-reopens-after-resolution-test ()
+  (let* ((session (make-test-session :cwd "/tmp/continuous-alignment-event-loop-reopen/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids '("event-missing")
+            :linked-mutation-ids '("mutation-missing"))))
+    (sbcl-agent::append-session-event
+     session
+     :incident-created
+     '(:kind :runtime-drift :summary "Observed drift requires governed reconciliation.")
+     :family :incident
+     :entity-id "incident-loop-reopen-1")
+    (let* ((first-corrective
+             (first (remove-if-not #'sbcl-agent::work-item-corrective-context
+                                   (sbcl-agent::agent-session-work-items session)))))
+      (assert-true first-corrective
+                   "first trigger should materialize a corrective work item")
+      (setf (sbcl-agent::work-item-status first-corrective) :committed
+            (sbcl-agent::work-item-next-action first-corrective) nil
+            (sbcl-agent::work-item-resume-payload first-corrective) nil
+            (sbcl-agent::work-item-pending-validations first-corrective) nil))
+    (sbcl-agent::append-session-event
+     session
+     :runtime-reloaded-file
+     '(:path "/tmp/reloaded.lisp" :policy-id :runtime-reload)
+     :family :runtime
+     :entity-id "/tmp/reloaded.lisp")
+    (let ((corrective-items
+            (remove-if-not #'sbcl-agent::work-item-corrective-context
+                           (sbcl-agent::agent-session-work-items session))))
+      (assert-equal 2
+                    (length corrective-items)
+                    "a fresh trigger after resolution should materialize a new corrective work item")
+      (assert-equal 2
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "reopened alignment loop should emit a new corrective creation event after resolution"))))
+
+(defun continuous-alignment-event-loop-requires-active-intent-test ()
+  (let ((session (make-test-session :cwd "/tmp/continuous-alignment-event-loop-requires-intent/")))
+    (sbcl-agent::append-session-event
+     session
+     :incident-created
+     '(:kind :runtime-drift :summary "Observed drift without an active governed intent.")
+     :family :incident
+     :entity-id "incident-loop-no-intent-1")
+    (assert-equal 0
+                  (length (remove-if-not #'sbcl-agent::work-item-corrective-context
+                                         (sbcl-agent::agent-session-work-items session)))
+                  "continuous alignment loop should not auto-materialize corrective work without an active intent")
+    (assert-equal 0
+                  (count :reconciliation-correction-created
+                         (sbcl-agent::agent-session-events session)
+                         :key #'sbcl-agent::event-kind)
+                  "continuous alignment loop should not emit corrective creation events without an active intent")))
+
+(defun continuous-alignment-event-loop-approval-resume-lifecycle-test ()
+  (let* ((session (make-test-session :cwd "/tmp/continuous-alignment-event-loop-approval-resume/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids '("event-missing")
+            :linked-mutation-ids '("mutation-missing"))))
+    (sbcl-agent::append-session-event
+     session
+     :incident-created
+     '(:kind :runtime-drift :summary "Observed drift requires governed reconciliation.")
+     :family :incident
+     :entity-id "incident-loop-approval-1")
+    (let ((first-corrective
+            (first (remove-if-not #'sbcl-agent::work-item-corrective-context
+                                  (sbcl-agent::agent-session-work-items session)))))
+      (assert-true first-corrective
+                   "first trigger should materialize corrective work before approval")
+      (assert-equal :awaiting-approval
+                    (sbcl-agent::work-item-status first-corrective)
+                    "first corrective item should await approval initially")
+      (sbcl-agent::command-approve-policy-service
+       session
+       :alignment-reconciliation-execute)
+      (sbcl-agent::resume-work-item session first-corrective :note "approved corrective execution")
+      (assert-equal :resumed
+                    (sbcl-agent::work-item-status first-corrective)
+                    "approved corrective work should become resumed after resume")
+      (sbcl-agent::append-session-event
+       session
+       :validation-completed
+       '(:work-item-id "validation-loop-approval-1" :live (:status :failed) :cold (:status :failed))
+       :family :workflow
+       :entity-id "validation-loop-approval-1"
+       :work-item-id "validation-loop-approval-1")
+      (assert-equal 1
+                    (length (remove-if-not #'sbcl-agent::work-item-corrective-context
+                                           (sbcl-agent::agent-session-work-items session)))
+                    "additional triggers should not duplicate an already resumed actionable corrective work item")
+      (assert-equal 1
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "resumed corrective work should suppress duplicate corrective creation events")
+      (setf (sbcl-agent::work-item-status first-corrective) :committed
+            (sbcl-agent::work-item-next-action first-corrective) nil
+            (sbcl-agent::work-item-resume-payload first-corrective) nil
+            (sbcl-agent::work-item-pending-validations first-corrective) nil)
+      (sbcl-agent::append-session-event
+       session
+       :runtime-package-switched
+       '(:package "SBCL-AGENT")
+       :family :runtime
+       :entity-id "package-switch-loop-approval-1")
+      (assert-equal 2
+                    (length (remove-if-not #'sbcl-agent::work-item-corrective-context
+                                           (sbcl-agent::agent-session-work-items session)))
+                    "a fresh trigger after approval and resolution should materialize a new corrective work item")
+      (assert-equal 2
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "a new trigger after approval and resolution should emit a second corrective creation event"))))
+
+(defun continuous-alignment-event-loop-multi-reopen-lifecycle-test ()
+  (let* ((session (make-test-session :cwd "/tmp/continuous-alignment-event-loop-multi-reopen/"))
+         (_intent
+           (sbcl-agent::create-intent-record
+            session
+            :description "Keep runtime behavior aligned with the approved contract."
+            :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+            :constraints '((:policy "governance-required"))
+            :expected-behaviors nil
+            :status :deprecated
+            :linked-event-ids '("event-missing")
+            :linked-mutation-ids '("mutation-missing"))))
+    (labels ((corrective-items ()
+               (remove-if-not #'sbcl-agent::work-item-corrective-context
+                              (sbcl-agent::agent-session-work-items session)))
+             (latest-corrective-item ()
+               (first (last (corrective-items))))
+             (terminalize-corrective-item (work-item)
+               (setf (sbcl-agent::work-item-status work-item) :committed
+                     (sbcl-agent::work-item-next-action work-item) nil
+                     (sbcl-agent::work-item-resume-payload work-item) nil
+                     (sbcl-agent::work-item-pending-validations work-item) nil)))
+      (sbcl-agent::append-session-event
+       session
+       :incident-created
+       '(:kind :runtime-drift :summary "Observed drift requires governed reconciliation.")
+       :family :incident
+       :entity-id "incident-loop-multi-1")
+      (let ((first-corrective (latest-corrective-item)))
+        (assert-true first-corrective
+                     "first trigger should materialize the first corrective work item")
+        (sbcl-agent::command-approve-policy-service session :alignment-reconciliation-execute)
+        (sbcl-agent::resume-work-item session first-corrective :note "approved first corrective execution")
+        (sbcl-agent::append-session-event
+         session
+         :validation-completed
+         '(:work-item-id "validation-loop-multi-1" :live (:status :failed) :cold (:status :failed))
+         :family :workflow
+         :entity-id "validation-loop-multi-1"
+         :work-item-id "validation-loop-multi-1")
+        (assert-equal 1
+                      (length (corrective-items))
+                      "while the first corrective item remains actionable, later events should not duplicate it")
+        (terminalize-corrective-item first-corrective))
+      (sbcl-agent::append-session-event
+       session
+       :runtime-package-switched
+       '(:package "SBCL-AGENT")
+       :family :runtime
+       :entity-id "package-switch-loop-multi-1")
+      (let* ((items-after-second-trigger (corrective-items))
+             (second-corrective (latest-corrective-item)))
+        (assert-equal 2
+                      (length items-after-second-trigger)
+                      "a later trigger after the first corrective item is resolved should materialize a second corrective item")
+        (assert-true second-corrective
+                     "second trigger should materialize a second corrective item")
+        (assert-true (not (string= (sbcl-agent::work-item-id second-corrective)
+                                   (sbcl-agent::work-item-id (first items-after-second-trigger))))
+                     "the second corrective item should be distinct from the first")
+        (sbcl-agent::command-approve-policy-service session :alignment-reconciliation-execute)
+        (sbcl-agent::resume-work-item session second-corrective :note "approved second corrective execution")
+        (sbcl-agent::append-session-event
+         session
+         :runtime-evaluated
+         '(:form "(+ 21 21)" :package "CL-USER")
+         :family :runtime
+         :entity-id "runtime-eval-loop-multi-1")
+        (assert-equal 2
+                      (length (corrective-items))
+                      "while the second corrective item remains actionable, another runtime event should still suppress duplication")
+        (terminalize-corrective-item second-corrective))
+      (sbcl-agent::append-session-event
+       session
+       :runtime-reloaded-file
+       '(:path "/tmp/reloaded-multi.lisp" :policy-id :runtime-reload)
+       :family :runtime
+       :entity-id "/tmp/reloaded-multi.lisp")
+      (assert-equal 3
+                    (length (corrective-items))
+                    "a third trigger after the second corrective item is resolved should materialize a third corrective item")
+      (assert-equal 3
+                    (count :reconciliation-correction-created
+                           (sbcl-agent::agent-session-events session)
+                           :key #'sbcl-agent::event-kind)
+                    "each fresh reopen cycle should emit exactly one new corrective creation event"))))
+
+(defun project-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/project-service-contract/"))
+         (work-item (sbcl-agent::create-work-item session "Traceable testing surface" :transaction-scope :test))
+         (incident (sbcl-agent::create-incident session
+                                                :runtime-eval-failure
+                                                "Project-linked incident"
+                                                "Project detail should surface linked incident summaries."
+                                                :work-item work-item))
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "Project Atlas"
+                   :summary "Unified SDLC program record."
+                   :constitution '(:mission "Keep product intent, architecture, and execution aligned.")
+                   :requirements
+                   (list (sbcl-agent::make-project-requirement
+                          :id "req-1"
+                          :title "Traceable requirements"
+                          :summary "Requirements must remain linked to work and tests."
+                          :scope :project
+                          :kind :functional
+                          :priority :high
+                          :status :accepted
+                          :verification-kind :test-suite))
+                   :feature-specifications
+                   (list (sbcl-agent::make-project-feature-spec
+                          :id "spec-1"
+                          :title "Testing Surface"
+                          :summary "Expose suites, runs, failures, coverage, and performance."
+                          :status :planned
+                          :acceptance-criteria '("surface suite inventory" "surface failures")
+                          :linked-requirement-ids '("req-1")
+                          :linked-journey-ids '("journey-1")))
+                   :user-journeys
+                   (list (sbcl-agent::make-project-user-journey
+                          :id "journey-1"
+                          :title "Close the loop"
+                          :summary "Operator or agent moves from spec to runtime evidence."
+                          :actors '("operator" "agent")
+                          :entrypoints '("project" "testing")
+                          :steps '("choose feature" "run tests" "inspect failures")
+                          :outcomes '("feedback captured")
+                          :edge-cases '("flaky suite")))
+                   :architecture-decisions
+                   (list (sbcl-agent::make-project-architecture-decision
+                          :id "adr-1"
+                          :title "Unified project record"
+                          :status :accepted
+                          :summary "Project intent must be stored alongside runtime evidence."
+                          :drivers '("traceability")
+                          :consequences '("stronger session model")
+                          :stack-choices '("lisp-native project objects")
+                          :linked-requirement-ids '("req-1")))
+                   :linked-work-item-ids (list (sbcl-agent::work-item-id work-item))
+                   :linked-incident-ids (list (sbcl-agent::incident-id incident))
+                   :linked-testing-harness-ids '(:full-suite)
+                   :metadata (list :testing-strategy
+                                   '(:required-evidence ("coverage" "performance")
+                                     :suite-expectations
+                                     ((:harness-id :full-suite
+                                       :purpose "governed regression"
+                                       :evidence-kinds ("coverage" "performance"))))
+                                   :release-readiness
+                                   '(:stage "candidate"
+                                     :signoff-status "pending"
+                                     :required-approvers ("platform" "ops"))
+                                   :readiness-obligations
+                                   '((:id "obl-service-contract"
+                                      :title "Record closure evidence"
+                                      :summary "Service contract project should expose readiness obligations."
+                                      :status :ready
+                                      :blocking-p t
+                                      :evidence-kinds ("coverage"))))
+                   :source-roots '("/Volumes/data/development/sbcl-agent/")))
+         (list-response (sbcl-agent::query-project-list-service session))
+         (detail-response (sbcl-agent::query-project-detail-service
+                           session
+                           (sbcl-agent::project-record-id project))))
+    (assert-service-metadata-shape list-response "project list service")
+    (assert-equal :project
+                  (getf list-response :domain)
+                  "project list service should report the project domain")
+    (assert-equal :list
+                  (getf list-response :operation)
+                  "project list service should identify the list operation")
+    (assert-equal :project-list-v1
+                  (getf (sbcl-agent::service-response-metadata list-response) :read-model)
+                  "project list service should declare the project list read model")
+    (assert-equal (sbcl-agent::project-record-id project)
+                  (getf (sbcl-agent::service-response-data list-response) :current-project-id)
+                  "project list service should expose the current selected project")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data list-response) :projects))
+                  "project list service should expose project summaries")
+    (assert-service-metadata-shape detail-response "project detail service")
+    (assert-equal :detail
+                  (getf detail-response :operation)
+                  "project detail service should identify the detail operation")
+    (assert-equal :project-detail-v1
+                  (getf (sbcl-agent::service-response-metadata detail-response) :read-model)
+                  "project detail service should declare the project detail read model")
+    (assert-equal "Project Atlas"
+                  (getf (sbcl-agent::service-response-data detail-response) :title)
+                  "project detail service should expose the project title")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :requirements))
+                  "project detail service should expose requirements")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :user-journeys))
+                  "project detail service should expose journeys")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :architecture-decisions))
+                  "project detail service should expose architecture decisions")
+    (assert-equal (list (sbcl-agent::work-item-id work-item))
+                  (getf (sbcl-agent::service-response-data detail-response) :linked-work-item-ids)
+                  "project detail service should expose linked work-item ids")
+    (assert-equal (list (sbcl-agent::incident-id incident))
+                  (getf (sbcl-agent::service-response-data detail-response) :linked-incident-ids)
+                  "project detail service should expose linked incident ids")
+    (assert-equal '(:full-suite)
+                  (getf (sbcl-agent::service-response-data detail-response) :linked-testing-harness-ids)
+                  "project detail service should expose linked testing harness ids")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :linked-work-items))
+                  "project detail service should expose linked work-item summaries")
+    (assert-equal "Traceable testing surface"
+                  (getf (first (getf (sbcl-agent::service-response-data detail-response) :linked-work-items)) :title)
+                  "project detail service should summarize linked work-item titles")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :linked-incidents))
+                  "project detail service should expose linked incident summaries")
+    (assert-equal "Project-linked incident"
+                  (getf (first (getf (sbcl-agent::service-response-data detail-response) :linked-incidents)) :title)
+                  "project detail service should summarize linked incidents")
+    (assert-equal 1
+                  (length (getf (sbcl-agent::service-response-data detail-response) :linked-testing-harnesses))
+                  "project detail service should expose linked testing harness summaries")
+    (assert-equal :full-suite
+                  (getf (first (getf (sbcl-agent::service-response-data detail-response) :linked-testing-harnesses)) :id)
+                  "project detail service should summarize linked testing harness ids")
+    (assert-true (listp (getf (getf (sbcl-agent::service-response-data detail-response) :testing-evidence)
+                              :suite-statuses))
+                 "project detail service should expose testing suite status summaries")
+    (assert-equal :blocked
+                  (getf (getf (getf (sbcl-agent::service-response-data detail-response) :testing-evidence)
+                              :evidence-status)
+                        :status)
+                  "project detail service should summarize required testing evidence readiness")
+    (assert-equal :blocked
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary) :status)
+                  "project detail service should expose project readiness summary status")
+    (assert-equal :blocked
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                        :release-readiness-status)
+                  "project detail service should surface blocked release readiness when signoff is pending")
+    (assert-equal :blocked
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                        :release-review-state)
+                  "project detail service should expose blocked release review state when closure blockers remain")
+    (assert-equal :approved
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                        :release-target-phase)
+                  "project detail service should expose the next release transition target")
+    (assert-equal '("platform" "ops")
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                        :release-pending-approvers)
+                  "project detail service should expose pending release approvers when signoff is incomplete")
+    (assert-equal :ownership-pending
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                        :release-signoff-state)
+                  "project detail service should expose ownership-pending signoff state when required approvers are not yet assigned")
+    (assert-true (null (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                             :release-signoff-ownership-ready-p))
+                 "project detail service should mark signoff ownership incomplete when required approvers are not mapped to obligations")
+    (assert-true (stringp (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                                :release-signoff-summary))
+                 "project detail service should expose signoff progression summary text")
+    (assert-true (stringp (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                                :release-transition-summary))
+                 "project detail service should expose a release transition summary")
+    (assert-equal "candidate"
+                  (getf (getf (sbcl-agent::service-response-data detail-response) :release-readiness) :stage)
+                  "project detail service should expose persisted release readiness records")
+    (assert-true (listp (getf (sbcl-agent::service-response-data detail-response) :readiness-obligations))
+                 "project detail service should expose persisted readiness obligations")
+    (assert-true (listp (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                              :release-next-actions))
+                 "project detail service should expose derived release workflow next actions")
+    (assert-true (listp (getf (getf (sbcl-agent::service-response-data detail-response) :readiness-summary)
+                              :unmet-obligations))
+                 "project detail service should expose project readiness obligations")
+	    (assert-true (listp (getf (sbcl-agent::service-response-data detail-response) :alignment-state))
+	                 "project detail service should expose project-scoped alignment state")
+	    (assert-true (numberp (getf (getf (sbcl-agent::service-response-data detail-response) :alignment-state)
+	                                :score))
+	                 "project detail service should expose an alignment score")
+	    (assert-true (listp (getf (sbcl-agent::service-response-data detail-response) :reconciliation-decision))
+	                 "project detail service should expose a project-scoped reconciliation decision")
+	    (assert-true (member (getf (getf (sbcl-agent::service-response-data detail-response) :reconciliation-decision)
+	                               :decision)
+	                         '(:maintain :runtime :intent :co-evolve))
+	                 "project detail service should expose a valid reconciliation direction")
+	    (assert-true (listp (getf (sbcl-agent::service-response-data detail-response) :trace-neighborhood))
+	                 "project detail service should expose trace neighborhood data")))
+
+(defun trace-link-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/trace-link-service-contract/"))
+         (project (sbcl-agent::create-project-record session
+                                                     :title "Trace Service Contract"
+                                                     :summary "Trace contract regression."))
+         (work-item (sbcl-agent::create-work-item session "Trace service work item")))
+    (let ((command-response
+            (sbcl-agent::command-trace-link-create-service
+             session
+             :relation :tracked-by-work-item
+             :source-kind :project
+             :source-id (sbcl-agent::project-record-id project)
+             :target-kind :work-item
+             :target-id (sbcl-agent::work-item-id work-item)
+             :metadata '(:source :service-contract))))
+      (assert-service-metadata-shape command-response "trace link command service")
+      (assert-equal :trace
+                    (getf command-response :domain)
+                    "trace link command service should report the trace domain")
+      (assert-equal :create-link
+                    (getf command-response :operation)
+                    "trace link command service should identify the create-link operation")
+      (assert-equal :trace-link-command-v1
+                    (getf (sbcl-agent::service-response-metadata command-response) :command-model)
+                    "trace link command service should declare the trace command model")
+      (assert-equal :tracked-by-work-item
+                    (getf (sbcl-agent::service-response-data command-response) :relation)
+                    "trace link command service should echo the created relation"))
+    (let ((query-response
+            (sbcl-agent::query-trace-neighborhood-service
+             session
+             :project
+             (sbcl-agent::project-record-id project))))
+      (assert-service-metadata-shape query-response "trace neighborhood query service")
+      (assert-equal :neighborhood
+                    (getf query-response :operation)
+                    "trace neighborhood query service should identify the neighborhood operation")
+      (assert-equal :trace-neighborhood-v1
+                    (getf (sbcl-agent::service-response-metadata query-response) :read-model)
+                    "trace neighborhood query service should declare the trace neighborhood read model")
+      (assert-true (> (getf (sbcl-agent::service-response-data query-response) :count) 0)
+                   "trace neighborhood query service should return linked evidence"))))
+
+(defun project-command-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/project-command-service-contract/"))
+         (work-item (sbcl-agent::create-work-item session "Bind project evidence" :transaction-scope :test))
+         (create-response (sbcl-agent::command-project-create-service
+                           session
+                           :title "Project Atlas"
+                           :summary "Project command service contract."
+                           :source-roots '("/Volumes/data/development/sbcl-agent/")))
+         (project-id (getf (sbcl-agent::service-response-data create-response) :id))
+         (incident (sbcl-agent::create-incident session
+                                                :runtime-eval-failure
+                                                "Bound incident"
+                                                "Bind this incident to the project."
+                                                :work-item work-item)))
+    (let* ((report-root (merge-pathnames #P"tmp/test-results/"
+                                         (uiop:ensure-directory-pathname
+                                          (uiop:getcwd))))
+           (coverage-root (merge-pathnames #P"tmp/coverage/"
+                                           (uiop:ensure-directory-pathname
+                                            (uiop:getcwd))))
+           (performance-root (merge-pathnames #P"tmp/performance/"
+                                              (uiop:ensure-directory-pathname
+                                               (uiop:getcwd))))
+           (report-path (merge-pathnames #P"latest-report.json" report-root))
+           (coverage-path (merge-pathnames #P"cover-index.html" coverage-root))
+           (performance-path (merge-pathnames #P"latest.sexp" performance-root)))
+      (ensure-directories-exist report-path)
+      (ensure-directories-exist coverage-path)
+      (ensure-directories-exist performance-path)
+      (with-open-file (stream report-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string
+         (sbcl-agent::emit-json
+          (sbcl-agent::platform-json-safe-value
+           '(:generatedAt 123456
+             :suiteId "sbcl-agent"
+             :summary (:total 3 :passed 3 :failed 0 :durationSeconds 1.5)
+             :results ((:name "project-governance-smoke"
+                        :category :service-contracts
+                        :status :passed
+                        :durationSeconds 0.5)
+                       (:name "trace-link-smoke"
+                        :category :service-contracts
+                        :status :passed
+                        :durationSeconds 0.5)
+                       (:name "persistence-smoke"
+                        :category :environment-and-persistence
+                        :status :passed
+                        :durationSeconds 0.5)))))
+         stream))
+      (with-open-file (stream coverage-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string "<html><body>coverage</body></html>" stream))
+      (with-open-file (stream performance-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (let ((*print-circle* t)
+              (*print-pretty* t))
+          (write '(:generated-at 123456
+                   :say-turn-latency (:avg-seconds 0.02 :min-seconds 0.01 :max-seconds 0.03 :count 3)
+                   :environment-save-load (:save-seconds 0.03 :load-seconds 0.04 :total-seconds 0.07))
+                 :stream stream))))
+    (assert-service-metadata-shape create-response "project create service")
+    (assert-equal :project
+                  (getf create-response :domain)
+                  "project create service should report the project domain")
+    (assert-equal :create
+                  (getf create-response :operation)
+                  "project create service should identify the create operation")
+    (assert-equal :project-command-v1
+                  (getf (sbcl-agent::service-response-metadata create-response) :command-model)
+                  "project create service should declare the project command model")
+    (let ((constitution-response
+            (sbcl-agent::command-project-constitution-service
+             session
+             '(:mission "Keep product and execution aligned."
+               :principles ("governance-first" "traceability"))
+             :project-id project-id)))
+      (assert-equal :set-constitution
+                    (getf constitution-response :operation)
+                    "project constitution service should identify the constitution operation")
+      (assert-equal "Keep product and execution aligned."
+                    (getf (getf (sbcl-agent::service-response-data constitution-response) :constitution) :mission)
+                    "project constitution service should update the project constitution"))
+    (let ((design-system-response
+            (sbcl-agent::command-project-design-system-service
+             session
+             '(:tokens ("surface-accent")
+               :components ("metric-tile"))
+             :project-id project-id)))
+      (assert-equal :set-design-system
+                    (getf design-system-response :operation)
+                    "project design-system service should identify the design-system operation")
+      (assert-equal '("surface-accent")
+                    (getf (getf (sbcl-agent::service-response-data design-system-response) :design-system) :tokens)
+                    "project design-system service should update design-system content"))
+    (let ((style-guide-response
+            (sbcl-agent::command-project-style-guide-service
+             session
+             '(:voice "direct"
+               :rules ("no marketing copy"))
+             :project-id project-id)))
+      (assert-equal :set-style-guide
+                    (getf style-guide-response :operation)
+                    "project style-guide service should identify the style-guide operation")
+      (assert-equal "direct"
+                    (getf (getf (sbcl-agent::service-response-data style-guide-response) :style-guide) :voice)
+                    "project style-guide service should update style-guide content"))
+    (let ((testing-strategy-response
+            (sbcl-agent::command-project-testing-strategy-service
+             session
+             '(:required-evidence ("coverage" "performance")
+               :suite-expectations ((:harness-id :full-suite :purpose "core regression")))
+             :project-id project-id)))
+      (assert-equal :set-testing-strategy
+                    (getf testing-strategy-response :operation)
+                    "project testing-strategy service should identify the testing-strategy operation")
+      (assert-equal '("coverage" "performance")
+                    (getf (getf (sbcl-agent::service-response-data testing-strategy-response) :testing-strategy)
+                          :required-evidence)
+                    "project testing-strategy service should update testing-strategy content"))
+    (let ((release-readiness-response
+            (sbcl-agent::command-project-release-readiness-service
+             session
+             '(:stage "candidate"
+               :signoff-status "pending"
+               :target-window "2026-05-15"
+               :required-approvers ("platform" "ops"))
+             :project-id project-id)))
+      (assert-equal :set-release-readiness
+                    (getf release-readiness-response :operation)
+                    "project release-readiness service should identify the release-readiness operation")
+      (assert-equal "candidate"
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :release-readiness)
+                          :stage)
+                    "project release-readiness service should update release-readiness content")
+      (assert-equal :blocked
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :readiness-summary)
+                          :release-readiness-status)
+                    "project release-readiness service should block closure when signoff is still pending")
+      (assert-equal :blocked
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :readiness-summary)
+                          :release-review-state)
+                    "project release-readiness service should surface blocked release review state when testing posture is still incomplete")
+      (assert-equal :approved
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :readiness-summary)
+                          :release-target-phase)
+                    "project release-readiness service should surface approved as the next target phase from a candidate release")
+      (assert-equal '("platform" "ops")
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :readiness-summary)
+                          :release-pending-approvers)
+                    "project release-readiness service should expose pending approvers when signoff remains incomplete")
+      (assert-equal :ownership-pending
+                    (getf (getf (sbcl-agent::service-response-data release-readiness-response) :readiness-summary)
+                          :release-signoff-state)
+                    "project release-readiness service should expose ownership-pending signoff state before approver obligations are assigned"))
+    (let ((readiness-obligations-response
+            (sbcl-agent::command-project-readiness-obligations-service
+             session
+             '((:id "obl-signoff"
+                :title "Complete signoff"
+                :summary "Approvers must complete signoff."
+                :status "blocked"
+                :blocking-p t
+                :owner "ops"
+                :evidence-kinds ("governed-approval")))
+             :project-id project-id)))
+      (assert-equal :set-readiness-obligations
+                    (getf readiness-obligations-response :operation)
+                    "project readiness-obligations service should identify the readiness-obligations operation")
+      (assert-equal "Complete signoff"
+                    (getf (first (getf (sbcl-agent::service-response-data readiness-obligations-response)
+                                       :readiness-obligations))
+                          :title)
+                    "project readiness-obligations service should update readiness obligations"))
+    (let ((requirement-response
+            (sbcl-agent::command-project-requirement-service
+             session
+             :project-id project-id
+             :title "Traceable Requirements"
+             :summary "Requirements must remain linked to work and tests."
+             :scope :project
+             :priority :high
+             :verification-kind :test-suite)))
+      (assert-equal :append-requirement
+                    (getf requirement-response :operation)
+                    "project requirement service should identify the requirement operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data requirement-response) :requirements))
+                    "project requirement service should append a requirement"))
+    (let ((feature-response
+            (sbcl-agent::command-project-feature-spec-service
+             session
+             :project-id project-id
+             :title "Testing Surface"
+             :summary "Expose test suites and failures."
+             :acceptance-criteria '("show suites" "show failures"))))
+      (assert-equal :append-feature-specification
+                    (getf feature-response :operation)
+                    "project feature-spec service should identify the feature-spec operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data feature-response) :feature-specifications))
+                    "project feature-spec service should append a feature specification"))
+    (let ((journey-response
+            (sbcl-agent::command-project-user-journey-service
+             session
+             :project-id project-id
+             :title "Close the loop"
+             :summary "Move from spec to evidence."
+             :actors '("operator" "agent")
+             :steps '("review requirements" "run tests" "inspect failures"))))
+      (assert-equal :append-user-journey
+                    (getf journey-response :operation)
+                    "project user-journey service should identify the journey operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data journey-response) :user-journeys))
+                    "project user-journey service should append a user journey"))
+    (let ((adr-response
+            (sbcl-agent::command-project-architecture-decision-service
+             session
+             :project-id project-id
+             :title "Environment-first model"
+             :summary "The environment stays authoritative."
+             :drivers '("traceability")
+             :consequences '("strong environment model")
+             :stack-choices '("sbcl" "electron"))))
+      (assert-equal :append-architecture-decision
+                    (getf adr-response :operation)
+                    "project architecture-decision service should identify the ADR operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data adr-response) :architecture-decisions))
+                    "project architecture-decision service should append an architecture decision"))
+    (let ((work-item-response
+            (sbcl-agent::command-project-bind-work-item-service
+             session
+             (sbcl-agent::work-item-id work-item)
+             :project-id project-id)))
+      (assert-equal :bind-work-item
+                    (getf work-item-response :operation)
+                    "project work-item binding service should identify the binding operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data work-item-response) :linked-work-item-ids))
+                    "project work-item binding service should append a linked work item")
+      (assert-equal "Bind project evidence"
+                    (getf (first (getf (sbcl-agent::service-response-data work-item-response) :linked-work-items)) :title)
+                    "project work-item binding service should surface linked work-item summaries"))
+    (let ((incident-response
+            (sbcl-agent::command-project-bind-incident-service
+             session
+             (sbcl-agent::incident-id incident)
+             :project-id project-id)))
+      (assert-equal :bind-incident
+                    (getf incident-response :operation)
+                    "project incident binding service should identify the binding operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data incident-response) :linked-incident-ids))
+                    "project incident binding service should append a linked incident")
+      (assert-equal "Bound incident"
+                    (getf (first (getf (sbcl-agent::service-response-data incident-response) :linked-incidents)) :title)
+                    "project incident binding service should surface linked incident summaries"))
+    (let ((testing-response
+            (sbcl-agent::command-project-bind-testing-harness-service
+             session
+             :full-suite
+             :project-id project-id)))
+      (assert-equal :bind-testing-harness
+                    (getf testing-response :operation)
+                    "project testing binding service should identify the binding operation")
+      (assert-equal '(:full-suite)
+                    (getf (sbcl-agent::service-response-data testing-response) :linked-testing-harness-ids)
+                    "project testing binding service should append a linked harness")
+      (assert-equal :full-suite
+                    (getf (first (getf (sbcl-agent::service-response-data testing-response) :linked-testing-harnesses)) :id)
+                    "project testing binding service should surface linked harness summaries"))
+    (let ((source-root-response
+            (sbcl-agent::command-project-source-root-service
+             session
+             "/Volumes/data/development/sbcl-agent-ux/"
+             :project-id project-id)))
+      (assert-equal :append-source-root
+                    (getf source-root-response :operation)
+                    "project source-root service should identify the source-root operation")
+      (assert-equal 2
+                    (length (getf (sbcl-agent::service-response-data source-root-response) :source-roots))
+                    "project source-root service should append a managed source root"))
+    (let ((quality-gate-response
+            (sbcl-agent::command-project-quality-gate-service
+             session
+             :project-id project-id
+             :title "Spec To Evidence"
+             :summary "Requirements, work, incidents, testing, and source roots must all be attached."
+             :required-harness-ids '(:full-suite)
+             :minimum-linked-work-items 1
+             :minimum-linked-incidents 1
+             :require-source-roots-p t
+             :required-trace-target-kinds '(:requirement :work-item :incident :testing-harness)
+             :maximum-failed-tests 0
+             :require-coverage-p t
+             :maximum-say-turn-latency-seconds 0.05
+             :maximum-environment-save-load-seconds 0.10
+             :require-recovery-ready-p t)))
+      (assert-equal :append-quality-gate
+                    (getf quality-gate-response :operation)
+                    "project quality-gate service should identify the quality-gate operation")
+      (assert-equal 1
+                    (length (getf (sbcl-agent::service-response-data quality-gate-response) :quality-gates))
+                    "project quality-gate service should append a quality gate")
+      (assert-equal :ready
+                    (getf (getf (sbcl-agent::service-response-data quality-gate-response) :quality-gate-summary) :readiness)
+                    "project quality-gate service should evaluate ready when all required evidence is present")
+      (assert-equal t
+                    (getf (first (getf (getf (sbcl-agent::service-response-data quality-gate-response) :quality-gate-summary) :gates))
+                          :coverage-present-p)
+                    "project quality-gate service should evaluate coverage evidence")
+      (assert-equal t
+                    (getf (first (getf (getf (sbcl-agent::service-response-data quality-gate-response) :quality-gate-summary) :gates))
+                          :recovery-ready-p)
+                    "project quality-gate service should evaluate recovery posture"))
+    (let* ((report-root (merge-pathnames #P"tmp/test-results/"
+                                         (uiop:ensure-directory-pathname
+                                          (uiop:getcwd))))
+           (coverage-root (merge-pathnames #P"tmp/coverage/"
+                                           (uiop:ensure-directory-pathname
+                                            (uiop:getcwd))))
+           (performance-root (merge-pathnames #P"tmp/performance/"
+                                              (uiop:ensure-directory-pathname
+                                               (uiop:getcwd))))
+           (report-path (merge-pathnames #P"latest-report.json" report-root))
+           (coverage-path (merge-pathnames #P"cover-index.html" coverage-root))
+           (performance-path (merge-pathnames #P"latest.sexp" performance-root)))
+      (when (probe-file coverage-path)
+        (delete-file coverage-path))
+      (with-open-file (stream report-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (write-string
+         (sbcl-agent::emit-json
+          (sbcl-agent::platform-json-safe-value
+           '(:generatedAt 123457
+             :suiteId "sbcl-agent"
+             :summary (:total 2 :passed 1 :failed 1 :durationSeconds 1.0)
+             :results ((:name "project-governance-smoke"
+                        :category :service-contracts
+                        :status :failed
+                        :durationSeconds 0.5
+                        :error "quality gate regression")
+                       (:name "trace-link-smoke"
+                        :category :service-contracts
+                        :status :passed
+                        :durationSeconds 0.5)))))
+         stream))
+      (with-open-file (stream performance-path
+                              :direction :output
+                              :if-exists :supersede
+                              :if-does-not-exist :create)
+        (let ((*print-circle* t)
+              (*print-pretty* t))
+          (write '(:generated-at 123457
+                   :say-turn-latency (:avg-seconds 0.08 :min-seconds 0.07 :max-seconds 0.09 :count 3)
+                   :environment-save-load (:save-seconds 0.07 :load-seconds 0.08 :total-seconds 0.15))
+                 :stream stream)))
+      (let* ((blocked-response
+               (sbcl-agent::command-project-quality-gate-service
+                session
+                :project-id project-id
+                :title "Operational Readiness"
+                :summary "Tests, coverage, performance, and recovery posture must all remain green."
+                :maximum-failed-tests 0
+                :require-coverage-p t
+                :maximum-say-turn-latency-seconds 0.05
+                :maximum-environment-save-load-seconds 0.10
+                :require-recovery-ready-p t))
+             (blocked-summary (getf (sbcl-agent::service-response-data blocked-response) :quality-gate-summary))
+             (blocked-gate (second (getf blocked-summary :gates))))
+        (assert-equal :blocked
+                      (getf blocked-summary :readiness)
+                      "project quality-gate service should block when testing and performance posture regresses")
+        (assert-true (> (length (or (getf blocked-gate :unmet-conditions) '())) 0)
+                     "project quality-gate service should report unmet conditions for blocked gates")))
+    (let* ((second-project (sbcl-agent::create-project-record session :title "Secondary Project"))
+           (select-response (sbcl-agent::command-project-select-service
+                             session
+                             (sbcl-agent::project-record-id second-project))))
+      (assert-equal :select
+                    (getf select-response :operation)
+                    "project select service should identify the select operation")
+      (assert-equal (sbcl-agent::project-record-id second-project)
+                    (getf (sbcl-agent::service-response-data select-response) :id)
+                    "project select service should switch the selected project"))))
 
 (defun conversation-service-contract-test ()
   (let ((session (make-test-session :cwd "/tmp/conversation-service-contract/")))
@@ -3132,6 +4353,237 @@
       (assert-equal 1
                     (length (sbcl-agent::agent-session-work-items session))
                     "mutating prompts should create one governed work item"))))
+
+(defun project-authoring-tool-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/project-authoring-tool-service-contract/"))
+         (project (sbcl-agent::create-project-record session
+                                                     :title "Tooling Project"
+                                                     :summary "Governed authoring by tool."))
+         (project-id (sbcl-agent::project-record-id project)))
+    (assert-signals-error
+     (lambda ()
+       (sbcl-agent::command-invoke-tool-service
+        session
+        :project/append-requirement
+        (list :project-id project-id
+              :title "Blocked requirement"
+              :summary "Should require governed approval.")))
+     "Approval required for :PROJECT-GOVERNANCE-WRITE"
+     "project authoring tools should enforce governed approval before mutation")
+    (sbcl-agent::approve-policy session :project-governance-write)
+    (let ((constitution-response
+            (sbcl-agent::command-invoke-tool-service
+             session
+             :project/set-constitution
+             (list :project-id project-id
+                   :constitution '(:purpose "Governed SDLC execution"
+                                   :principles ("traceability" "quality gates"))))))
+      (assert-equal :tool
+                    (getf constitution-response :operation)
+                    "project constitution tool execution should identify tool execution")
+      (assert-service-metadata-shape constitution-response "project constitution tool execution")
+      (assert-equal "Governed SDLC execution"
+                    (getf (getf (getf (sbcl-agent::service-response-data constitution-response) :project)
+                                :constitution)
+                          :purpose)
+                    "project constitution tool should persist the constitution payload"))
+    (let ((requirement-response
+            (sbcl-agent::command-invoke-tool-service
+             session
+             :project/append-requirement
+             (list :project-id project-id
+                   :title "Capture requirements"
+                   :summary "Requirements must be governed."
+                   :priority "high"
+                   :kind "functional"))))
+      (assert-equal :project/append-requirement
+                    (getf (sbcl-agent::service-response-data requirement-response) :tool)
+                    "project requirement tool should preserve the executed tool id")
+      (assert-equal 1
+                    (length (getf (getf (sbcl-agent::service-response-data requirement-response) :project)
+                                  :requirements))
+                    "project requirement tool should append a requirement"))
+    (let* ((detail (sbcl-agent::service-response-data
+                    (sbcl-agent::query-project-detail-service session project-id)))
+           (requirement-id (getf (first (getf detail :requirements)) :id))
+           (decision-response
+             (sbcl-agent::command-invoke-tool-service
+              session
+              :project/append-architecture-decision
+              (list :project-id project-id
+                    :title "Adopt governed project tools"
+                    :summary "Project authoring flows through governed tools."
+                    :status "accepted"
+                    :linked-requirement-ids (list requirement-id)))))
+      (assert-equal 1
+                    (length (getf (getf (sbcl-agent::service-response-data decision-response) :project)
+                                  :architecture-decisions))
+                    "project architecture decision tool should append a decision")
+      (assert-true (find :requirement
+                         (mapcar (lambda (entry) (getf entry :target-kind))
+                                 (getf (getf (getf (sbcl-agent::service-response-data decision-response) :project)
+                                             :trace-neighborhood)
+                                       :outbound)))
+                   "project architecture decision tool should emit trace linkage to linked requirements"))))
+
+(defun project-create-conversation-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/project-create-conversation-service-contract/"))
+         (provider (make-instance 'project-create-action-provider))
+         (command (sbcl-agent::normalize-form-command '(say "Create the governed project foundation through the conversation thread."))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (declare (ignore updated-session))
+      (assert-equal :say kind "project create conversation tool execution should dispatch as :say")
+      (let ((data result))
+    (assert-equal :awaiting-approval
+                  (getf (getf data :turn) :status)
+                  "project create conversation tool execution should wait for approval")
+    (assert-true (> (getf data :staged-action-count) 0)
+                 "project create conversation tool execution should stage a governed action")
+    (assert-equal 1
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "project create conversation tool execution should leave one pending action")
+    (assert-equal 1
+                  (length (sbcl-agent::agent-session-work-items session))
+                  "project create conversation tool execution should create one governed work item")
+    (let ((tool-op (find "assistant-tool"
+                         (sbcl-agent::agent-session-operations session)
+                         :key #'sbcl-agent::operation-name
+                         :test #'string=)))
+      (assert-true tool-op "project create conversation tool execution should record a tool operation")
+      (assert-equal :project-governance-write
+                    (getf (sbcl-agent::operation-policy-decision tool-op) :policy-id)
+                    "project create conversation tool execution should apply project governance policy"))
+      (assert-equal :approve-policy
+                    (getf (sbcl-agent::command-approve-policy-service session :project-governance-write) :operation)
+                    "project create conversation tool execution should expose policy approval"))
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (declare (ignore resume-result resumed-session))
+      (assert-equal :turn-resume resume-kind
+                    "project create conversation tool execution should resume through turn/resume"))
+    (assert-equal 0
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "project create conversation tool execution should clear pending actions after resume")
+    (assert-equal 1
+                  (length (sbcl-agent::list-project-records session))
+                  "project create conversation tool execution should persist one project")
+    (let* ((project (first (sbcl-agent::list-project-records session)))
+           (project-id (sbcl-agent::project-record-id project))
+           (detail (sbcl-agent::service-response-data
+                    (sbcl-agent::query-project-detail-service session project-id))))
+      (assert-equal "Agent Governed Project"
+                    (getf detail :title)
+                    "project create conversation tool execution should persist the created project title")
+      (assert-equal "Deliver an end-to-end governed SDLC loop."
+                    (getf (getf detail :constitution) :purpose)
+                    "project create conversation tool execution should persist the constitution")
+      (assert-equal 2
+                    (length (or (getf detail :requirements) '()))
+                    "project create conversation tool execution should persist requirements")
+      (assert-equal 1
+                    (length (or (getf detail :feature-specifications) '()))
+                    "project create conversation tool execution should persist feature specifications")
+      (assert-equal 1
+                    (length (or (getf detail :user-journeys) '()))
+                    "project create conversation tool execution should persist user journeys")
+      (assert-equal 1
+                    (length (or (getf detail :architecture-decisions) '()))
+                    "project create conversation tool execution should persist architecture decisions")
+      (assert-equal 1
+                    (length (or (getf detail :source-roots) '()))
+                    "project create conversation tool execution should persist source roots")
+      (assert-true (find :requirement
+                         (mapcar (lambda (entry) (getf entry :target-kind))
+                                 (getf (getf detail :trace-neighborhood) :outbound)))
+                   "project create conversation tool execution should emit project trace links")
+      (assert-equal :committed
+                    (sbcl-agent::work-item-status
+                     (first (sbcl-agent::agent-session-work-items session)))
+                    "project create conversation tool execution should commit the governed work item after resume")))))
+
+(defun project-augment-conversation-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/project-augment-conversation-service-contract/"))
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "Thread Augmentation Project"
+                   :summary "Selected project for governed thread authoring."
+                   :requirements
+                   (list (sbcl-agent::make-project-requirement
+                          :id "req-thread-authoring"
+                          :title "Support thread-driven governance"
+                          :summary "Conversations should append governed artifacts."
+                          :kind :functional
+                          :priority :high
+                          :status :proposed
+                          :verification-kind :acceptance-test))))
+         (_selected (sbcl-agent::select-project-record session (sbcl-agent::project-record-id project)))
+         (provider (make-instance 'project-augment-action-provider
+                                  :requirement-id "req-thread-authoring"))
+         (command (sbcl-agent::normalize-form-command '(say "Expand the selected project with governed specifications, journeys, testing, and quality gates."))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (declare (ignore updated-session))
+      (assert-equal :say kind "project augment conversation tool execution should dispatch as :say")
+      (let ((data result))
+    (assert-equal :awaiting-approval
+                  (getf (getf data :turn) :status)
+                  "project augment conversation tool execution should wait for approval")
+    (assert-true (> (getf data :staged-action-count) 1)
+                 "project augment conversation tool execution should stage multiple governed actions")
+    (assert-equal 8
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "project augment conversation tool execution should stage every project authoring action")
+      (assert-equal :approve-policy
+                    (getf (sbcl-agent::command-approve-policy-service session :project-governance-write) :operation)
+                    "project augment conversation tool execution should expose policy approval"))
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (declare (ignore resume-result resumed-session))
+      (assert-equal :turn-resume resume-kind
+                    "project augment conversation tool execution should resume through turn/resume"))
+    (assert-equal 0
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "project augment conversation tool execution should clear pending actions after resume")
+    (let* ((detail (sbcl-agent::service-response-data
+                    (sbcl-agent::query-project-detail-service
+                     session
+                     (sbcl-agent::project-record-id project))))
+           (trace-target-kinds (mapcar (lambda (entry) (getf entry :target-kind))
+                                       (getf (getf detail :trace-neighborhood) :outbound))))
+      (assert-equal "high"
+                    (getf (getf detail :design-system) :density)
+                    "project augment conversation tool execution should persist design-system updates")
+      (assert-equal "precise"
+                    (getf (getf detail :style-guide) :tone)
+                    "project augment conversation tool execution should persist style-guide updates")
+      (assert-equal 1
+                    (length (or (getf detail :feature-specifications) '()))
+                    "project augment conversation tool execution should append a feature specification")
+      (assert-equal 1
+                    (length (or (getf detail :user-journeys) '()))
+                    "project augment conversation tool execution should append a user journey")
+      (assert-equal 1
+                    (length (or (getf detail :architecture-decisions) '()))
+                    "project augment conversation tool execution should append an architecture decision")
+      (assert-equal 1
+                    (length (or (getf detail :source-roots) '()))
+                    "project augment conversation tool execution should append a source root")
+      (assert-true (member :full-suite (or (getf detail :linked-testing-harness-ids) '()) :test #'eq)
+                   "project augment conversation tool execution should bind the required testing harness")
+      (assert-equal 1
+                    (length (or (getf detail :quality-gates) '()))
+                    "project augment conversation tool execution should append a quality gate")
+      (assert-true (find :testing-harness trace-target-kinds)
+                   "project augment conversation tool execution should emit testing harness trace evidence")
+      (assert-true (find :source-root trace-target-kinds)
+                   "project augment conversation tool execution should emit source root trace evidence")))))
 
 (defun conversation-execution-end-to-end-scenario-service-contract-test ()
   (labels ((assert-clean-turn-state (session response prompt expected-mode message)

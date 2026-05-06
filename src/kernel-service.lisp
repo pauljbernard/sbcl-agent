@@ -264,22 +264,28 @@
                     (find-work-item session bound-id)))))))
 
 (defun kernel-governance-preflight (session capability payload context response)
-  (let* ((policy-id (kernel-capability-policy-id session capability payload response))
+  (let* ((normalized (kernel-capability-name capability))
+         (policy-id (kernel-capability-policy-id session capability payload response))
          (mutation-class (kernel-governance-mutation-class capability payload))
          (work-item (kernel-context-work-item session context))
-         (mutation-block-reasons (and work-item
-                                      (kernel-governance-mutation-sensitive-p mutation-class)
-                                      (work-item-mutation-block-reasons work-item)))
-         (self-modification-targets (and (kernel-governance-mutation-sensitive-p mutation-class)
-                                         (kernel-self-modification-targets session capability payload)))
-         (checkpoint-id (and work-item
-                             (latest-work-item-checkpoint-id work-item)))
          (policy (and policy-id
                       (ignore-errors (ensure-capability-policy policy-id))))
          (approval-required-p (and policy
                                    (not (eq (capability-policy-default-grant-mode policy) :implicit))))
          (approval-granted-p (and policy-id
                                   (ignore-errors (policy-approved-p session policy-id))))
+         (mutation-block-reasons
+           (and work-item
+                (kernel-governance-mutation-sensitive-p mutation-class)
+                (let ((reasons (work-item-mutation-block-reasons work-item)))
+                  (if (or approval-granted-p
+                          (string= normalized "rgp/resume"))
+                      (remove :awaiting-approval reasons :test #'eq)
+                      reasons))))
+         (self-modification-targets (and (kernel-governance-mutation-sensitive-p mutation-class)
+                                         (kernel-self-modification-targets session capability payload)))
+         (checkpoint-id (and work-item
+                             (latest-work-item-checkpoint-id work-item)))
          (checkpoint-required-p (member mutation-class
                                        '(:runtime-mutation :runtime-reload :workspace-mutation)
                                        :test #'eq))

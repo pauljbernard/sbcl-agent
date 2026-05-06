@@ -4,8 +4,12 @@
   category
   domains
   historical-p
+  intent-context-p
   runtime-inspection-p
   governance-context-p
+  observability-context-p
+  testing-context-p
+  project-context-p
   source-context-p
   mutation-likely-p
   explanation)
@@ -17,13 +21,46 @@
   output-target
   explanation)
 
+(defun prompt-match-tokens (prompt)
+  (let ((normalized (string-downcase (or prompt "")))
+        (current "")
+        (tokens '()))
+    (labels ((flush-token ()
+               (when (> (length current) 0)
+                 (push current tokens))
+               (setf current "")))
+      (loop for ch across normalized
+            do (if (alphanumericp ch)
+                   (setf current (concatenate 'string current (string ch)))
+                   (flush-token)))
+      (flush-token))
+    (nreverse tokens)))
+
+(defun simple-word-needle-p (needle)
+  (and (> (length needle) 0)
+       (every #'alphanumericp needle)))
+
 (defun prompt-contains-any-needle-p (prompt needles)
-  (not (null (some (lambda (needle)
-                     (search needle prompt :test #'char-equal))
-                   needles))))
+  (let* ((normalized-prompt (string-downcase (or prompt "")))
+         (tokens (prompt-match-tokens normalized-prompt)))
+    (not
+     (null
+      (some (lambda (needle)
+              (let ((normalized-needle (string-downcase needle)))
+                (if (simple-word-needle-p normalized-needle)
+                    (member normalized-needle tokens :test #'string=)
+                    (search normalized-needle normalized-prompt :test #'char-equal))))
+            needles)))))
 
 (defun classify-retrieval-intent (prompt &key (operator-mode :repl-bridge))
   (let* ((normalized-prompt (or prompt ""))
+         (intent-p (prompt-contains-any-needle-p normalized-prompt
+                                                 '("intent" "alignment" "aligned"
+                                                   "misaligned" "divergence"
+                                                   "reconcile" "reconciliation"
+                                                   "continuous alignment"
+                                                   "expected behavior"
+                                                   "expected behaviors")))
          (runtime-p (prompt-contains-any-needle-p normalized-prompt
                                                   '("runtime" "package" "symbol" "method"
                                                     "caller" "callers" "reload" "eval"
@@ -44,6 +81,36 @@
                                                  '("file" "files" "source" "patch"
                                                    "diff" "code" "repository" "repo"
                                                    "workspace" "implement" "refactor")))
+         (observability-p (prompt-contains-any-needle-p normalized-prompt
+                                                        '("process" "processes" "cpu" "memory"
+                                                          "network" "disk" "i/o" "io"
+                                                          "telemetry" "performance" "monitor"
+                                                          "monitoring" "console" "log" "logs"
+                                                          "diagnostic" "diagnostics" "crash"
+                                                          "spin report" "system log")))
+         (testing-p (prompt-contains-any-needle-p normalized-prompt
+                                                  '("test" "tests" "testing" "test suite"
+                                                    "harness" "coverage" "benchmark"
+                                                    "benchmarks" "performance test"
+                                                    "performance tests" "regression"
+                                                    "smoke test" "validation run"
+                                                    "validator" "replay")))
+         (project-p (prompt-contains-any-needle-p normalized-prompt
+                                                  '("project" "projects" "constitution"
+                                                    "requirement" "requirements"
+                                                    "feature spec" "feature specification"
+                                                    "feature specifications"
+                                                    "design system" "style guide"
+                                                    "testing strategy" "testing posture"
+                                                    "release readiness" "release candidate"
+                                                    "signoff" "readiness"
+                                                    "readiness obligations"
+                                                    "quality gate" "quality gates"
+                                                    "user journey" "user journeys"
+                                                    "non functional" "non-functional"
+                                                    "architecture" "architecture decision"
+                                                    "technology stack" "tech stack"
+                                                    "product spec" "specification")))
          (mutation-p (prompt-contains-any-needle-p normalized-prompt
                                                    '("write" "change" "modify" "mutate" "mutation" "update"
                                                      "patch" "implement" "refactor"
@@ -54,13 +121,19 @@
                                                              "chat" "assistant said"))))
          (domains (remove-duplicates
                    (append (when conversation-p '(:conversation))
+                           (when intent-p '(:intent))
+                           (when project-p '(:project))
                            (when runtime-p '(:runtime))
+                           (when observability-p '(:telemetry :console :diagnostic))
+                           (when testing-p '(:testing))
                            (when workflow-p '(:workflow))
                            (when incident-p '(:incident))
-                           (when (or workflow-p incident-p mutation-p) '(:artifact :events))
+                           (when (or workflow-p incident-p mutation-p testing-p) '(:artifact :events))
                            (when source-p '(:workspace)))
                    :test #'eq))
          (category (cond
+                     (project-p :project-governance)
+                     (testing-p :testing-feedback)
                      ((and incident-p runtime-p) :runtime-debugging)
                      ((and source-p mutation-p) :code-change)
                      (incident-p :incident-follow-up)
@@ -75,11 +148,23 @@
      :category category
      :domains resolved-domains
      :historical-p history-p
+     :intent-context-p intent-p
      :runtime-inspection-p runtime-p
      :governance-context-p (or workflow-p incident-p mutation-p)
+     :observability-context-p observability-p
+     :testing-context-p testing-p
+     :project-context-p project-p
      :source-context-p source-p
      :mutation-likely-p mutation-p
      :explanation (cond
+                    (intent-p
+                     "Prompt indicates durable intent, alignment, divergence, or reconciliation reasoning.")
+                    (project-p
+                     "Prompt indicates project governance, requirements, journeys, architecture, or design-system reasoning.")
+                    (testing-p
+                     "Prompt indicates testing, coverage, benchmark, or validation-feedback reasoning.")
+                    (observability-p
+                     "Prompt indicates runtime observability, telemetry, console, or diagnostics reasoning.")
                     (incident-p
                      "Prompt indicates incident or recovery reasoning.")
                     (workflow-p

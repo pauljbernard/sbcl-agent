@@ -2,19 +2,20 @@
 
 (defun event-stream-entry (event index)
   (let ((metadata (event-metadata event)))
-    (list :cursor index
-        :kind (event-kind event)
-        :timestamp (event-timestamp event)
-        :family (event-family event)
-        :entity-id (event-entity-id event)
-        :thread-id (event-thread-id event)
-        :turn-id (event-turn-id event)
-        :visibility (event-visibility event)
-        :payload (event-payload event)
-        :metadata metadata
-        :run-id (getf metadata :run-id)
-        :operation-id (getf metadata :operation-id)
-        :work-item-id (getf metadata :work-item-id))))
+    (list :id (event-id event)
+          :cursor index
+          :kind (event-kind event)
+          :timestamp (event-timestamp event)
+          :family (event-family event)
+          :entity-id (event-entity-id event)
+          :thread-id (event-thread-id event)
+          :turn-id (event-turn-id event)
+          :visibility (event-visibility event)
+          :payload (event-payload event)
+          :metadata metadata
+          :run-id (getf metadata :run-id)
+          :operation-id (getf metadata :operation-id)
+          :work-item-id (getf metadata :work-item-id))))
 
 (defun event-visible-to-stream-p (event family visibility)
   (and (or (null family)

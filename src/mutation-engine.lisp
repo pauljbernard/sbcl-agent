@@ -46,7 +46,8 @@
   (let ((policy-id (assistant-action-policy-id action)))
     (or (eq (assistant-action-type action) :patch)
         (eq policy-id :runtime-eval-mutate)
-        (member policy-id '(:workspace-write :git-write :process-run) :test #'eq))))
+        (member policy-id '(:workspace-write :git-write :process-run :project-governance-write)
+                :test #'eq))))
 
 (defun governed-actions-present-p (action-report)
   (find-if #'governed-assistant-action-p

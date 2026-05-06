@@ -29,6 +29,11 @@
   pending-actions
   tasks
   tasks-tail
+  projects
+  projects-tail
+  current-project-id
+  trace-links
+  trace-links-tail
   work-items
   work-items-tail
   workflow-records
@@ -69,6 +74,11 @@
    :pending-actions '()
    :tasks '()
    :tasks-tail nil
+   :projects '()
+   :projects-tail nil
+   :current-project-id nil
+   :trace-links '()
+   :trace-links-tail nil
    :work-items '()
    :work-items-tail nil
    :workflow-records '()
@@ -96,6 +106,8 @@
         (agent-session-events-tail session) (last (agent-session-events session))
         (agent-session-capability-grants-tail session) (last (agent-session-capability-grants session))
         (agent-session-tasks-tail session) (last (agent-session-tasks session))
+        (agent-session-projects-tail session) (last (agent-session-projects session))
+        (agent-session-trace-links-tail session) (last (agent-session-trace-links session))
         (agent-session-work-items-tail session) (last (agent-session-work-items session))
         (agent-session-workflow-records-tail session) (last (agent-session-workflow-records session))
         (agent-session-incidents-tail session) (last (agent-session-incidents session))
@@ -147,6 +159,8 @@
                (eq (environment-compatibility-session *current-environment*) session))
       (refresh-environment-root-state-from-session *current-environment* session)
       (append-environment-session-event *current-environment* session event))
+    (when (fboundp 'maybe-run-continuous-alignment-loop-for-event)
+      (maybe-run-continuous-alignment-loop-for-event session event))
     event))
 
 (defun append-transcript-entry (session role content)
@@ -569,7 +583,9 @@
                                    (length (agent-session-events session)))
                   :event-summary (or (bound-session-environment-state-summary environment-summary :event-summary)
                                      (list :event-count (length (agent-session-events session))
-                                           :recent-kinds (recent-event-kinds (agent-session-events session)))))
+                                           :recent-kinds (recent-event-kinds (agent-session-events session))))
+                  :alignment-state (bound-session-environment-state-summary environment-summary :alignment-state)
+                  :reconciliation-decision (bound-session-environment-state-summary environment-summary :reconciliation-decision))
             (when environment-summary
               (list :environment environment-summary)))))
 
@@ -587,6 +603,26 @@
       (t
        (list :event-summary payload)))))
 
+(defun serializable-session-value (value)
+  (cond
+    ((or (null value)
+         (eq value t)
+         (stringp value)
+         (numberp value)
+         (characterp value)
+         (pathnamep value)
+         (keywordp value))
+     value)
+    ((symbolp value)
+     value)
+    ((consp value)
+     (cons (serializable-session-value (car value))
+           (serializable-session-value (cdr value))))
+    ((vectorp value)
+     (map 'vector #'serializable-session-value value))
+    (t
+     (princ-to-string value))))
+
 (defun serializable-session-event (event)
   (make-event :id (event-id event)
               :timestamp (event-timestamp event)
@@ -596,11 +632,21 @@
               :thread-id (event-thread-id event)
               :turn-id (event-turn-id event)
               :visibility (event-visibility event)
-              :metadata (event-metadata event)
-              :payload (compact-session-event-payload event)))
+              :metadata (serializable-session-value (event-metadata event))
+              :payload (serializable-session-value
+                        (compact-session-event-payload event))))
 
 (defun serializable-session-events (session)
   (mapcar #'serializable-session-event (agent-session-events session)))
+
+(defun serializable-session-trace-links (session)
+  (mapcar #'trace-link-summary (agent-session-trace-links session)))
+
+(defun restore-session-trace-links (session)
+  (setf (agent-session-trace-links session)
+        (mapcar #'canonicalize-trace-link-record
+                (or (agent-session-trace-links session) '())))
+  session)
 
 (defun serializable-session-copy (session)
   (ensure-default-thread session)
@@ -622,6 +668,9 @@
    :capability-grants (agent-session-capability-grants session)
    :pending-actions (agent-session-pending-actions session)
    :tasks (agent-session-tasks session)
+   :projects (agent-session-projects session)
+   :current-project-id (agent-session-current-project-id session)
+   :trace-links (serializable-session-trace-links session)
    :work-items (agent-session-work-items session)
    :workflow-records (agent-session-workflow-records session)
    :incidents (agent-session-incidents session)
@@ -706,6 +755,7 @@
       (unless (typep session 'agent-session)
         (error "Session file ~A did not contain an AGENT-SESSION" path))
       (restore-session-events-and-transcript session)
+      (restore-session-trace-links session)
       (normalize-session-capability-grants session)
       (ensure-default-thread session)
       (rebuild-agent-session-tails session)

@@ -75,9 +75,20 @@
                                                         :test #'eq)
                                            sum (getf entry :count)))))
 
-(defun environment-summary (&optional environment)
+(defun environment-summary (&optional environment
+                             &key
+                               (include-alignment-state-p t)
+                               (include-reconciliation-decision-p t))
   (let* ((active-environment (ensure-environment environment))
-         (session (environment-compatibility-session active-environment)))
+         (sessionish (environment-compatibility-session active-environment))
+         (session (and (compatibility-session-materialized-p sessionish)
+                       sessionish))
+         (alignment-state (and include-alignment-state-p
+                               session
+                               (compute-alignment-state session)))
+         (reconciliation-decision (and include-reconciliation-decision-p
+                                       session
+                                       (compute-reconciliation-decision session))))
     (let* ((runtime-state (environment-runtime-state active-environment))
            (agent-state (environment-agent-state active-environment))
            (root-summary (environment-summaries active-environment))
@@ -112,20 +123,23 @@
             :conversation-state conversation-summary
             :workflow-state workflow-summary
             :agent-state agent-summary
-            :session-id (compatibility-session-id session)
+            :session-id (compatibility-session-id sessionish)
             :plan (or (and agent-state
                            (environment-agent-state-plan agent-state))
                       (getf root-summary :plan))
             :event-summary (environment-event-summary active-environment)
             :artifact-summary (or (environment-artifact-summary active-environment)
                                   (getf root-summary :artifact-summary))
+            :alignment-state alignment-state
+            :reconciliation-decision reconciliation-decision
             :incident-count (or (getf agent-summary :incident-count)
                                 (getf root-summary :incident-count))
             :incident-summary (or (getf agent-summary :incident-summary)
                                   (getf root-summary :incident-summary))
             :operator-status (getf root-summary :operator-status)
+            :recovery-summary (environment-recovery-report active-environment)
             :provider-profile (environment-provider-profile-summary active-environment)
-            :has-session-p (not (null (compatibility-session-id session)))))))
+            :has-session-p (not (null (compatibility-session-id sessionish)))))))
 
 (defun summarize-operator-blockers (operator-status)
   (let* ((blocked (append (or (getf operator-status :blocked-work-items) '())
@@ -143,6 +157,8 @@
                                (list :count 0 :open-count 0 :recent '())))
          (event-summary (or (getf summary :event-summary)
                             (list :event-count 0 :recent-kinds '())))
+         (alignment-state (or (getf summary :alignment-state) '()))
+         (reconciliation-decision (or (getf summary :reconciliation-decision) '()))
          (blocked-summary (summarize-operator-blockers operator-status)))
     (list :posture (list :ready-count (getf operator-status :ready-count)
                          :blocked-count (getf operator-status :blocked-count)
@@ -151,13 +167,20 @@
                          :durable-count (getf operator-status :durable-count)
                          :incident-count (getf operator-status :incident-count)
                          :open-incident-count (getf operator-status :open-incident-count))
+          :alignment alignment-state
+          :reconciliation reconciliation-decision
           :blocked-work blocked-summary
           :incidents incident-summary
           :events event-summary)))
 
-(defun environment-status (&optional environment)
+(defun environment-status (&optional environment
+                             &key
+                               (include-alignment-state-p t)
+                               (include-reconciliation-decision-p t))
   (let* ((active-environment (ensure-environment environment))
-         (summary (environment-summary active-environment))
+         (summary (environment-summary active-environment
+                                       :include-alignment-state-p include-alignment-state-p
+                                       :include-reconciliation-decision-p include-reconciliation-decision-p))
          (operator-evidence (environment-operator-evidence summary))
          (operator-status (getf operator-evidence :posture))
          (active-thread (environment-active-thread-summary active-environment))
@@ -178,7 +201,10 @@
                                 :summary runtime-state)
           :blocked-work blocked-summary
           :incidents incident-summary
+          :recovery (getf summary :recovery-summary)
           :provider-profile (getf summary :provider-profile)
+          :alignment-state (getf summary :alignment-state)
+          :reconciliation-decision (getf summary :reconciliation-decision)
           :operator-posture (append operator-status
                                     (list :outstanding-approval-count (getf blocked-summary :approval-count)
                                           :outstanding-cold-validation-count (getf blocked-summary :cold-validation-count)

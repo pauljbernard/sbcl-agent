@@ -85,7 +85,20 @@
                                                  :execution-handles handles
                                                  :execution-surface (compact-execution-surface-summary
                                                                      (incident-execution-surface-summary incident handles)))))
-                                 :metadata (make-service-metadata :authority :environment
-                                                                  :read-model :incident-detail-v1
-                                                                  :session session
-                                                                  :incident-id incident-id))))
+                                  :metadata (make-service-metadata :authority :environment
+                                                                   :read-model :incident-detail-v1
+                                                                   :session session
+                                                                   :incident-id incident-id))))
+
+(defun command-incident-remediation-plan-service (session incident-id remediation-plan)
+  (let ((incident (find-incident session incident-id)))
+    (unless incident
+      (error "Unknown incident ~A" incident-id))
+    (update-incident-remediation-plan session incident remediation-plan)
+    (make-service-command-response :incident
+                                   :set-remediation-plan
+                                   (incident-detail session incident)
+                                   :metadata (make-service-metadata :authority :environment
+                                                                    :command-model :incident-command-v1
+                                                                    :session session
+                                                                    :incident-id incident-id))))

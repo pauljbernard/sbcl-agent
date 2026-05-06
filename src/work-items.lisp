@@ -119,6 +119,8 @@
 
 (defun work-item-plan-health (work-item)
   (cond
+    ((work-item-resume-payload work-item)
+     :resumable)
     ((member (work-item-status work-item)
              '(:awaiting-approval :awaiting-cold-validation :quarantined)
              :test #'eq)
@@ -127,20 +129,21 @@
              '(:failed :rolled-back)
              :test #'eq)
      :interrupted)
-    ((work-item-resume-payload work-item)
-     :resumable)
     (t
      :active)))
 
 (defun work-item-plan-current-phase (work-item)
   (cond
-    ((eq (work-item-plan-health work-item) :resumable) :resolve-blockers)
+    ((member (work-item-status work-item) '(:awaiting-cold-validation :committed) :test #'eq)
+     :validate)
+    ((member (work-item-status work-item) '(:awaiting-approval :quarantined :failed :rolled-back) :test #'eq)
+     :resolve-blockers)
+    ((eq (work-item-plan-health work-item) :resumable)
+     :resolve-blockers)
     (t
      (case (work-item-status work-item)
-       ((:awaiting-approval :quarantined :failed :rolled-back) :resolve-blockers)
        (:planned :plan)
        ((:checkpointed :mutating) :mutate)
-       ((:awaiting-cold-validation :committed) :validate)
        (t (or (first (getf (work-item-long-horizon-plan work-item) :planning-phases))
               :inspect))))))
 
@@ -561,6 +564,35 @@
         :image-mutation-count (length (mutation-transaction-image-mutations transaction))
         :resource-effect-count (length (mutation-transaction-resource-effects transaction))))
 
+(defun summarize-corrective-action (action)
+  (when action
+    (list :kind (getf action :kind)
+          :target (getf action :target)
+          :reason (getf action :reason))))
+
+(defun summarize-corrective-trigger-event (event)
+  (when event
+    (list :event-id (getf event :event-id)
+          :kind (getf event :kind)
+          :family (getf event :family)
+          :entity-id (getf event :entity-id))))
+
+(defun work-item-corrective-context (work-item)
+  (let ((intent (work-item-mutation-intent work-item)))
+    (when (eq (getf intent :source) :reconciliation-decision)
+      (list :kind :alignment-reconciliation
+            :intent-id (getf intent :intent-id)
+            :decision (getf intent :decision)
+            :approval-posture (getf intent :approval-posture)
+            :alignment-status (getf (getf intent :alignment-state) :status)
+            :alignment-score (getf (getf intent :alignment-state) :score)
+            :proposed-actions (mapcar #'summarize-corrective-action
+                                      (or (getf intent :proposed-actions) '()))
+            :trigger-events (mapcar #'summarize-corrective-trigger-event
+                                    (or (getf (getf (getf intent :context-packet) :relevant-events)
+                                              :resolved-linked-events)
+                                        '()))))))
+
 (defun provenance-record-summary (record)
   (and record
        (list :source-hash (provenance-record-source-hash record)
@@ -643,6 +675,7 @@
         :validator-tasks (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item))
         :next-action (work-item-next-action work-item)
         :resume-payload (work-item-resume-payload work-item)
+        :corrective-context (work-item-corrective-context work-item)
         :image-reconciliation (let ((record (work-item-image-reconciliation work-item)))
                                 (and record
                                      (list :recorded-at (image-reconciliation-record-recorded-at record)
@@ -864,6 +897,7 @@
       (setf (provenance-record-approval-checkpoints (work-item-provenance work-item))
             (append (provenance-record-approval-checkpoints (work-item-provenance work-item))
                     (list requirement))
+            (work-item-status work-item) :awaiting-approval
             (work-item-updated-at work-item) (get-universal-time))
       (mirror-work-item-operator-intervention
        work-item
@@ -1298,6 +1332,14 @@
                             work-item)
       (setf (agent-session-work-items session) work-items
             (agent-session-work-items-tail session) tail))
+    (when workflow-record
+      (create-trace-link session
+                         :relation :tracked-in-workflow-record
+                         :source-kind :work-item
+                         :source-id (work-item-id work-item)
+                         :target-kind :workflow-record
+                         :target-id (workflow-record-id workflow-record)
+                         :metadata (list :goal goal)))
     (let ((environment (session-bound-environment session)))
       (when environment
         (environment-append-work-item environment session work-item)))

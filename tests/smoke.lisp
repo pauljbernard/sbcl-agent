@@ -2470,6 +2470,27 @@ fi
   (assert-equal 1
                 (length (sbcl-agent::mock-actions-for-prompt "can you list src"))
                 "mock-actions-for-prompt should create a list action")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please create governed project artifacts"))
+                "mock-actions-for-prompt should create one governed project creation action")
+  (assert-equal 8
+                (length (sbcl-agent::mock-actions-for-prompt "please augment governed project artifacts"))
+                "mock-actions-for-prompt should create the governed project augmentation action set")
+  (assert-equal 2
+                (length (sbcl-agent::mock-actions-for-prompt "please revise governed project foundations"))
+                "mock-actions-for-prompt should create the governed project foundation revision action set")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please revise governed architecture posture"))
+                "mock-actions-for-prompt should create the governed project architecture revision action set")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please revise governed testing posture"))
+                "mock-actions-for-prompt should create the governed project testing posture revision action set")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please revise governed release readiness"))
+                "mock-actions-for-prompt should create the governed release readiness revision action set")
+  (assert-equal 1
+                (length (sbcl-agent::mock-actions-for-prompt "please revise governed readiness obligations"))
+                "mock-actions-for-prompt should create the governed readiness obligations revision action set")
   (assert-equal nil
                 (sbcl-agent::mock-actions-for-prompt "no tool request here")
                 "mock-actions-for-prompt should return nil for plain prompts")
@@ -2490,6 +2511,17 @@ fi
       (assert-equal 1
                     (length (sbcl-agent::assistant-response-actions response))
                     "mock provider send-request should return proposed actions"))
+    (let ((project-response
+            (sbcl-agent::send-request
+             provider
+             (sbcl-agent::make-provider-request
+              :prompt "please create governed project artifacts"
+              :session-summary '(:recent-transcript ())))))
+      (assert-equal :PROJECT/CREATE
+                    (getf (sbcl-agent::assistant-action-payload
+                           (first (sbcl-agent::assistant-response-actions project-response)))
+                          :tool-id)
+                    "mock provider should expose the governed project creation tool action"))
     (let ((events '()))
       (sbcl-agent::stream-request provider
                                   request
@@ -2499,6 +2531,255 @@ fi
                    "mock provider stream-request should emit action proposals")
       (assert-true (> (count :MESSAGE-DELTA events :key #'sbcl-agent::provider-event-type) 1)
                    "mock provider stream-request should emit multiple message deltas"))))
+
+(defun mock-project-authoring-conversation-approval-test ()
+  (let* ((provider (make-instance 'sbcl-agent::mock-provider :model "gpt-5"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (command (sbcl-agent::normalize-form-command '(say "please create governed project artifacts"))))
+    (multiple-value-bind (result kind updated-session)
+        (sbcl-agent::execute-command command provider session)
+      (assert-equal :say kind "mock project-authoring say should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf result :turn) :status)
+                    "mock project-authoring say should leave the turn awaiting approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "mock project-authoring say should stage one pending governed action")
+      (assert-equal 1 (length (sbcl-agent::agent-session-work-items updated-session))
+                    "mock project-authoring say should create one governed work item")
+      (let ((tool-op (find "assistant-tool"
+                           (sbcl-agent::agent-session-operations updated-session)
+                           :key #'sbcl-agent::operation-name
+                           :test #'string=)))
+        (assert-true tool-op "mock project-authoring say should record the governed tool action")
+        (assert-equal :awaiting-approval (sbcl-agent::operation-status tool-op)
+                      "mock project-authoring tool action should await approval")
+        (assert-equal :approval-required
+                      (getf (sbcl-agent::operation-policy-decision tool-op) :decision)
+                      "mock project-authoring tool action should require approval")
+        (assert-equal :project-governance-write
+                      (getf (sbcl-agent::operation-policy-decision tool-op) :policy-id)
+                      "mock project-authoring tool action should record project-governance-write")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (resume-result resume-kind resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume resume-kind "mock project-authoring resume should dispatch as :turn-resume")
+      (assert-equal 1 (getf resume-result :resumed-operation-count)
+                    "mock project-authoring resume should execute the approved governed action")
+      (assert-equal 1 (length (sbcl-agent::agent-session-projects resumed-session))
+                    "mock project-authoring resume should create one governed project")
+      (let ((project (first (sbcl-agent::agent-session-projects resumed-session))))
+        (assert-equal "Agent Governed Project"
+                      (sbcl-agent::project-record-title project)
+                      "mock project-authoring resume should persist the created project title")
+        (assert-equal "req-agent-governance"
+                      (sbcl-agent::project-requirement-id
+                       (first (sbcl-agent::project-record-requirements project)))
+                      "mock project-authoring resume should persist the seeded governed requirement")))
+    (multiple-value-bind (augment-result augment-kind augment-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please augment governed project artifacts"))
+         provider
+         session)
+      (assert-equal :say augment-kind "mock project augmentation should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf augment-result :turn) :status)
+                    "mock project augmentation should also await approval")
+      (assert-equal 8 (length (sbcl-agent::agent-session-pending-actions augment-session))
+                    "mock project augmentation should stage the full governed augmentation action set"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (augment-resume-result augment-resume-kind augment-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume augment-resume-kind
+                    "mock project augmentation resume should dispatch as :turn-resume")
+      (assert-equal 8 (getf augment-resume-result :resumed-operation-count)
+                    "mock project augmentation resume should execute all staged governed actions")
+      (let ((project (first (sbcl-agent::agent-session-projects augment-resumed-session))))
+        (assert-true (search "evidence-first"
+                             (princ-to-string (sbcl-agent::project-record-style-guide project))
+                             :test #'char-equal)
+                     "mock project augmentation resume should persist the revised style guide")))
+    (multiple-value-bind (revise-result revise-kind revise-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please revise governed project foundations"))
+         provider
+         session)
+      (assert-equal :say revise-kind "mock project foundation revision should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf revise-result :turn) :status)
+                    "mock project foundation revision should await approval")
+      (assert-equal 2 (length (sbcl-agent::agent-session-pending-actions revise-session))
+                    "mock project foundation revision should stage two governed actions"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (revise-resume-result revise-resume-kind revise-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume revise-resume-kind
+                    "mock project foundation revision resume should dispatch as :turn-resume")
+      (assert-equal 2 (getf revise-resume-result :resumed-operation-count)
+                    "mock project foundation revision resume should execute both staged actions")
+      (let* ((project (first (sbcl-agent::agent-session-projects revise-resumed-session)))
+             (requirements (sbcl-agent::project-record-requirements project)))
+        (assert-true (search "conversation revision discipline"
+                             (princ-to-string (sbcl-agent::project-record-constitution project))
+                             :test #'char-equal)
+                     "mock project foundation revision resume should replace the constitution")
+        (assert-true (find "req-governed-closure"
+                           requirements
+                           :key #'sbcl-agent::project-requirement-id
+                           :test #'string=)
+                     "mock project foundation revision resume should append the revised governed requirement")))
+    (multiple-value-bind (architecture-result architecture-kind architecture-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please revise governed architecture posture"))
+         provider
+         session)
+      (assert-equal :say architecture-kind "mock project architecture revision should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf architecture-result :turn) :status)
+                    "mock project architecture revision should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions architecture-session))
+                    "mock project architecture revision should stage one governed action"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (architecture-resume-result architecture-resume-kind architecture-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume architecture-resume-kind
+                    "mock project architecture revision resume should dispatch as :turn-resume")
+      (assert-equal 1 (getf architecture-resume-result :resumed-operation-count)
+                    "mock project architecture revision resume should execute the staged action")
+      (let* ((project (first (sbcl-agent::agent-session-projects architecture-resumed-session)))
+             (architecture-decisions (sbcl-agent::project-record-architecture-decisions project)))
+        (assert-true (find "adr-governed-closure"
+                           architecture-decisions
+                           :key #'sbcl-agent::project-architecture-decision-id
+                           :test #'string=)
+                     "mock project architecture revision resume should append the revised architecture decision")))
+    (multiple-value-bind (testing-result testing-kind testing-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please revise governed testing posture"))
+         provider
+         session)
+      (assert-equal :say testing-kind "mock project testing posture revision should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf testing-result :turn) :status)
+                    "mock project testing posture revision should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions testing-session))
+                    "mock project testing posture revision should stage one governed action"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (testing-resume-result testing-resume-kind testing-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume testing-resume-kind
+                    "mock project testing posture revision resume should dispatch as :turn-resume")
+      (assert-equal 1 (getf testing-resume-result :resumed-operation-count)
+                    "mock project testing posture revision resume should execute the staged action")
+      (let* ((project (first (sbcl-agent::agent-session-projects testing-resumed-session)))
+             (testing-strategy (getf (sbcl-agent::project-record-metadata project) :testing-strategy))
+             (threshold-policy (and (listp testing-strategy)
+                                    (getf testing-strategy :threshold-policy))))
+        (assert-equal '("coverage" "performance" "governed-approval")
+                      (getf testing-strategy :required-evidence)
+                      "mock project testing posture revision resume should replace required evidence")
+        (assert-equal 2
+                      (length (getf testing-strategy :suite-expectations))
+                      "mock project testing posture revision resume should persist suite expectations")
+        (assert-equal 1
+                      (getf threshold-policy :max-failed-tests)
+                      "mock project testing posture revision resume should persist threshold policy")))
+    (multiple-value-bind (release-result release-kind release-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please revise governed release readiness"))
+         provider
+         session)
+      (assert-equal :say release-kind "mock release readiness revision should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf release-result :turn) :status)
+                    "mock release readiness revision should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions release-session))
+                    "mock release readiness revision should stage one governed action"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (release-resume-result release-resume-kind release-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume release-resume-kind
+                    "mock release readiness revision resume should dispatch as :turn-resume")
+      (assert-equal 1 (getf release-resume-result :resumed-operation-count)
+                    "mock release readiness revision resume should execute the staged action")
+      (let* ((project (first (sbcl-agent::agent-session-projects release-resumed-session)))
+             (release-readiness (getf (sbcl-agent::project-record-metadata project) :release-readiness)))
+        (assert-equal "candidate"
+                      (getf release-readiness :stage)
+                      "mock release readiness revision resume should persist the readiness stage")
+        (assert-equal "pending"
+                      (getf release-readiness :signoff-status)
+                      "mock release readiness revision resume should persist signoff status")
+        (assert-equal '("platform" "ops")
+                      (getf release-readiness :required-approvers)
+                      "mock release readiness revision resume should persist required approvers")))
+    (multiple-value-bind (obligation-result obligation-kind obligation-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(say "please revise governed readiness obligations"))
+         provider
+         session)
+      (assert-equal :say obligation-kind "mock readiness obligations revision should dispatch as :say")
+      (assert-equal :awaiting-approval
+                    (getf (getf obligation-result :turn) :status)
+                    "mock readiness obligations revision should await approval")
+      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions obligation-session))
+                    "mock readiness obligations revision should stage one governed action"))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :project-governance-write))
+     provider
+     session)
+    (multiple-value-bind (obligation-resume-result obligation-resume-kind obligation-resumed-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(turn/resume))
+         provider
+         session)
+      (assert-equal :turn-resume obligation-resume-kind
+                    "mock readiness obligations revision resume should dispatch as :turn-resume")
+      (assert-equal 1 (getf obligation-resume-result :resumed-operation-count)
+                    "mock readiness obligations revision resume should execute the staged action")
+      (let* ((project (first (sbcl-agent::agent-session-projects obligation-resumed-session)))
+             (readiness-obligations (getf (sbcl-agent::project-record-metadata project) :readiness-obligations)))
+        (assert-equal 2
+                      (length readiness-obligations)
+                      "mock readiness obligations revision resume should persist readiness obligations")
+        (assert-equal "Complete operator release signoff"
+                      (getf (first readiness-obligations) :title)
+                      "mock readiness obligations revision resume should persist obligation titles")))))
 
 (defun openai-provider-selection-test ()
   (let ((config (sbcl-agent::make-config :provider "openai-compatible"
@@ -4035,7 +4316,8 @@ fi
       (wait-for (lambda ()
                   (eq :completed
                       (sbcl-agent::task-status
-                       (first (sbcl-agent::agent-session-tasks updated-session))))))
+                       (first (sbcl-agent::agent-session-tasks updated-session)))))
+                :timeout-seconds 10.0)
       (let* ((task (first (sbcl-agent::agent-session-tasks updated-session)))
              (result (sbcl-agent::task-result task))
              (response (getf result :response)))
@@ -6447,6 +6729,101 @@ fi
                     (sbcl-agent::agent-session-transcript serializable)
                     "serializable-session-copy should not duplicate transcript state when events are persisted"))))
 
+(defun project-record-persistence-test ()
+  (let* ((path (format nil "/tmp/sbcl-agent-project-record-~D-~D.sexp"
+                       (get-universal-time)
+                       (random 1000000)))
+         (session (sbcl-agent::make-default-session))
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "IntentOS Shell"
+                   :summary "Desktop shell modernization program."
+                   :constitution '(:mission "Build a governed environment-first desktop shell."
+                                   :principles ("governance-first" "operator-visible"))
+                   :requirements
+                   (list (sbcl-agent::make-project-requirement
+                          :id "req-runtime-stability"
+                          :title "Runtime Stability"
+                          :summary "The shell must survive reloads and preserve session continuity."
+                          :scope :platform
+                          :kind :non-functional
+                          :priority :high
+                          :status :accepted
+                          :verification-kind :test-suite))
+                   :feature-specifications
+                   (list (sbcl-agent::make-project-feature-spec
+                          :id "spec-console"
+                          :title "Console Surface"
+                          :summary "Expose environment and host observability in-browser."
+                          :status :in-progress
+                          :acceptance-criteria '("show host logs" "show diagnostic inventory")
+                          :linked-requirement-ids '("req-runtime-stability")
+                          :linked-journey-ids '("journey-runtime-investigation")))
+                   :user-journeys
+                   (list (sbcl-agent::make-project-user-journey
+                          :id "journey-runtime-investigation"
+                          :title "Investigate a runtime fault"
+                          :summary "Operator follows console, diagnostics, and testing evidence."
+                          :actors '("operator" "agent")
+                          :entrypoints '("incident" "console")
+                          :steps '("inspect logs" "review diagnostics" "run targeted tests")
+                          :outcomes '("incident scoped" "repair plan created")
+                          :edge-cases '("stale environment image")))
+                   :non-functional-requirements
+                   (list (sbcl-agent::make-project-requirement
+                          :id "nfr-governance-audit"
+                          :title "Governance Auditability"
+                          :summary "Every material change must remain linked to work and evidence."
+                          :scope :system
+                          :kind :non-functional
+                          :priority :high
+                          :status :accepted
+                          :verification-kind :replay))
+                   :architecture-decisions
+                   (list (sbcl-agent::make-project-architecture-decision
+                          :id "adr-environment-first"
+                          :title "Environment-first runtime model"
+                          :status :accepted
+                          :summary "The environment is the system of record, not the transient shell."
+                          :drivers '("shared introspection" "governed recovery")
+                          :consequences '("strong environment state" "desktop shell becomes projection")
+                          :stack-choices '("sbcl" "electron")
+                          :linked-requirement-ids '("req-runtime-stability" "nfr-governance-audit")))
+                   :linked-work-item-ids '("work-item-runtime-stability")
+                   :linked-incident-ids '("incident-runtime-recovery")
+                   :linked-testing-harness-ids '(:full-suite :coverage)
+                   :source-roots '("/Volumes/data/development/sbcl-agent/"
+                                   "/Volumes/data/development/sbcl-agent-ux/"))))
+    (sbcl-agent::save-session session path)
+    (let* ((loaded (sbcl-agent::load-session path))
+           (loaded-project (sbcl-agent::current-project-record loaded)))
+      (assert-true loaded-project
+                   "loading a session should preserve project records")
+      (assert-equal (sbcl-agent::project-record-id project)
+                    (sbcl-agent::project-record-id loaded-project)
+                    "loading a session should preserve the selected project id")
+      (assert-equal "IntentOS Shell"
+                    (sbcl-agent::project-record-title loaded-project)
+                    "loading a session should preserve project titles")
+      (assert-equal 1
+                    (length (sbcl-agent::project-record-requirements loaded-project))
+                    "loading a session should preserve project requirements")
+      (assert-equal 1
+                    (length (sbcl-agent::project-record-user-journeys loaded-project))
+                    "loading a session should preserve project journeys")
+      (assert-equal 1
+                    (length (sbcl-agent::project-record-architecture-decisions loaded-project))
+                    "loading a session should preserve project architecture decisions")
+      (assert-equal '("work-item-runtime-stability")
+                    (sbcl-agent::project-record-linked-work-item-ids loaded-project)
+                    "loading a session should preserve linked work-item ids")
+      (assert-equal '("incident-runtime-recovery")
+                    (sbcl-agent::project-record-linked-incident-ids loaded-project)
+                    "loading a session should preserve linked incident ids")
+      (assert-equal '(:full-suite :coverage)
+                    (sbcl-agent::project-record-linked-testing-harness-ids loaded-project)
+                    "loading a session should preserve linked testing harness ids"))))
+
 (defun environment-creation-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-root/"))
          (environment (sbcl-agent::make-default-environment
@@ -7126,6 +7503,37 @@ fi
                     (getf (getf summary :runtime-state) :package)
                     "environment-summary should report persisted environment runtime state, not silently resync from the compatibility session"))))
 
+(defun environment-summary-alignment-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-summary-alignment/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-summary-alignment/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::create-intent-record
+     session
+     :description "Keep the active environment continuously aligned."
+     :scope '(:symbols ("SBCL-AGENT::RUN-CONVERSATION-TURN"))
+     :constraints '((:invariant "runtime-is-authoritative"))
+     :expected-behaviors '("Observe runtime changes"))
+    (let* ((summary (sbcl-agent::environment-summary environment))
+           (alignment-state (getf summary :alignment-state))
+           (reconciliation-decision (getf summary :reconciliation-decision))
+           (status (sbcl-agent::environment-status environment)))
+      (assert-true (listp alignment-state)
+                   "environment-summary should expose an alignment-state payload")
+      (assert-true (listp reconciliation-decision)
+                   "environment-summary should expose a reconciliation-decision payload")
+      (assert-true (numberp (getf alignment-state :score))
+                   "environment-summary should expose an alignment score")
+      (assert-true (listp (getf (sbcl-agent::environment-operator-evidence summary) :alignment))
+                   "environment operator evidence should surface alignment posture")
+      (assert-true (listp (getf (sbcl-agent::environment-operator-evidence summary) :reconciliation))
+                   "environment operator evidence should surface reconciliation posture")
+      (assert-true (listp (getf status :alignment-state))
+                   "environment-status should expose alignment-state directly")
+      (assert-true (listp (getf status :reconciliation-decision))
+                   "environment-status should expose reconciliation-decision directly"))))
+
 (defun environment-first-binding-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-first-binding/"))
          (environment (sbcl-agent::make-default-environment
@@ -7167,6 +7575,297 @@ fi
       (assert-equal 3
                     (length (sbcl-agent::environment-artifact-index loaded-environment))
                     "load-environment should preserve runtime artifacts created by structured operations"))))
+
+(defun environment-desktop-preferences-persistence-test ()
+  (let* ((path #P"/tmp/sbcl-agent-environment-desktop-preferences.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/environment-desktop-preferences/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-desktop-preferences/"
+                       :session session))
+         (preferences
+           '(:theme-preference "dark"
+             :desktop-surface-view
+             (:tooltip-scale-percent 112
+              :conversation-text-scale-percent 155)
+             :conversation-draft "persistence-check conversation draft"
+             :selected-conversation-thread-by-project
+             (:project-alpha "thread-1")
+             :workspace-package-by-project
+             (:project-alpha "SBCL-AGENT-USER")
+             :workspace-draft-by-project
+             (:project-alpha "(defparameter *persistence-check* t)")
+             :workspace-result-by-project
+             (:project-alpha (:data (:summary "workspace result")))
+             :workspace-history-by-project
+             (:project-alpha ((:input "(+ 1 2)" :output "3")))
+             :selected-editor-buffer-id-by-project
+             (:project-alpha "buffer-main")
+             :editor-buffers-by-project
+             (:project-alpha
+              ((:buffer-id "buffer-main"
+                :title "Main"
+                :package-name "SBCL-AGENT-USER"
+                :draft-form "(print :persistence-check)"
+                :baseline-draft "(print :baseline)"
+                :last-summary "ready"
+                :runtime-summary (:runtime-id "runtime-1")))))))
+    (sbcl-agent::command-environment-set-desktop-preferences-service preferences environment)
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (restored (sbcl-agent::environment-desktop-preferences loaded-environment))
+           (desktop-surface-view (getf restored :desktop-surface-view))
+           (selected-editor-buffer-ids (getf restored :selected-editor-buffer-id-by-project))
+           (workspace-drafts (getf restored :workspace-draft-by-project))
+           (editor-buffers (getf restored :editor-buffers-by-project))
+           (project-buffers (getf editor-buffers :project-alpha))
+           (main-buffer (first project-buffers)))
+      (assert-equal "dark"
+                    (getf restored :theme-preference)
+                    "desktop preferences should preserve the persisted theme preference")
+      (assert-equal 155
+                    (getf desktop-surface-view :conversation-text-scale-percent)
+                    "desktop preferences should preserve nested desktop surface settings")
+      (assert-equal "persistence-check conversation draft"
+                    (getf restored :conversation-draft)
+                    "desktop preferences should preserve the conversation draft")
+      (assert-equal "(defparameter *persistence-check* t)"
+                    (getf workspace-drafts :project-alpha)
+                    "desktop preferences should preserve workspace drafts by project")
+      (assert-equal "buffer-main"
+                    (getf selected-editor-buffer-ids :project-alpha)
+                    "desktop preferences should preserve selected editor buffer ids by project")
+      (assert-equal "(print :persistence-check)"
+                    (getf main-buffer :draft-form)
+                    "desktop preferences should preserve editor buffer drafts")
+      (assert-equal "runtime-1"
+                    (getf (getf main-buffer :runtime-summary) :runtime-id)
+                    "desktop preferences should preserve nested editor buffer runtime summaries"))))
+
+(defun environment-desktop-preferences-legacy-key-normalization-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-desktop-preferences-legacy/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/environment-desktop-preferences-legacy/"
+                       :session session)))
+    (sbcl-agent::set-environment-metadata-value
+     environment
+     sbcl-agent::+environment-desktop-preferences-key+
+     '(:THEMEPREFERENCE "dark"
+       :THEME-PREFERENCE "system"
+       :DESKTOPSURFACEVIEW
+       (:CONVERSATIONTEXTSCALEPERCENT 150
+        :TOOLTIPSCALEPERCENT 110)
+       :DESKTOP-SURFACE-VIEW
+       (:CONVERSATION-TEXT-SCALE-PERCENT 160
+        :TOOLTIP-SCALE-PERCENT 115)
+       :CONVERSATIONDRAFT "legacy draft"
+       :CONVERSATION-DRAFT "canonical draft"
+       :WORKSPACEDRAFTBYPROJECT
+       (:PROJECT-ALPHA "(+ 40 2)")
+       :WORKSPACE-DRAFT-BY-PROJECT
+       (:PROJECT-ALPHA "(+ 99 1)")
+       :EDITORBUFFERSBYPROJECT
+       (:PROJECT-ALPHA
+        ((:BUFFERID "buffer-main"
+          :DRAFTFORM "(print :legacy)"
+          :BASELINEDRAFT "(print :baseline)"
+          :RUNTIMESUMMARY (:RUNTIMEID "runtime-legacy"))))
+       :EDITOR-BUFFERS-BY-PROJECT
+       (:PROJECT-ALPHA
+        ((:BUFFER-ID "buffer-main"
+          :DRAFT-FORM "(print :canonical)"
+          :BASELINE-DRAFT "(print :baseline)"
+          :RUNTIME-SUMMARY (:RUNTIME-ID "runtime-canonical"))))))
+    (let* ((restored (sbcl-agent::environment-desktop-preferences environment))
+           (desktop-surface-view (getf restored :desktop-surface-view))
+           (editor-buffers (getf restored :editor-buffers-by-project))
+           (main-buffer (first (getf editor-buffers :project-alpha))))
+      (assert-equal "system"
+                    (getf restored :theme-preference)
+                    "desktop preferences should collapse legacy and canonical flat theme keys to one canonical value")
+      (assert-equal 160
+                    (getf desktop-surface-view :conversation-text-scale-percent)
+                    "desktop preferences should collapse legacy and canonical nested desktop surface keys to one canonical value")
+      (assert-equal "canonical draft"
+                    (getf restored :conversation-draft)
+                    "desktop preferences should collapse legacy and canonical conversation draft keys to one canonical value")
+      (assert-equal "(+ 99 1)"
+                    (getf (getf restored :workspace-draft-by-project) :project-alpha)
+                    "desktop preferences should collapse legacy and canonical workspace draft keys to one canonical value")
+      (assert-equal "(print :canonical)"
+                    (getf main-buffer :draft-form)
+                    "desktop preferences should collapse legacy and canonical editor buffer keys to one canonical value")
+      (assert-equal "runtime-canonical"
+                    (getf (getf main-buffer :runtime-summary) :runtime-id)
+                    "desktop preferences should collapse legacy and canonical nested runtime summary keys to one canonical value"))))
+
+(defun trace-link-persistence-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-trace-links-XXXXXX"))
+         (root-path (namestring root))
+         (path (merge-pathnames #P"environment.sexp" root))
+         (session (sbcl-agent::make-default-session :cwd root-path))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root root-path
+                       :session session))
+         (project (sbcl-agent::create-project-record session
+                                                     :title "Traceability Project"
+                                                     :summary "Trace persistence regression."))
+         (project-id (sbcl-agent::project-record-id project))
+         (work-item (sbcl-agent::create-work-item session
+                                                  "Implement a traceability regression"
+                                                  :mutation-intent '(:thread-id "thread-1")))
+         (incident nil))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::command-project-requirement-service session
+                                                     :project-id project-id
+                                                     :id "req-1"
+                                                     :title "Traceability requirement"
+                                                     :summary "Requirement should remain traceable.")
+    (sbcl-agent::command-project-user-journey-service session
+                                                      :project-id project-id
+                                                      :id "journey-1"
+                                                      :title "End-to-end SDLC journey"
+                                                      :summary "Traceable path."
+                                                      :steps '("Define" "Implement" "Validate"))
+    (sbcl-agent::command-project-feature-spec-service session
+                                                      :project-id project-id
+                                                      :id "spec-1"
+                                                      :title "Traceability feature"
+                                                      :summary "Link requirements to execution."
+                                                      :linked-requirement-ids '("req-1")
+                                                      :linked-journey-ids '("journey-1"))
+    (sbcl-agent::command-project-architecture-decision-service session
+                                                               :project-id project-id
+                                                               :id "adr-1"
+                                                               :title "Persist trace links"
+                                                               :summary "Persist trace links in the image."
+                                                               :linked-requirement-ids '("req-1"))
+    (sbcl-agent::command-project-bind-work-item-service session
+                                                        (sbcl-agent::work-item-id work-item)
+                                                        :project-id project-id)
+    (setf incident (sbcl-agent::create-incident session
+                                                :runtime-condition
+                                                "Traceability regression incident"
+                                                "Traceability incident summary."
+                                                :work-item work-item))
+    (sbcl-agent::command-project-bind-incident-service session
+                                                       (sbcl-agent::incident-id incident)
+                                                       :project-id project-id)
+    (sbcl-agent::command-project-bind-testing-harness-service session :full-suite :project-id project-id)
+    (sbcl-agent::command-project-source-root-service session "/tmp/traceability/" :project-id project-id)
+    (sbcl-agent::save-environment (sbcl-agent::ensure-environment) path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (project-neighborhood (sbcl-agent::trace-neighborhood-summary loaded-session :project project-id))
+           (work-item-neighborhood (sbcl-agent::trace-neighborhood-summary loaded-session
+                                                                           :work-item
+                                                                           (sbcl-agent::work-item-id work-item)))
+           (incident-neighborhood (sbcl-agent::trace-neighborhood-summary loaded-session
+                                                                           :incident
+                                                                           (sbcl-agent::incident-id incident)))
+           (trace-links (sbcl-agent::list-trace-links loaded-session)))
+      (assert-true (>= (length trace-links) 8)
+                   "save-environment/load-environment should preserve generated trace links")
+      (assert-true (>= (getf project-neighborhood :count) 6)
+                   "trace neighborhoods should preserve project-centered SDLC linkages")
+      (assert-true (> (getf work-item-neighborhood :count) 0)
+                   "trace neighborhoods should preserve work-item linkage")
+      (assert-true (> (getf incident-neighborhood :count) 0)
+                   "trace neighborhoods should preserve incident linkage"))))
+
+(defun environment-image-registry-persistence-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-environment-images-XXXXXX"))
+         (root-path (namestring root))
+         (session (sbcl-agent::make-default-session :cwd root-path))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root root-path
+                       :session session)))
+    (sbcl-agent::set-environment-desktop-preferences
+     environment
+     '(:conversation-draft "image persistence draft"))
+    (let* ((record (sbcl-agent::save-environment-as-image "alpha" :environment environment))
+           (registry (sbcl-agent::load-environment-image-registry environment))
+           (loaded-environment (sbcl-agent::load-environment-image "alpha" environment))
+           (loaded-preferences (sbcl-agent::environment-desktop-preferences loaded-environment)))
+      (assert-true (probe-file (sbcl-agent::environment-image-registry-path environment))
+                   "saving an environment image should create an image registry file")
+      (assert-true (probe-file (sbcl-agent::environment-image-record-path record))
+                   "saving an environment image should persist the named image snapshot")
+      (assert-equal (sbcl-agent::environment-image-record-id record)
+                    (getf registry :current-image-id)
+                    "saving an environment image should advance the registry current image id")
+      (assert-equal "alpha"
+                    (sbcl-agent::environment-image-name loaded-environment)
+                    "loading an environment image should restore the saved image name")
+      (assert-equal "image persistence draft"
+                    (getf loaded-preferences :conversation-draft)
+                    "loading an environment image should restore persisted desktop shell state")
+      (assert-true (typep (sbcl-agent::environment-checkpoint-policy-record loaded-environment)
+                          'sbcl-agent::environment-checkpoint-policy)
+                   "loading an environment image should retain checkpoint policy metadata")
+      (assert-true (typep (sbcl-agent::environment-runtime-manifest-record loaded-environment)
+                          'sbcl-agent::environment-runtime-manifest)
+                   "loading an environment image should retain runtime manifest metadata")
+      (assert-true (typep (sbcl-agent::environment-recovery-manifest-record loaded-environment)
+                          'sbcl-agent::environment-recovery-manifest)
+                   "loading an environment image should retain recovery manifest metadata"))))
+
+(defun environment-image-revert-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-environment-revert-XXXXXX"))
+         (root-path (namestring root))
+         (session (sbcl-agent::make-default-session :cwd root-path))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root root-path
+                       :session session)))
+    (sbcl-agent::set-environment-desktop-preferences
+     environment
+     '(:conversation-draft "saved image draft"))
+    (sbcl-agent::save-environment-as-image "beta" :environment environment)
+    (sbcl-agent::set-environment-desktop-preferences
+     environment
+     '(:conversation-draft "mutated transient draft"))
+    (let* ((reverted-environment (sbcl-agent::revert-environment-to-current-image environment))
+           (reverted-preferences (sbcl-agent::environment-desktop-preferences reverted-environment)))
+      (assert-equal "saved image draft"
+                    (getf reverted-preferences :conversation-draft)
+                    "reverting to the current image should discard transient shell-state mutations")
+      (assert-equal "beta"
+                    (sbcl-agent::environment-image-name reverted-environment)
+                    "reverting to the current image should preserve the bound image identity"))))
+
+(defun environment-image-load-assesses-recovery-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-environment-recovery-XXXXXX"))
+         (root-path (namestring root))
+         (session (sbcl-agent::make-default-session :cwd root-path))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root root-path
+                       :session session)))
+    (sbcl-agent::set-environment-metadata-value
+     environment
+     :compatibility-apps
+     '((:app-id "linux.vscode")))
+    (sbcl-agent::save-environment-as-image "recoverable" :environment environment)
+    (let* ((loaded-environment (sbcl-agent::load-environment-image "recoverable" environment))
+           (summary (sbcl-agent::environment-summary loaded-environment))
+           (recovery-summary (getf summary :recovery-summary)))
+      (assert-equal :degraded
+                    (getf recovery-summary :status)
+                    "loading an environment image should mark recovery degraded when runtime obligations remain pending")
+      (assert-true (getf recovery-summary :manual-recovery-required-p)
+                   "loading an environment image should report when manual recovery is still required")
+      (assert-equal 1
+                    (getf recovery-summary :compatibility-app-restart-count)
+                    "loading an environment image should report compatibility app restart obligations")
+      (assert-equal :pending-manual-recovery
+                    (getf (first (getf recovery-summary :runtime-replay)) :outcome)
+                    "loading an environment image should persist explicit runtime replay outcomes")
+      (assert-equal :degraded
+                    (sbcl-agent::environment-recovery-manifest-last-recovery-status
+                     (sbcl-agent::environment-recovery-manifest-record loaded-environment))
+                    "loading an environment image should stamp the recovery manifest with the assessed recovery state")
+      (assert-true (integerp
+                    (sbcl-agent::environment-recovery-manifest-last-recovery-at
+                     (sbcl-agent::environment-recovery-manifest-record loaded-environment)))
+                   "loading an environment image should stamp the recovery manifest with a recovery assessment time"))))
 
 (defun load-environment-does-not-resync-on-read-test ()
   (let* ((path #P"/tmp/sbcl-agent-environment-no-read-resync.sexp")
@@ -8674,6 +9373,10 @@ fi
       (assert-equal 1
                     (getf summary :pending-action-count)
                     "session-summary should prefer environment-owned pending action counts")
+      (assert-true (listp (getf summary :alignment-state))
+                   "session-summary should carry environment-backed alignment state")
+      (assert-true (listp (getf summary :reconciliation-decision))
+                   "session-summary should carry environment-backed reconciliation direction")
       (assert-true (find :runtime-eval-mutate
                          (getf summary :approved-policies)
                          :test #'eq)
@@ -9058,6 +9761,23 @@ fi
                     "runtime/eval should dispatch through the runtime tool surface")
       (assert-equal "SBCL-AGENT-USER" (getf eval-result :result)
                     "runtime/eval should execute inside the current session package"))
+    (multiple-value-bind (multi-form-result multi-form-kind multi-form-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command
+          '(runtime/eval ";; Editor
+;; Sustain source and form editing here without collapsing into scratch workspace posture.
+
+(in-package :cl-user)
+(* 3 (+ 4 4))"))
+         provider
+         session)
+      (declare (ignore multi-form-session))
+      (assert-equal :runtime-eval multi-form-kind
+                    "multi-form runtime/eval should report its command kind")
+      (assert-equal 24 (getf multi-form-result :result)
+                    "multi-form runtime/eval should return the final form value, not an earlier package-switch result")
+      (assert-equal "COMMON-LISP-USER" (getf multi-form-result :package)
+                    "multi-form runtime/eval should report the final active package after in-package"))
     (multiple-value-bind (history-result history-kind history-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(runtime/history :tail 5))

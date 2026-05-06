@@ -86,3 +86,9 @@
 (register-capability-policy :workspace-write
                             "Modify workspace files through patch application."
                             :risk-level :high)
+(register-capability-policy :project-governance-write
+                            "Mutate governed project artifacts such as constitutions, requirements, journeys, architecture decisions, and quality gates."
+                            :risk-level :high)
+(register-capability-policy :alignment-reconciliation-execute
+                            "Materialize a reconciliation decision into governed corrective work that may change runtime, intent, or both."
+                            :risk-level :high)

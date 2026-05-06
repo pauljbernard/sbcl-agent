@@ -165,10 +165,7 @@ Initial hosted applications:
 - `Control Panel`
 - `Listener Workbench`
 
-Planned hosted applications:
-
-- `Artifact Explorer`
-- `Package Manager`
+Future hosted applications should be introduced only when they earn distinct desktop identity and are not better represented as `Browser` domains or focused control-panel surfaces.
 
 ### Inspector target
 
@@ -221,8 +218,7 @@ Initial full windows should include:
 
 Then:
 
-- `Artifact Explorer`
-- `Package Manager`
+- future desktop residents that earn distinct application identity
 - deeper governed detail windows such as work-item, approval, incident, and artifact views
 
 ## Surface lifecycle
@@ -300,7 +296,7 @@ Move:
 - `Control Panel`
 - `Listener Workbench`
 - `Inspector`
-- `Governance Queue`
+- the consolidated `Operate` and `Browser` surfaces
 
 from “canvas modes” into actual windows or utility windows.
 
@@ -319,10 +315,7 @@ at the same time.
 
 After windowing is real:
 
-- `Artifact Explorer`
-- `Package Manager`
-
-should become true desktop residents, not placeholders.
+future browser-linked or platform capabilities should become true desktop residents only when they earn distinct application identity, not as placeholder shell apps.
 
 ## Suggested first implementation slices
 

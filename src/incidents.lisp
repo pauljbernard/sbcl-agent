@@ -142,6 +142,20 @@
             actions))
     (nreverse actions)))
 
+(defun incident-remediation-plan (incident)
+  (getf (incident-metadata incident) :remediation-plan))
+
+(defun update-incident-remediation-plan (session incident remediation-plan)
+  (declare (ignore session))
+  (let* ((metadata (incident-metadata incident))
+         (without-plan (loop for (key value) on metadata by #'cddr
+                             unless (eq key :remediation-plan)
+                               append (list key value))))
+    (setf (incident-metadata incident)
+          (append without-plan
+                  (list :remediation-plan remediation-plan))))
+  incident)
+
 (defun maybe-create-incident-recovery-plan-artifact (session incident)
   (let* ((thread-id (incident-thread-id incident))
          (thread (and thread-id (find-thread session thread-id)))
@@ -172,10 +186,12 @@
                 :operation (incident-linked-operation-summary session incident)
                 :work-item (incident-linked-work-item-summary session incident)
                 :workflow-record (incident-linked-workflow-summary session incident)
+                :trace-neighborhood (trace-neighborhood-summary session :incident (incident-id incident))
                 :runtime-context (incident-runtime-context session incident)
                 :recovery (incident-turn-recovery-summary session incident)
                 :wait (incident-work-item-wait-summary session incident)
                 :recovery-plan (incident-recovery-plan session incident)
+                :remediation-plan (incident-remediation-plan incident)
                 :recommended-actions (incident-recommended-actions session incident))))
 
 (defun find-incident (session incident-id)
@@ -268,6 +284,16 @@
                             incident)
       (setf (agent-session-incidents session) incidents
             (agent-session-incidents-tail session) tail))
+    (when work-item
+      (create-trace-link session
+                         :relation :degraded-by-incident
+                         :source-kind :work-item
+                         :source-id (work-item-id work-item)
+                         :target-kind :incident
+                         :target-id (incident-id incident)
+                         :metadata (list :workflow-record-id (and workflow-record
+                                                                  (workflow-record-id workflow-record))
+                                         :kind kind)))
     (maybe-bind-incident-to-operation operation incident)
     (maybe-bind-incident-to-turn turn incident)
     (append-session-event session

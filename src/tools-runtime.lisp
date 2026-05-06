@@ -1,7 +1,16 @@
 (in-package #:sbcl-agent)
 
+(defun resolve-runtime-package-designator (package-designator)
+  (typecase package-designator
+    (package package-designator)
+    (symbol (or (find-package package-designator)
+                (find-package (string-upcase (symbol-name package-designator)))))
+    (string (or (find-package package-designator)
+                (find-package (string-upcase package-designator))))
+    (t nil)))
+
 (defun session-runtime-package (session)
-  (or (find-package (agent-session-package session))
+  (or (resolve-runtime-package-designator (agent-session-package session))
       (error "Unknown runtime package ~S" (agent-session-package session))))
 
 (defparameter *runtime-governance-thread* nil)
@@ -283,10 +292,14 @@
 (defun runtime-eval-policy-id (mutating)
   (if mutating :runtime-eval-mutate :runtime-eval-safe))
 
-(defun parse-runtime-form (form-or-source)
+(defun parse-runtime-forms (form-or-source)
   (if (stringp form-or-source)
-      (read-from-string form-or-source)
-      form-or-source))
+      (with-input-from-string (stream form-or-source)
+        (loop with eof = (gensym "EOF")
+              for form = (read stream nil eof)
+              until (eq form eof)
+              collect form))
+      (list form-or-source)))
 
 (defun runtime-function-kind (symbol)
   (cond
@@ -391,7 +404,7 @@
         :function-kind (runtime-function-kind resolved-symbol)))
 
 (defun resolve-runtime-symbol (session symbol-name &optional package-name)
-  (let* ((resolved-package (or (find-package (or package-name (agent-session-package session)))
+  (let* ((resolved-package (or (resolve-runtime-package-designator (or package-name (agent-session-package session)))
                                (error "Unknown package ~S" (or package-name (agent-session-package session))))))
     (multiple-value-bind (resolved-symbol status)
         (find-symbol symbol-name resolved-package)
@@ -499,7 +512,7 @@
   (unless symbol
     (error ":runtime/describe-symbol requires :symbol"))
   (let* ((package-name (or package (agent-session-package session)))
-         (resolved-package (or (find-package package-name)
+         (resolved-package (or (resolve-runtime-package-designator package-name)
                                (error "Unknown package ~S" package-name))))
     (multiple-value-bind (resolved-symbol status)
         (find-symbol symbol resolved-package)
@@ -521,7 +534,7 @@
   (unless package
     (error ":runtime/set-package requires :package"))
   (ensure-capability-granted session :runtime-package-switch)
-  (let ((resolved-package (or (find-package package)
+  (let ((resolved-package (or (resolve-runtime-package-designator package)
                               (error "Unknown package ~S" package))))
     (setf (agent-session-package session) (package-name resolved-package))
     (append-session-event session
@@ -554,33 +567,38 @@
   (unless form
     (error ":runtime/eval requires :form"))
   (let* ((policy-id (runtime-eval-policy-id mutating))
-         (resolved-form (parse-runtime-form form))
+         (resolved-forms (parse-runtime-forms form))
          (package-name (or package (agent-session-package session)))
-         (resolved-package (or (find-package package-name)
+         (resolved-package (or (resolve-runtime-package-designator package-name)
                                (error "Unknown package ~S" package-name))))
+    (when (endp resolved-forms)
+      (error ":runtime/eval requires at least one readable form"))
     (ensure-capability-granted session policy-id)
     (call-with-runtime-incident-capture
      session
      (lambda ()
        (let* ((*package* resolved-package)
-              (values (multiple-value-list (eval resolved-form)))
+              (values
+                (loop for resolved-form in resolved-forms
+                      finally (return (multiple-value-list (eval resolved-form)))
+                      do (eval resolved-form)))
               (result (first values)))
          (append-session-event session
                                :runtime-evaluated
-                               (list :package (package-name resolved-package)
-                                     :form (prin1-to-string resolved-form)
+                               (list :package (package-name *package*)
+                                     :form form
                                      :mutating (not (null mutating))
                                      :policy-id policy-id))
          (append-runtime-history-entry session
                                        :eval
-                                       (list :package (package-name resolved-package)
-                                             :form (prin1-to-string resolved-form)
+                                       (list :package (package-name *package*)
+                                             :form form
                                              :mutating (not (null mutating))
                                              :policy-id policy-id
                                              :result result))
          (let ((work-item (and mutating
                                (create-runtime-mutation-work-item session
-                                                                  (prin1-to-string resolved-form)
+                                                                  form
                                                                   policy-id
                                                                   result))))
            (let ((artifact (create-artifact session
@@ -591,12 +609,12 @@
                                             nil
                                             :title "Structured runtime evaluation"
                                             :summary (format nil "Evaluated ~A in ~A."
-                                                             (prin1-to-string resolved-form)
-                                                             (package-name resolved-package))
+                                                             form
+                                                             (package-name *package*))
                                             :work-item-id (and work-item (work-item-id work-item))
                                             :metadata (list :source :runtime/eval
-                                                            :package (package-name resolved-package)
-                                                            :form (prin1-to-string resolved-form)
+                                                            :package (package-name *package*)
+                                                            :form form
                                                             :mutating (not (null mutating))
                                                             :policy-id policy-id
                                                             :work-item-id (and work-item (work-item-id work-item))
@@ -605,8 +623,8 @@
            (when mutating
              (maybe-sync-current-environment-from-session session))
            (list :tool :runtime/eval
-                 :package (package-name resolved-package)
-                 :form (prin1-to-string resolved-form)
+                 :package (package-name *package*)
+                 :form form
                  :mutating (not (null mutating))
                  :policy-id policy-id
                  :work-item-id (and work-item (work-item-id work-item))
@@ -616,11 +634,11 @@
      :kind :runtime-eval-failure
      :title "Runtime eval failed"
      :summary (format nil "Evaluation of ~A in ~A failed."
-                      (prin1-to-string resolved-form)
+                      form
                       (package-name resolved-package))
      :metadata (list :source :runtime/eval
                      :package (package-name resolved-package)
-                     :form (prin1-to-string resolved-form)
+                     :form form
                      :mutating (not (null mutating))
                      :policy-id policy-id))))
 

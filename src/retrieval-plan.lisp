@@ -8,6 +8,7 @@
   expansion-pass
   runtime-detail-p
   governance-detail-p
+  project-detail-p
   source-detail-p
   semantic-ranking-p
   explanation)
@@ -40,7 +41,16 @@
   (let ((category (retrieval-intent-category intent)))
     (case domain
       (:conversation (if (eq category :historical-recall) 8 4))
+      (:intent (if (retrieval-intent-intent-context-p intent) 6 3))
       (:runtime (if (retrieval-intent-runtime-inspection-p intent) 6 2))
+      (:telemetry (if (retrieval-intent-observability-context-p intent) 6 3))
+      (:console (if (or (retrieval-intent-observability-context-p intent)
+                        (retrieval-intent-historical-p intent))
+                    8
+                    4))
+      (:diagnostic (if (retrieval-intent-observability-context-p intent) 6 3))
+      (:testing (if (retrieval-intent-testing-context-p intent) 6 3))
+      (:project (if (retrieval-intent-project-context-p intent) 6 3))
       (:workflow (if (retrieval-intent-governance-context-p intent) 6 2))
       (:incident (if (member category '(:incident-follow-up :runtime-debugging))
                      6
@@ -49,6 +59,9 @@
       (:events (if (retrieval-intent-historical-p intent) 8 4))
       (:workspace (if (retrieval-intent-source-context-p intent) 6 2))
       (otherwise 3))))
+
+(defun compact-list (items limit)
+  (subseq items 0 (min (or limit (length items)) (length items))))
 
 (defun governance-biased-retrieval-domains (plan)
   (remove-duplicates
@@ -64,6 +77,12 @@
       (:workflow (max current 6))
       (:artifact (max current 6))
       (:events (max current 8))
+      (:console (max current 8))
+      (:telemetry (max current 6))
+      (:diagnostic (max current 6))
+      (:testing (max current 6))
+      (:intent (max current 6))
+      (:project (max current 6))
       (otherwise current))))
 
 (defun apply-governance-retrieval-bias (plan session)
@@ -83,6 +102,7 @@
            :expansion-pass (or (retrieval-plan-expansion-pass plan) 0)
            :runtime-detail-p (retrieval-plan-runtime-detail-p plan)
            :governance-detail-p t
+           :project-detail-p (retrieval-plan-project-detail-p plan)
            :source-detail-p (retrieval-plan-source-detail-p plan)
            :semantic-ranking-p (retrieval-plan-semantic-ranking-p plan)
            :explanation (format nil
@@ -112,6 +132,7 @@
                 :expansion-pass 0
                 :runtime-detail-p (retrieval-intent-runtime-inspection-p intent)
                 :governance-detail-p (retrieval-intent-governance-context-p intent)
+                :project-detail-p (retrieval-intent-project-context-p intent)
                 :source-detail-p (retrieval-intent-source-context-p intent)
                 :semantic-ranking-p (retrieval-intent-historical-p intent)
                 :explanation (format nil
@@ -127,14 +148,22 @@
   (let ((current (or (getf (retrieval-plan-per-domain-limits plan) domain) 0)))
     (case domain
       ((:workflow :incident :events) (+ current 4))
-      ((:runtime :conversation :artifact :workspace) (+ current 2))
+      ((:runtime :conversation :artifact :workspace :intent) (+ current 2))
+      ((:telemetry :console :diagnostic :testing) (+ current 2))
+      (:project (+ current 2))
       (otherwise (+ current 2)))))
+
+(defun retrieval-plan-limit (plan domain &optional default)
+  (or (getf (retrieval-plan-per-domain-limits plan) domain)
+      default))
 
 (defun expand-retrieval-plan (plan reason)
   (let* ((domains (remove-duplicates
                    (append (retrieval-plan-domains plan)
                            (when (retrieval-plan-governance-detail-p plan)
                              '(:workflow :incident :events :artifact))
+                           (when (retrieval-plan-project-detail-p plan)
+                             '(:project))
                            (when (retrieval-plan-source-detail-p plan)
                              '(:workspace :artifact))
                            '(:conversation :events))
@@ -149,6 +178,7 @@
      :expansion-pass (1+ (or (retrieval-plan-expansion-pass plan) 0))
      :runtime-detail-p (retrieval-plan-runtime-detail-p plan)
      :governance-detail-p (retrieval-plan-governance-detail-p plan)
+     :project-detail-p (retrieval-plan-project-detail-p plan)
      :source-detail-p (retrieval-plan-source-detail-p plan)
      :semantic-ranking-p (retrieval-plan-semantic-ranking-p plan)
      :explanation (format nil

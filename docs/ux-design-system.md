@@ -86,6 +86,51 @@ The governance console is where blocked, approval-gated, quarantined, or validat
 
 The object browser exists to navigate durable system objects, not merely content categories.
 
+## Structural Component Patterns
+
+### Tabbed Work Surface
+
+A tabbed work surface is a single object-oriented container with multiple closely related views.
+
+Use tabs only when:
+
+- the views belong to one parent object or one sustained instrument
+- switching views should preserve local context
+- the user is changing perspective on the same work, not navigating to another workspace
+
+Do not use tabs for:
+
+- primary application navigation
+- hiding unrelated tools inside one frame
+- replacing explicit object navigation
+
+A valid tabbed work surface should contain:
+
+- one outer container
+- one tab rail
+- one active tab
+- one connected tab panel
+
+The tab rail should read visually as navigation for the panel immediately below it.
+
+The active tab must appear physically connected to the active panel.
+
+The inactive tabs must remain clearly selectable without competing with the active panel.
+
+### Container Ownership
+
+For tabbed work surfaces, the outer hosted surface owns size.
+
+This means:
+
+- resizing the outer surface resizes the tabbed container
+- the tabbed container redistributes internal space
+- inner controls should not create independent layout resizing behavior
+
+If a text editor, transcript body, or table lives inside a tab panel, it should fill the panel and scroll internally when necessary.
+
+Wrapper containers should not become the accidental scroll surface for a tabbed instrument.
+
 ## UX Invariants
 
 1. Every visible element must be inspectable.

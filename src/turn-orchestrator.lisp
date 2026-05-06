@@ -339,7 +339,8 @@
          (case (assistant-action-type action)
            (:patch t)
            (:eval (mutating-eval-action-p action))
-           (:tool (member policy-id '(:workspace-write :git-write :process-run :runtime-reload)
+           (:tool (member policy-id '(:workspace-write :git-write :process-run :runtime-reload
+                                      :project-governance-write)
                           :test #'eq))
            (otherwise nil)))))
 

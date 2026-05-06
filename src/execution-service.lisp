@@ -71,11 +71,22 @@
                      '(:validate :resolve-blockers)
                      :test #'eq)))))
 
-(defun partition-governed-staged-actions (actions)
+(defun project-governance-intent-p (retrieval-dossier)
+  (let* ((intent (if (typep retrieval-dossier 'retrieval-dossier)
+                     (retrieval-dossier-intent retrieval-dossier)
+                     (getf retrieval-dossier :intent)))
+         (intent-category (if (typep intent 'retrieval-intent)
+                              (retrieval-intent-category intent)
+                              (getf intent :category))))
+    (eq intent-category :project-governance)))
+
+(defun partition-governed-staged-actions (actions &key project-governance-intent-p)
   (let ((allowed '())
         (deferred '()))
     (dolist (action actions)
-      (if (governed-assistant-action-p action)
+      (if (and (governed-assistant-action-p action)
+               (not (and project-governance-intent-p
+                         (eq (assistant-action-policy-id action) :project-governance-write))))
           (push action deferred)
           (push action allowed)))
     (values (nreverse allowed) (nreverse deferred))))
@@ -96,6 +107,7 @@
                  '(:runtime)))
       (:tool (case policy-id
                ((:workspace-write :git-write) '(:workspace :artifact :workflow))
+               (:project-governance-write '(:project :trace :workflow))
                ((:process-run :runtime-reload) '(:runtime :workflow :incident :artifact))
                (otherwise '(:workspace :runtime :workflow))))
       (otherwise '()))))
@@ -115,7 +127,8 @@
          (matched-labels (intersection relevant-domains top-labels :test #'eq))
          (score (+ (if mutation-likely-p 2 0)
                    (if matched-labels 2 0)
-                   (if (member intent-category '(:code-change :runtime-mutation :runtime-debugging)
+                   (if (member intent-category '(:code-change :runtime-mutation :runtime-debugging
+                                                :project-governance)
                                :test #'eq)
                        1
                        0)))
@@ -134,6 +147,7 @@
              (:tool
               (if (governed-assistant-action-p action)
                   (and (not mutation-likely-p)
+                       (not (eq intent-category :project-governance))
                        (null matched-labels))
                   nil))
              (otherwise
@@ -173,14 +187,17 @@
       (split-assistant-actions (assistant-response-actions response))
     (multiple-value-bind (staged-actions deferred-actions assessments)
         (partition-weakly-grounded-governed-actions staged retrieval-dossier)
+      (let ((project-governance-intent-p (project-governance-intent-p retrieval-dossier)))
       (multiple-value-bind (strategy-allowed strategy-deferred-actions)
           (if (cognition-strategy-defers-governed-mutations-p cognition-bundle
                                                               :retrieval-dossier retrieval-dossier)
-              (partition-governed-staged-actions staged-actions)
+              (partition-governed-staged-actions staged-actions
+                                                 :project-governance-intent-p project-governance-intent-p)
               (values staged-actions '()))
         (multiple-value-bind (final-staged-actions blocker-deferred-actions)
             (if (governed-mutation-blocked-p session reasoning-brief)
-                (partition-governed-staged-actions strategy-allowed)
+                (partition-governed-staged-actions strategy-allowed
+                                                   :project-governance-intent-p project-governance-intent-p)
                 (values strategy-allowed '()))
         (let* ((deferred-actions (append deferred-actions
                                          strategy-deferred-actions
@@ -241,7 +258,7 @@
                 :immediate-results immediate-results
                 :staged-actions final-staged-actions
                 :deferred-actions deferred-actions
-                :action-assessments assessments)))))))
+                :action-assessments assessments))))))))
 
 (defun handle-provider-stream-event (session event events
                                    &key thread-id turn-id run-id operation-id)

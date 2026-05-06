@@ -85,6 +85,40 @@ The interaction model should be:
 
 Avoid hidden state transitions or clever shorthand that obscures system truth.
 
+## Tab Style Pattern
+
+When a surface uses tabs, they must look unambiguously like tabs.
+
+Required visual signals:
+
+- a dedicated tab rail rather than plain inline text
+- a distinct active tab state
+- a visible relationship between the active tab and the panel it controls
+- lower visual emphasis for inactive tabs without making them ambiguous
+
+Preferred treatment:
+
+- a grounded horizontal tab rail
+- a raised or connected active tab
+- one contained panel directly beneath the selected tab
+
+Avoid:
+
+- plain text labels that read like filters or buttons
+- pills that do not visually connect to the controlled panel
+- nested panel headers that duplicate the selected tab label without adding new meaning
+
+## Scroll And Resize Style
+
+For tabbed editor-like surfaces:
+
+- the outer surface should visually own resize
+- the active work object should visually own scroll
+- wrapper panels should not expose their own incidental scrollbars
+- inner fields should not expose resize handles when the outer resident already provides resizing
+
+The user should feel that they are resizing one instrument, not fighting multiple nested panels.
+
 ## Content Style
 
 Prefer:

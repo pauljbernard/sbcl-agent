@@ -112,6 +112,10 @@
           (provider-request-session-summary request)
           (build-openai-governance-directives request)))
 
+(defun build-openai-user-prompt (request)
+  "Compatibility wrapper for tests and callers that still use the older helper name."
+  (build-openai-user-prompt-text request))
+
 (defun provider-request-attachment-text (attachment)
   (let ((text-content (getf attachment :text-content)))
     (when text-content

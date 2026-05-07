@@ -307,7 +307,7 @@
   (let ((trimmed (trim-conversation-prompt prompt)))
     (when (and (> (length trimmed) 0)
                (char= (char trimmed 0) #\()
-               (ignore-errors (parse-runtime-form trimmed)))
+               (ignore-errors (parse-runtime-forms trimmed)))
       trimmed)))
 
 (defun affirmative-runtime-eval-confirmation-p (prompt)

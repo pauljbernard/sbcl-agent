@@ -5,7 +5,7 @@ hero_title: IntentOS Desktop Windowing Plan
 hero_text: The implementation plan for moving from a shell-framed application host to a real multitasking desktop environment with governed, image-native surfaces.
 eyebrow: UX Evolution
 permalink: /desktop-windowing-implementation-plan.html
-description: Concrete implementation plan for a NeXT-refined, Genera-like, image-native desktop shell for IntentOS.
+description: Concrete implementation plan for evolving Surface into a NeXT-refined, Genera-like, image-native desktop shell.
 ---
 
 # IntentOS Desktop Windowing Plan

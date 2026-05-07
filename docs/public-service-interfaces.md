@@ -78,7 +78,7 @@ Candidate adapters include:
 - the current shell and REPL
 - richer terminal UI
 - web UI
-- desktop application surfaces
+- `Surface` workspaces and panels
 - automation and remote control entrypoints
 
 ## Service Families

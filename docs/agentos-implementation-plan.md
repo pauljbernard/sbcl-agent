@@ -73,7 +73,7 @@ Acceptance:
 
 All UI elements map to execution.
 
-## Phase 6 — IntentOS Shell
+## Phase 6 — Surface
 
 Tasks:
 - workspace

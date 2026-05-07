@@ -6796,7 +6796,7 @@ fi
          (session (sbcl-agent::make-default-session))
          (project (sbcl-agent::create-project-record
                    session
-                   :title "IntentOS Shell"
+                   :title "Surface"
                    :summary "Desktop shell modernization program."
                    :constitution '(:mission "Build a governed environment-first desktop shell."
                                    :principles ("governance-first" "operator-visible"))
@@ -6862,7 +6862,7 @@ fi
       (assert-equal (sbcl-agent::project-record-id project)
                     (sbcl-agent::project-record-id loaded-project)
                     "loading a session should preserve the selected project id")
-      (assert-equal "IntentOS Shell"
+      (assert-equal "Surface"
                     (sbcl-agent::project-record-title loaded-project)
                     "loading a session should preserve project titles")
       (assert-equal 1

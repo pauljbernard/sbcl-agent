@@ -162,14 +162,16 @@
 (defun environment-provider-service-contract-test ()
   (let ((sbcl-agent::*current-environment* nil)
         (sbcl-agent::*current-session* nil))
-    (let* ((session (make-test-session :cwd "/tmp/environment-provider-service-contract/"))
+    (let* ((root (make-temporary-directory "/tmp/environment-provider-service-contract-XXXXXX"))
+           (root-path (namestring root))
+           (session (make-test-session :cwd root-path))
            (environment (sbcl-agent::ensure-environment)))
       (sbcl-agent::bind-session-to-environment session environment)
       (sbcl-agent::ensure-environment-provider-profile
        :environment environment
        :config (sbcl-agent::make-config :provider "openai-compatible"
                                         :model "gpt-5"
-                                        :working-directory "/tmp/environment-provider-service-contract/")
+                                        :working-directory root-path)
        :profile-name "default")
       (sbcl-agent::command-environment-provider-configure-service
        "local-fast"
@@ -177,6 +179,7 @@
          :model "qwen-coder"
          :fast-model "qwen-coder-mini"
          :api-base "http://localhost:1234/v1"
+         :api-key "local-secret"
          :intents (:quick-turn :local-development :code-execution)
          :latency-tier :fast
          :execution-bias :high
@@ -198,7 +201,33 @@
                       "environment provider service should expose routing policy mode")
         (assert-equal '(:auto :manual)
                       (getf (getf (sbcl-agent::service-response-data provider-response) :routing-policy) :available-modes)
-                      "environment provider service should expose supported routing modes"))
+                      "environment provider service should expose supported routing modes")
+        (let* ((profiles (getf (sbcl-agent::service-response-data provider-response) :profiles))
+               (local-fast (find "local-fast"
+                                 profiles
+                                 :key (lambda (profile) (getf profile :name))
+                                 :test #'string=))
+               (raw-local-fast (sbcl-agent::environment-find-provider-profile environment "local-fast")))
+          (assert-true (getf local-fast :api-key-present-p)
+                       "environment provider service should expose token presence without exposing the raw secret")
+          (assert-equal nil
+                        (getf local-fast :api-key)
+                        "environment provider service should redact raw provider tokens from public responses")
+          (assert-equal nil
+                        (getf raw-local-fast :api-key)
+                        "environment provider profiles should no longer persist raw provider tokens in metadata")
+          (assert-true (probe-file
+                        (merge-pathnames #P"lm-studio-api-key.key"
+                                         (uiop:ensure-directory-pathname root-path)))
+                       "environment provider configuration should persist LM Studio tokens to the vendor key file")
+          (assert-equal "local-secret"
+                        (sbcl-agent::config-api-key
+                         (sbcl-agent::provider-profile->config
+                          raw-local-fast
+                          (sbcl-agent::make-config :provider "lm-studio"
+                                                   :model "qwen-coder"
+                                                   :working-directory root-path)))
+                        "provider profile config reconstruction should still preserve the stored token for runtime use")))
       (let ((routing-command (sbcl-agent::command-environment-provider-routing-service :manual environment)))
         (assert-service-metadata-shape routing-command "environment provider routing command service")
         (assert-equal :provider-routing
@@ -1424,7 +1453,51 @@
                     "turn detail should expose the primary execution surface for the turn")
       (assert-equal (getf (sbcl-agent::service-response-metadata execution-response) :execution-id)
                     (getf (getf turn-detail :primary-execution-handle) :execution-id)
-                    "turn detail should point back to the governing execution handle"))))
+                    "turn detail should point back to the governing execution handle"))
+    (let* ((input-attachments (list (list :attachment-id "upload-1"
+                                          :name "notes.txt"
+                                          :media-type "text/plain"
+                                          :kind :text
+                                          :source :input
+                                          :summary "Operator notes"
+                                          :text-content "hello from the operator")))
+           (assistant-attachments (list (list :attachment-id "result-1"
+                                              :name "diagram.png"
+                                              :media-type "image/png"
+                                              :kind :image
+                                              :source :output
+                                              :summary "Generated diagram"
+                                              :data-url "data:image/png;base64,AA==")))
+           (provider (make-instance 'attachment-echo-provider
+                                    :response-attachments assistant-attachments))
+           (execution-response
+             (sbcl-agent::command-conversation-execution-service
+              session
+              provider
+              "Review the uploaded notes and return a diagram."
+              (list :attachments input-attachments)
+              :source :say
+              :operator-mode :conversation))
+           (thread-id (getf (getf (sbcl-agent::service-response-data execution-response) :thread) :id))
+           (thread-response (sbcl-agent::query-conversation-thread-detail-service session thread-id))
+           (thread-detail (sbcl-agent::service-response-data thread-response))
+           (messages (getf thread-detail :messages))
+           (user-message (find :user messages :from-end t :key (lambda (message) (getf message :role))))
+           (assistant-message (find :assistant messages :from-end t :key (lambda (message) (getf message :role))))
+           (provider-request (attachment-echo-provider-last-request provider))
+           (provider-request-attachments (sbcl-agent::provider-request-attachments provider-request)))
+      (assert-equal 1
+                    (length provider-request-attachments)
+                    "conversation execution should forward uploaded attachments into the provider request")
+      (assert-equal "notes.txt"
+                    (getf (first provider-request-attachments) :name)
+                    "provider requests should preserve uploaded attachment names")
+      (assert-equal "notes.txt"
+                    (getf (first (getf user-message :attachments)) :name)
+                    "thread history should retain uploaded user attachments")
+      (assert-equal "diagram.png"
+                    (getf (first (getf assistant-message :attachments)) :name)
+                    "thread history should retain assistant-returned attachments"))))
 
 (defun runtime-service-contract-test ()
   (let ((session (make-test-session :cwd "/tmp/runtime-service-contract/")))

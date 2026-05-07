@@ -199,11 +199,12 @@
                                     assistant-message))))
 
 (defun build-turn-provider-request (session prompt thread turn operator-mode stream-p
-                                    &key retrieval-dossier)
+                                    &key retrieval-dossier attachments)
   (make-provider-request-from-session prompt
                                      session
                                      :thread thread
                                      :turn turn
+                                     :attachments attachments
                                      :retrieval-dossier retrieval-dossier
                                      :operator-mode operator-mode
                                      :stream-p stream-p))
@@ -368,12 +369,15 @@
                                         :stream-p nil)))
 
 (defun run-conversation-turn-streaming (provider session thread prompt
-                                         &key (source :say) (operator-mode :conversation))
+                                         &key (source :say) (operator-mode :conversation)
+                                           attachments)
   (let* ((user-message (create-message session thread :user prompt
-                                       :metadata (list :source source)))
+                                       :metadata (list :source source)
+                                       :attachments attachments))
          (turn (start-turn session thread user-message
                            :metadata (list :source source :streamed-p t)))
-         (request (build-turn-provider-request session prompt thread turn operator-mode t))
+         (request (build-turn-provider-request session prompt thread turn operator-mode t
+                                              :attachments attachments))
          (operation (start-operation session
                                      thread
                                      turn
@@ -450,7 +454,8 @@
                                               :content-type :text
                                               :stream-fragments (mapcar #'provider-event-payload
                                                                         (remove-if-not #'provider-text-delta-event-p events))
-                                              :metadata (list :source source :streamed-p t)))
+                                              :metadata (list :source source :streamed-p t)
+                                              :attachments (getf (assistant-response-metadata response) :attachments)))
            (completed-turn (complete-turn session
                                           thread
                                           turn
@@ -498,12 +503,15 @@
                             :outcome-summary (provider-request-outcome-summary request)))))
 
 (defun run-conversation-turn-sync (provider session thread prompt
-                                    &key (source :say) (operator-mode :conversation))
+                                    &key (source :say) (operator-mode :conversation)
+                                      attachments)
   (let* ((user-message (create-message session thread :user prompt
-                                       :metadata (list :source source)))
+                                       :metadata (list :source source)
+                                       :attachments attachments))
          (turn (start-turn session thread user-message
                            :metadata (list :source source :streamed-p nil)))
-         (request (build-turn-provider-request session prompt thread turn operator-mode nil))
+         (request (build-turn-provider-request session prompt thread turn operator-mode nil
+                                              :attachments attachments))
          (operation (start-operation session
                                      thread
                                      turn
@@ -557,7 +565,8 @@
                                                                 :work-item work-item))
          (assistant-message (create-message session thread :assistant (assistant-response->string response)
                                             :content-type :text
-                                            :metadata (list :source source :streamed-p nil)))
+                                            :metadata (list :source source :streamed-p nil)
+                                            :attachments (getf (assistant-response-metadata response) :attachments)))
          (completed-turn (complete-turn session
                                         thread
                                         turn
@@ -604,7 +613,8 @@
                           :outcome-summary (provider-request-outcome-summary request))))
 
 (defun run-conversation-turn (provider session prompt
-                              &key stream-p (source :say) (operator-mode :conversation))
+                              &key stream-p (source :say) (operator-mode :conversation)
+                                attachments)
   (let ((thread (current-thread session)))
     (append-transcript-entry session :user prompt)
     (emit-conversation-progress (conversation-progress-phase source :started)
@@ -614,10 +624,12 @@
     (if stream-p
         (run-conversation-turn-streaming provider session thread prompt
                                          :source source
-                                         :operator-mode operator-mode)
+                                         :operator-mode operator-mode
+                                         :attachments attachments)
         (run-conversation-turn-sync provider session thread prompt
                                     :source source
-                                    :operator-mode operator-mode))))
+                                    :operator-mode operator-mode
+                                    :attachments attachments))))
 
 (defun run-say-turn-streaming (provider session thread prompt)
   (run-conversation-turn-streaming provider session thread prompt

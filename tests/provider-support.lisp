@@ -6,6 +6,26 @@
                             :model "gpt-5"
                             :working-directory "/tmp/")))
 
+(defclass attachment-echo-provider (sbcl-agent::provider)
+  ((last-request :accessor attachment-echo-provider-last-request :initform nil)
+   (response-attachments :accessor attachment-echo-provider-response-attachments
+                         :initarg :response-attachments
+                         :initform nil)))
+
+(defmethod sbcl-agent::provider-name ((provider attachment-echo-provider))
+  "attachment-echo-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider attachment-echo-provider))
+  '(:chat :structured-response))
+
+(defmethod sbcl-agent::send-request ((provider attachment-echo-provider) request)
+  (setf (attachment-echo-provider-last-request provider) request)
+  (sbcl-agent::make-assistant-response
+   :message "Processed the supplied attachments."
+   :actions '()
+   :metadata (list :provider :attachment-echo-test
+                   :attachments (attachment-echo-provider-response-attachments provider))))
+
 (defclass mixed-action-provider (sbcl-agent::provider) ())
 
 (defmethod sbcl-agent::provider-name ((provider mixed-action-provider))

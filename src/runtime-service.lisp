@@ -5,7 +5,8 @@
          (runtime-domain (and environment
                               (environment-runtime-domain-summary environment)))
          (package-view (tool-runtime-current-package session))
-         (systems-view (tool-runtime-list-loaded-systems session)))
+         (systems-view (tool-runtime-list-loaded-systems session))
+         (package-management (sbcl-agent.bootstrap:package-management-state)))
     (list :runtime-id (or (and runtime-domain
                                (getf runtime-domain :active-runtime-id))
                           (default-runtime-id))
@@ -13,6 +14,7 @@
           :package-details package-view
           :loaded-system-count (getf systems-view :system-count)
           :loaded-systems (getf systems-view :systems)
+          :package-management package-management
           :runtime-domain runtime-domain)))
 
 (defun query-runtime-summary-service (session)

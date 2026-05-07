@@ -1001,6 +1001,13 @@
       (format t "Retrieval ranking mode: ~A~%" (config-retrieval-ranking-mode config))
       (format t "Working directory: ~A~%" (config-working-directory config))
       (format t "Shell package: ~A~%" (package-name *shell-package*))
+      (let ((package-management (sbcl-agent.bootstrap:package-management-state)))
+        (format t "Lisp package manager: ~A~%"
+                (or (getf package-management :package-manager) :asdf))
+        (format t "Lisp setup files loaded: ~D~%"
+                (or (getf package-management :loaded-setup-count) 0))
+        (format t "Lisp source registry directories: ~D~%"
+                (or (getf package-management :source-registry-directory-count) 0)))
       (format t "Session id: ~A~%" (agent-session-id session))
       (format t "Active runtime id: ~A~%" (environment-active-runtime-id environment))
       (format t "Environment events: ~D~%" (getf environment-summary :event-count))

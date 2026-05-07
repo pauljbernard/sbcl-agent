@@ -71,6 +71,68 @@
   created-at
   metadata)
 
+(defun normalize-conversation-attachment-kind (value)
+  (cond
+    ((keywordp value)
+     (if (member value '(:text :image :binary) :test #'eq) value :binary))
+    ((stringp value)
+     (let ((normalized (string-downcase (string-trim '(#\Space #\Tab #\Newline #\Return) value))))
+       (cond
+         ((string= normalized "text") :text)
+         ((string= normalized "image") :image)
+         (t :binary))))
+    (t :binary)))
+
+(defun normalize-conversation-attachment-source (value)
+  (cond
+    ((keywordp value)
+     (if (member value '(:input :output) :test #'eq) value :input))
+    ((stringp value)
+     (if (string-equal (string-trim '(#\Space #\Tab #\Newline #\Return) value) "output")
+         :output
+         :input))
+    (t :input)))
+
+(defun normalize-conversation-attachment (attachment)
+  (let* ((name (or (normalize-config-string (getf attachment :name))
+                   (normalize-config-string (getf attachment :file-name))
+                   "attachment"))
+         (media-type (or (normalize-config-string (getf attachment :media-type))
+                         "application/octet-stream"))
+         (kind (normalize-conversation-attachment-kind
+                (or (getf attachment :kind)
+                    (and (search "image/" media-type :test #'char-equal) :image)
+                    :binary)))
+         (source (normalize-conversation-attachment-source
+                  (or (getf attachment :source) :input)))
+         (text-content (normalize-config-string (getf attachment :text-content)))
+         (data-url (normalize-config-string (getf attachment :data-url)))
+         (summary (or (normalize-config-string (getf attachment :summary))
+                      (format nil "~A (~A)" name media-type)))
+         (size-bytes (let ((value (getf attachment :size-bytes)))
+                       (and (integerp value) (>= value 0) value))))
+    (list :attachment-id (or (normalize-config-string (getf attachment :attachment-id))
+                             (make-message-id))
+          :name name
+          :media-type media-type
+          :kind kind
+          :source source
+          :size-bytes size-bytes
+          :summary summary
+          :text-content text-content
+          :data-url data-url)))
+
+(defun normalize-conversation-attachments (attachments)
+  (remove nil
+          (mapcar (lambda (attachment)
+                    (when (listp attachment)
+                      (normalize-conversation-attachment attachment)))
+                  (or attachments '()))))
+
+(defun message-attachments (message)
+  (normalize-conversation-attachments
+   (getf (message-metadata message) :attachments)))
+
 (defun make-thread-id ()
   (format nil "thread-~D-~D" (get-universal-time) (random 1000000)))
 
@@ -233,6 +295,7 @@
         :role (message-role message)
         :content (message-content message)
         :content-type (message-content-type message)
+        :attachments (message-attachments message)
         :created-at (message-created-at message)
         :turn-id (message-turn-id message)
         :finalized-p (message-finalized-p message)
@@ -427,17 +490,23 @@
                          (string= turn-id (artifact-turn-id artifact)))
                        (agent-session-artifacts session)))))
 
-(defun create-message (session thread role content &key turn-id (content-type :text) stream-fragments (finalized-p t) metadata)
-  (let ((message (make-message :id (make-message-id)
-                               :thread-id (thread-id thread)
-                               :role role
-                               :content content
-                               :content-type content-type
-                               :created-at (get-universal-time)
-                               :turn-id turn-id
-                               :stream-fragments stream-fragments
-                               :finalized-p finalized-p
-                               :metadata metadata)))
+(defun create-message (session thread role content
+                       &key turn-id (content-type :text) stream-fragments (finalized-p t)
+                         metadata attachments)
+  (let* ((normalized-attachments (normalize-conversation-attachments attachments))
+         (message-metadata (append metadata
+                                   (when normalized-attachments
+                                     (list :attachments normalized-attachments)))))
+    (let ((message (make-message :id (make-message-id)
+                                 :thread-id (thread-id thread)
+                                 :role role
+                                 :content content
+                                 :content-type content-type
+                                 :created-at (get-universal-time)
+                                 :turn-id turn-id
+                                 :stream-fragments stream-fragments
+                                 :finalized-p finalized-p
+                                 :metadata message-metadata)))
     (multiple-value-bind (messages tail)
         (append-linked-item (agent-session-messages session)
                             (agent-session-messages-tail session)
@@ -458,7 +527,7 @@
                           :entity-id (message-id message)
                           :thread-id (thread-id thread)
                           :visibility :operator)
-    message))
+      message)))
 
 (defun start-turn (session thread user-message &key metadata)
   (let ((turn (make-turn :id (make-turn-id)

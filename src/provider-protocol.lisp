@@ -6,6 +6,7 @@
 
 (defstruct provider-request
   prompt
+  attachments
   session-summary
   thread-context
   turn-context

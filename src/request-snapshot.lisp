@@ -332,8 +332,10 @@
 
 (defun make-provider-request-from-snapshot (prompt request-snapshot
                                            &key (operator-mode :repl-bridge)
-                                             stream-p)
+                                             stream-p
+                                             attachments)
   (make-provider-request :prompt prompt
+                         :attachments attachments
                          :session-summary (and request-snapshot
                                                (provider-request-snapshot-session-summary request-snapshot))
                          :thread-context (and request-snapshot
@@ -366,7 +368,8 @@
                                             retrieval-dossier
                                             outcome-brief
                                             (operator-mode :repl-bridge)
-                                            stream-p)
+                                            stream-p
+                                            attachments)
   (let* ((active-session (or session (ignore-errors (ensure-session))))
          (bundle (and active-session
                       (build-provider-context-bundle active-session
@@ -380,4 +383,5 @@
     (make-provider-request-from-snapshot prompt
                                          request-snapshot
                                          :operator-mode operator-mode
-                                         :stream-p stream-p)))
+                                         :stream-p stream-p
+                                         :attachments attachments)))

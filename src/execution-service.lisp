@@ -673,10 +673,12 @@
                                         (plist-value options :stream nil))
                                    *default-ask-streaming*
                                    (not (null *task-progress-callback*))))
+                     (attachments (plist-value options :attachments nil))
                      (result (run-conversation-turn provider
                                                    session
                                                    prompt
                                                    :stream-p stream-p
+                                                   :attachments attachments
                                                    :source source
                                                    :operator-mode operator-mode)))
                 (kernelize-service-command-response

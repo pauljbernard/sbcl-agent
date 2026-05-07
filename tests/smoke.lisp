@@ -20,6 +20,29 @@
                            (sbcl-agent::assistant-response-message response))
                    "mock provider should return the scaffold smoke-test marker"))))
 
+(defun common-lisp-package-bootstrap-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-package-bootstrap-XXXXXX"))
+         (project-root (ensure-directories-exist (merge-pathnames "project/" root)))
+         (systems-root (ensure-directories-exist (merge-pathnames "systems/demo/" project-root)))
+         (state (sbcl-agent.bootstrap:bootstrap-common-lisp-package-management
+                 :project-dir project-root
+                 :working-directory project-root)))
+    (declare (ignore systems-root))
+    (assert-true (> (getf state :source-registry-directory-count) 0)
+                 "bootstrap should register at least one ASDF source registry directory")
+    (assert-true (some (lambda (directory)
+                         (search "/project/" directory :test #'char-equal))
+                       (getf state :source-registry-directories))
+                 "bootstrap should register the project root in the ASDF source registry")
+    (assert-true (some (lambda (directory)
+                         (search "/project/systems/" directory :test #'char-equal))
+                       (getf state :source-registry-directories))
+                 "bootstrap should register local systems directories for ASDF discovery")
+    (assert-true (some (lambda (directory)
+                         (search "/project/" directory :test #'char-equal))
+                       (getf state :central-registry))
+                 "bootstrap should register the project root in the ASDF central registry")))
+
 (defun direct-sandbox-tool-wrapper-test ()
   (let ((session (sbcl-agent::make-default-session :cwd "/tmp/")))
     (assert-signals-error
@@ -2973,6 +2996,43 @@ fi
   (assert-true (equal '("gemini-api-key.key" "google-api-key.key")
                       (sbcl-agent::provider-key-file-names "gemini"))
                "provider-key-file-names should return the Gemini key file names"))
+
+(defun environment-provider-key-file-behavior-test ()
+  (let* ((root (make-temporary-directory "/tmp/provider-key-file-behavior-XXXXXX"))
+         (root-path (namestring root))
+         (environment (sbcl-agent::make-default-environment :storage-root root-path)))
+    (assert-equal "default"
+                  (getf (sbcl-agent::environment-provider-profile-summary environment)
+                        :active-profile-name)
+                  "empty environments should expose a default provider profile")
+    (assert-equal "openai-compatible"
+                  (getf (getf (sbcl-agent::environment-provider-profile-summary environment)
+                              :active-profile)
+                        :provider)
+                  "empty environments should default the provider profile to OpenAI-compatible")
+    (sbcl-agent::command-environment-provider-configure-service
+     "default"
+     '(:provider "openai-compatible"
+       :api-key "openai-secret")
+     environment)
+    (assert-equal "openai-secret"
+                  (sbcl-agent::load-api-key-from-file root-path "openai-compatible")
+                  "configuring an OpenAI profile should write the OpenAI key file")
+    (sbcl-agent::command-environment-provider-configure-service
+     "anthropic-review"
+     '(:provider "anthropic"
+       :api-key "anthropic-secret")
+     environment)
+    (assert-equal "anthropic-secret"
+                  (sbcl-agent::load-api-key-from-file root-path "anthropic")
+                  "configuring an Anthropic profile should write the Anthropic key file")
+    (sbcl-agent::command-environment-provider-configure-service
+     "anthropic-review"
+     '(:provider "anthropic" :clear-api-key t)
+     environment)
+    (assert-equal nil
+                  (sbcl-agent::load-api-key-from-file root-path "anthropic")
+                  "clearing an Anthropic profile token should remove the Anthropic key file")))
 
 (defun test-program-reporting-coverage-test ()
   (let* ((results (list (list :name "alpha-test"

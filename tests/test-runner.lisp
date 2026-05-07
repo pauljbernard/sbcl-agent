@@ -274,6 +274,7 @@
    (list "project-command-service-contract-test" #'project-command-service-contract-test)
    (list "conversation-service-contract-test" #'conversation-service-contract-test)
    (list "runtime-service-contract-test" #'runtime-service-contract-test)
+   (list "calculator-service-contract-test" #'calculator-service-contract-test)
    (list "kernel-service-contract-test" #'kernel-service-contract-test)
    (list "platform-service-contract-test" #'platform-service-contract-test)
    (list "workflow-and-approval-service-contract-test" #'workflow-and-approval-service-contract-test)

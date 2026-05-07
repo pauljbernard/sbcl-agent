@@ -1521,6 +1521,47 @@
                     (getf (sbcl-agent::service-response-data history-response) :tool)
                     "runtime history service should reuse the runtime history read model"))))
 
+(defun calculator-service-contract-test ()
+  (let ((session (make-test-session :cwd "/tmp/calculator-service-contract/")))
+    (sbcl-agent::ensure-environment)
+    (let ((summary-response (sbcl-agent::query-calculator-summary-service session)))
+      (assert-service-metadata-shape summary-response "calculator summary service")
+      (assert-equal :calculator
+                    (getf summary-response :domain)
+                    "calculator summary service should report the calculator domain")
+      (assert-equal :summary
+                    (getf summary-response :operation)
+                    "calculator summary service should identify the summary operation")
+      (assert-true (member :scientific
+                           (getf (sbcl-agent::service-response-data summary-response) :available-modes))
+                   "calculator summary service should advertise scientific mode"))
+    (let* ((basic-response (sbcl-agent::command-calculator-evaluate-service session "2 + 2"))
+           (basic-data (sbcl-agent::service-response-data basic-response))
+           (scientific-response
+             (sbcl-agent::command-calculator-evaluate-service session
+                                                              "sin(90)"
+                                                              :mode :scientific
+                                                              :angle-unit :degrees))
+           (scientific-data (sbcl-agent::service-response-data scientific-response))
+           (programmer-response
+             (sbcl-agent::command-calculator-evaluate-service session
+                                                              "0xF & 0x3"
+                                                              :mode :programmer
+                                                              :base 16
+                                                              :word-size 16))
+           (programmer-data (sbcl-agent::service-response-data programmer-response)))
+      (assert-service-metadata-shape basic-response "calculator evaluate service")
+      (assert-equal :evaluate
+                    (getf basic-response :operation)
+                    "calculator evaluate service should identify the evaluate operation")
+      (assert-true (search "4" (getf basic-data :display-value))
+                   "basic calculator evaluation should add decimal values")
+      (assert-true (search "1" (getf scientific-data :display-value))
+                   "scientific calculator evaluation should support degree-based trigonometry")
+      (assert-equal "0x3"
+                    (string-downcase (getf programmer-data :hexadecimal-value))
+                    "programmer calculator evaluation should expose hexadecimal output"))))
+
 (defun kernel-service-contract-test ()
   (let ((session (make-test-session :cwd "/tmp/kernel-service-contract/")))
     (ensure-directories-exist "/tmp/kernel-service-contract/")

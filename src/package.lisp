@@ -12,6 +12,11 @@
            #:query-kernel-inspect-service
            #:command-kernel-control-service))
 
+(defpackage #:sbcl-agent.calculator
+  (:use #:cl)
+  (:export #:calculator-summary
+           #:evaluate-expression))
+
 (defpackage #:sbcl-agent-user
   (:use #:cl))
 

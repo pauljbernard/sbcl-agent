@@ -5,7 +5,8 @@
   :version "0.1.0"
   :serial t
   :depends-on ()
-  :components ((:file "src/package")
+  :components ((:file "src/bootstrap-runtime")
+               (:file "src/package")
                (:file "src/config")
                (:file "src/json")
                (:file "src/provider-protocol")
@@ -66,6 +67,7 @@
                (:file "src/environment-service")
                (:file "src/conversation-service")
                (:file "src/runtime-service")
+               (:file "src/package-management-service")
                (:file "src/runtime-telemetry-service")
                (:file "src/console-service")
                (:file "src/workflow-service")

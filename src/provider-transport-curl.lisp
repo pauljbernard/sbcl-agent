@@ -1,27 +1,49 @@
 (in-package #:sbcl-agent)
 
+(defun temporary-curl-body-pathname ()
+  (merge-pathnames
+   (format nil "sbcl-agent-curl-body-~D-~A.json"
+           (get-universal-time)
+           (gensym "BODY-"))
+   (uiop:temporary-directory)))
+
+(defun write-curl-body-file (body)
+  (let ((body-path (temporary-curl-body-pathname)))
+    (ensure-directories-exist body-path)
+    (with-open-file (stream body-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string body stream))
+    body-path))
+
 (defun curl-json-request-with-headers (url headers body &key (label "HTTP request"))
   (let ((stdout (make-string-output-stream))
-        (stderr (make-string-output-stream)))
-    (let ((process (sb-ext:run-program
-                    "curl"
-                    (append (list "-sS"
-                                  "-X" "POST"
-                                  url)
-                            (loop for header in headers
-                                  append (list "-H" header))
-                            (list "-d" body))
-                    :search t
-                    :input nil
-                    :output stdout
-                    :error stderr
-                    :wait t)))
-      (let ((exit-code (sb-ext:process-exit-code process))
-            (stdout-string (get-output-stream-string stdout))
-            (stderr-string (get-output-stream-string stderr)))
-        (unless (zerop exit-code)
-          (provider-transport-error label exit-code stderr-string))
-        stdout-string))))
+        (stderr (make-string-output-stream))
+        (body-path (write-curl-body-file body)))
+    (unwind-protect
+         (let ((process (sb-ext:run-program
+                         "curl"
+                         (append (list "-sS"
+                                       "-X" "POST"
+                                       url)
+                                 (loop for header in headers
+                                       append (list "-H" header))
+                                 (list "--data-binary"
+                                       (format nil "@~A" (namestring body-path))))
+                         :search t
+                         :input nil
+                         :output stdout
+                         :error stderr
+                         :wait t)))
+           (let ((exit-code (sb-ext:process-exit-code process))
+                 (stdout-string (get-output-stream-string stdout))
+                 (stderr-string (get-output-stream-string stderr)))
+             (unless (zerop exit-code)
+               (provider-transport-error label exit-code stderr-string))
+             stdout-string))
+      (when (probe-file body-path)
+        (delete-file body-path)))))
 
 (defun curl-json-request (url api-key body)
   (curl-json-request-with-headers
@@ -35,6 +57,7 @@
   (let* ((stderr (make-string-output-stream))
          (started-at (get-internal-real-time))
          (first-line-at nil)
+         (body-path (write-curl-body-file body))
          (process (sb-ext:run-program
                    "curl"
                    (append (list "-sS"
@@ -43,7 +66,8 @@
                                  url)
                             (loop for header in headers
                                   append (list "-H" header))
-                            (list "-d" body))
+                            (list "--data-binary"
+                                  (format nil "@~A" (namestring body-path))))
                    :search t
                    :input nil
                    :output :stream
@@ -80,7 +104,9 @@
                       (unless (zerop exit-code)
                         (provider-transport-error label exit-code stderr-string)))))
       (when (and output (open-stream-p output))
-        (close output)))))
+        (close output))
+      (when (probe-file body-path)
+        (delete-file body-path)))))
 
 (defun stream-openai-json-request (url api-key body line-handler)
   (stream-json-request-with-headers

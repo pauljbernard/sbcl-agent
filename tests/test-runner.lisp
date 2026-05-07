@@ -98,6 +98,7 @@
 
 (defun core-and-cli-tests ()
   (list (list "runtime-smoke-test" #'runtime-smoke-test)
+        (list "common-lisp-package-bootstrap-test" #'common-lisp-package-bootstrap-test)
         (list "direct-sandbox-tool-wrapper-test" #'direct-sandbox-tool-wrapper-test)
         (list "repl-alias-test" #'repl-alias-test)
         (list "main-command-helper-test" #'main-command-helper-test)
@@ -358,6 +359,8 @@
    (list "project-record-persistence-test" #'project-record-persistence-test)
    (list "environment-creation-test" #'environment-creation-test)
    (list "environment-persistence-test" #'environment-persistence-test)
+   (list "environment-provider-key-file-behavior-test"
+         #'environment-provider-key-file-behavior-test)
    (list "environment-serializes-compatibility-payload-test" #'environment-serializes-compatibility-payload-test)
    (list "compatibility-payload-reconstructs-legacy-session-header-test" #'compatibility-payload-reconstructs-legacy-session-header-test)
    (list "serializable-environment-copy-preserves-existing-compatibility-payload-test" #'serializable-environment-copy-preserves-existing-compatibility-payload-test)

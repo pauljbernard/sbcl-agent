@@ -7,6 +7,8 @@ exec env XDG_CACHE_HOME="${XDG_CACHE_HOME:-/tmp/common-lisp-cache}" \
   sbcl --dynamic-space-size 4096 \
        --non-interactive \
        --eval '(require :asdf)' \
+       --load "${PROJECT_DIR}/src/bootstrap-runtime.lisp" \
+       --eval "(sbcl-agent.bootstrap:bootstrap-common-lisp-package-management :project-dir \"${PROJECT_DIR}\" :working-directory \"${PROJECT_DIR}\")" \
        --load "${PROJECT_DIR}/sbcl-agent.asd" \
        --eval '(asdf:test-system :sbcl-agent)' \
        --eval '(sb-ext:exit :code 0)'

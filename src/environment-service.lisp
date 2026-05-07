@@ -124,6 +124,10 @@
 (defun normalize-provider-profile-name (name)
   (or (normalize-config-string name) "default"))
 
+(defun plist-key-present-p (plist key)
+  (loop for tail on plist by #'cddr
+        thereis (eq (first tail) key)))
+
 (defun normalize-provider-profile-keyword (value)
   (cond
     ((keywordp value) value)
@@ -154,6 +158,7 @@
                                     :model (getf profile :model)
                                     :fast-model (getf profile :fast-model)
                                     :api-base (getf profile :api-base)
+                                    :api-key (getf profile :api-key)
                                     :intents (getf profile :intents)
                                     :latency-tier (getf profile :latency-tier)
                                     :review-bias (getf profile :review-bias)
@@ -161,7 +166,8 @@
                                     :locality (getf profile :locality))))
 
 (defun normalize-provider-profile (name options)
-  (let* ((provider (or (normalize-config-string (getf options :provider)) "mock")))
+  (let* ((provider (or (normalize-config-string (getf options :provider))
+                       "openai-compatible")))
     (list :name (normalize-provider-profile-name name)
           :provider provider
           :model (or (normalize-config-string (getf options :model))
@@ -169,6 +175,7 @@
           :fast-model (or (normalize-config-string (getf options :fast-model))
                           (provider-default-fast-model provider))
           :api-base (normalize-config-string (getf options :api-base))
+          :api-key (normalize-config-string (getf options :api-key))
           :intents (normalize-provider-profile-keywords (getf options :intents))
           :latency-tier (or (normalize-provider-profile-keyword
                              (unwrap-provider-profile-option-value (getf options :latency-tier)))
@@ -193,6 +200,35 @@
                                           :provider-profiles)
               '())))
 
+(defun environment-provider-working-directory (&optional environment)
+  (let* ((active-environment (ensure-environment environment))
+         (storage-root (environment-storage-root active-environment)))
+    (namestring
+     (uiop:ensure-directory-pathname
+      (or storage-root
+          (namestring (getcwd)))))))
+
+(defun default-environment-provider-profile (&optional environment)
+  (let* ((working-directory (environment-provider-working-directory environment))
+         (api-key (resolve-provider-api-key "openai-compatible" working-directory)))
+    (list :name "default"
+          :provider "openai-compatible"
+          :model (provider-default-model "openai-compatible")
+          :fast-model (provider-default-fast-model "openai-compatible")
+          :api-base (provider-default-api-base "openai-compatible")
+          :api-key api-key
+          :intents '()
+          :latency-tier :balanced
+          :review-bias :neutral
+          :execution-bias :balanced
+          :locality :network)))
+
+(defun effective-environment-provider-profiles (&optional environment)
+  (let ((profiles (environment-provider-profiles environment)))
+    (if profiles
+        profiles
+        (list (default-environment-provider-profile environment)))))
+
 (defun environment-active-provider-profile-name (&optional environment)
   (environment-metadata-value (ensure-environment environment)
                               :active-provider-profile
@@ -200,26 +236,46 @@
 
 (defun environment-find-provider-profile (environment profile-name)
   (find (normalize-provider-profile-name profile-name)
-        (environment-provider-profiles environment)
+        (effective-environment-provider-profiles environment)
         :key (lambda (profile) (getf profile :name))
         :test #'string=))
 
+(defun provider-profile-resolved-api-key (profile &optional environment)
+  (let* ((normalized (canonicalize-provider-profile profile))
+         (provider (getf normalized :provider))
+         (working-directory (environment-provider-working-directory environment))
+         (legacy-api-key (normalize-config-string (getf normalized :api-key))))
+    (or (resolve-provider-api-key provider working-directory)
+        legacy-api-key)))
+
+(defun provider-profile-public-view (profile &optional environment)
+  (let ((public (copy-list (canonicalize-provider-profile profile))))
+    (setf (getf public :api-key-present-p)
+          (not (null (provider-profile-resolved-api-key profile environment))))
+    (remf public :api-key)
+    public))
+
 (defun environment-provider-profile-summary (&optional environment)
   (let* ((active-environment (ensure-environment environment))
-         (profiles (environment-provider-profiles active-environment))
+         (profiles (effective-environment-provider-profiles active-environment))
+         (public-profiles (mapcar (lambda (profile)
+                                    (provider-profile-public-view profile active-environment))
+                                  profiles))
          (active-name (environment-active-provider-profile-name active-environment))
-         (active-profile (environment-find-provider-profile active-environment active-name))
+         (active-profile (let ((raw-profile (environment-find-provider-profile active-environment active-name)))
+                           (and raw-profile
+                                (provider-profile-public-view raw-profile active-environment))))
          (routing-mode (or (environment-metadata-value active-environment :provider-routing-mode)
                            :auto))
          (last-route (environment-metadata-value active-environment :last-provider-route)))
     (list :active-profile-name active-name
-          :profile-count (length profiles)
-          :profiles profiles
+          :profile-count (length public-profiles)
+          :profiles public-profiles
           :active-profile active-profile
           :routing-mode routing-mode
           :routing-policy (list :mode routing-mode
                                 :available-modes '(:auto :manual)
-                                :profile-count (length profiles)
+                                :profile-count (length public-profiles)
                                 :last-route-present-p (and last-route t))
           :last-route last-route)))
 
@@ -567,13 +623,33 @@
     (set-environment-metadata-value active-environment :last-provider-route summary)
     summary))
 
-(defun provider-profile->config (profile &optional (base-config (load-config)))
-  (let ((normalized (canonicalize-provider-profile profile)))
-    (config-with-overrides base-config
-                           :provider (getf normalized :provider)
-                           :model (getf normalized :model)
-                           :fast-model (getf normalized :fast-model)
-                           :api-base (getf normalized :api-base))))
+(defun provider-profile->config (profile &optional base-config)
+  (let* ((normalized (canonicalize-provider-profile profile))
+         (working-directory (or (and base-config (config-working-directory base-config))
+                                (and (boundp '*current-environment*)
+                                     *current-environment*
+                                     (environment-provider-working-directory *current-environment*))
+                                (namestring (uiop:ensure-directory-pathname (getcwd)))))
+         (provider (getf normalized :provider))
+         (api-key (or (resolve-provider-api-key provider working-directory)
+                      (normalize-config-string (getf normalized :api-key)))))
+    (make-config
+     :provider provider
+     :model (or (getf normalized :model)
+                (and base-config (config-model base-config))
+                (provider-default-model provider))
+     :fast-model (or (getf normalized :fast-model)
+                     (and base-config (config-fast-model base-config))
+                     (provider-default-fast-model provider))
+     :api-base (or (getf normalized :api-base)
+                   (and base-config (config-api-base base-config))
+                   (provider-default-api-base provider))
+     :api-key api-key
+     :api-key-present-p (not (null api-key))
+     :retrieval-ranking-mode (or (and base-config
+                                      (config-retrieval-ranking-mode base-config))
+                                 :auto)
+     :working-directory working-directory)))
 
 (defun provider-from-profile (profile &optional (base-config (load-config)))
   (make-provider (provider-profile->config profile base-config)))
@@ -637,18 +713,41 @@
 (defun command-environment-provider-configure-service (profile-name options
                                                                     &optional environment)
   (let* ((active-environment (ensure-environment environment))
-         (normalized (normalize-provider-profile profile-name options))
+         (existing (environment-find-provider-profile active-environment profile-name))
+         (resolved-options
+           (if (plist-key-present-p options :clear-api-key)
+               (append options (list :api-key nil))
+               options))
+         (normalized (normalize-provider-profile profile-name resolved-options))
+         (working-directory (environment-provider-working-directory active-environment))
+         (provider-name (getf normalized :provider))
+         (explicit-api-key-p (plist-key-present-p resolved-options :api-key))
+         (clear-api-key-p (plist-key-present-p resolved-options :clear-api-key))
+         (legacy-api-key (and existing
+                              (normalize-config-string (getf existing :api-key))))
+         (resolved-api-key
+           (cond
+             (clear-api-key-p nil)
+             (explicit-api-key-p (normalize-config-string (getf resolved-options :api-key)))
+             (t legacy-api-key)))
+         (sanitized (copy-list normalized))
          (profiles (remove (getf normalized :name)
                            (environment-provider-profiles active-environment)
                            :key (lambda (profile) (getf profile :name))
                            :test #'string=)))
+    (cond
+      (clear-api-key-p
+       (remove-provider-api-key-file working-directory provider-name))
+      (resolved-api-key
+       (write-provider-api-key-file working-directory provider-name resolved-api-key)))
+    (remf sanitized :api-key)
     (set-environment-metadata-value active-environment
                                     :provider-profiles
-                                    (append profiles (list normalized)))
+                                    (append profiles (list sanitized)))
     (unless (environment-metadata-value active-environment :active-provider-profile)
       (set-environment-metadata-value active-environment
                                       :active-provider-profile
-                                      (getf normalized :name)))
+                                      (getf sanitized :name)))
     (make-service-command-response :environment
                                    :provider-configure
                                    (environment-provider-profile-summary active-environment)

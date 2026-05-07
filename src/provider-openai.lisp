@@ -16,6 +16,8 @@
 (defparameter +stream-actions-marker+ "<<<SBCL-ACTIONS>>>")
 (defparameter +stream-actions-end-marker+ "<<<END-SBCL-ACTIONS>>>")
 
+(defparameter +attachment-text-content-limit+ 40000)
+
 (defmethod provider-name ((provider openai-compatible-provider))
   (openai-provider-id provider))
 
@@ -63,6 +65,9 @@
    "Supported action types are tool, patch, and eval. "
    "Use an eval action when the user wants Common Lisp code executed in the current image. The eval payload should carry the Lisp form to run. "
    "Use a tool action when you need structured tool access such as reading files or listing directories. "
+   "If you need to return a file-like result in the conversation itself, place it under metadata.attachments as an array of attachment objects. "
+   "Each attachment object may contain name, media_type, kind, summary, text_content, and data_url. "
+   "Use kind=image with a data_url for inline-renderable images. Use kind=text with text_content for text artifacts such as SVG, Markdown, or JSON. "
    "If the user refers to earlier code or discussion, resolve that reference against recent transcript entries instead of claiming you lack memory. "
    "Do not claim the user must enable a REPL or execution tool when the request can be satisfied with an eval action in the current Lisp image. "
    "If no actions are needed, return an empty actions array."))
@@ -81,10 +86,13 @@
    "The hidden JSON object after the marker must contain only actions and metadata. Actions must be an array. "
    "Supported action types are tool, patch, and eval. "
    "Use an eval action when the user wants Common Lisp code executed in the current image. "
+   "If you need to return a file-like result in the conversation itself, place it under metadata.attachments in the post-marker JSON object. "
+   "Each attachment object may contain name, media_type, kind, summary, text_content, and data_url. "
+   "Use kind=image with a data_url for inline-renderable images. Use kind=text with text_content for text artifacts such as SVG, Markdown, or JSON. "
    "If no actions are needed, emit an empty actions array. "
    "Never omit the markers in streaming mode."))
 
-(defun build-openai-user-prompt (request)
+(defun build-openai-user-prompt-text (request)
   (format nil
           "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
           (provider-request-prompt request)
@@ -103,6 +111,101 @@
           (provider-request-outcome-brief request)
           (provider-request-session-summary request)
           (build-openai-governance-directives request)))
+
+(defun build-openai-user-prompt (request)
+  "Compatibility wrapper for tests and callers that still use the older helper name."
+  (build-openai-user-prompt-text request))
+
+(defun provider-request-attachment-text (attachment)
+  (let ((text-content (getf attachment :text-content)))
+    (when text-content
+      (if (> (length text-content) +attachment-text-content-limit+)
+          (concatenate 'string
+                       (subseq text-content 0 +attachment-text-content-limit+)
+                       "\n\n[attachment truncated]")
+          text-content))))
+
+(defun provider-request-image-attachment-p (attachment)
+  (and (eq (getf attachment :kind) :image)
+       (stringp (getf attachment :data-url))
+       (search "data:" (getf attachment :data-url) :test #'char-equal)))
+
+(defun build-openai-user-message-content (request)
+  (let ((attachments (or (provider-request-attachments request) '())))
+    (if (null attachments)
+        (build-openai-user-prompt-text request)
+        (append
+         (list (list :type "text"
+                     :text (build-openai-user-prompt-text request)))
+         (mapcan (lambda (attachment)
+                   (let ((name (or (getf attachment :name) "attachment"))
+                         (media-type (or (getf attachment :media-type) "application/octet-stream"))
+                         (summary (or (getf attachment :summary) "Attachment")))
+                     (cond
+                       ((provider-request-image-attachment-p attachment)
+                        (list (list :type "text"
+                                    :text (format nil "Attached image: ~A (~A). ~A"
+                                                  name media-type summary))
+                              (list :type "image_url"
+                                    :image_url (list :url (getf attachment :data-url)))))
+                       ((provider-request-attachment-text attachment)
+                        (list (list :type "text"
+                                    :text (format nil "Attached file: ~A (~A). ~A~%~%~A"
+                                                  name
+                                                  media-type
+                                                  summary
+                                                  (provider-request-attachment-text attachment)))))
+                       (t
+                        (list (list :type "text"
+                                    :text (format nil "Attached file: ~A (~A). ~A"
+                                                  name media-type summary)))))))
+                 attachments)))))
+
+(defun parse-data-url-payload (data-url)
+  (when (and (stringp data-url)
+             (search "data:" data-url :test #'char-equal)
+             (search ";base64," data-url :test #'char-equal))
+    (let* ((prefix-end (search ";base64," data-url :test #'char-equal))
+           (media-type (subseq data-url 5 prefix-end))
+           (payload-start (+ prefix-end (length ";base64,"))))
+      (values media-type (subseq data-url payload-start)))))
+
+(defun build-anthropic-user-message-content (request)
+  (let ((attachments (or (provider-request-attachments request) '())))
+    (append
+     (list (list :type "text"
+                 :text (build-openai-user-prompt-text request)))
+     (mapcan (lambda (attachment)
+               (let ((name (or (getf attachment :name) "attachment"))
+                     (media-type (or (getf attachment :media-type) "application/octet-stream"))
+                     (summary (or (getf attachment :summary) "Attachment")))
+                 (cond
+                   ((provider-request-image-attachment-p attachment)
+                    (multiple-value-bind (parsed-media-type base64-data)
+                        (parse-data-url-payload (getf attachment :data-url))
+                      (if (and parsed-media-type base64-data)
+                          (list (list :type "text"
+                                      :text (format nil "Attached image: ~A (~A). ~A"
+                                                    name parsed-media-type summary))
+                                (list :type "image"
+                                      :source (list :type "base64"
+                                                    :media_type parsed-media-type
+                                                    :data base64-data)))
+                          (list (list :type "text"
+                                      :text (format nil "Attached image: ~A (~A). ~A"
+                                                    name media-type summary))))))
+                   ((provider-request-attachment-text attachment)
+                    (list (list :type "text"
+                                :text (format nil "Attached file: ~A (~A). ~A~%~%~A"
+                                              name
+                                              media-type
+                                              summary
+                                              (provider-request-attachment-text attachment)))))
+                   (t
+                    (list (list :type "text"
+                                :text (format nil "Attached file: ~A (~A). ~A"
+                                              name media-type summary)))))))
+             attachments))))
 
 (defun deep-request-p (prompt)
   (some (lambda (needle)
@@ -132,7 +235,7 @@
                                        (build-openai-stream-system-prompt)
                                        (build-openai-system-prompt)))
                     (list :role "user"
-                          :content (build-openai-user-prompt request)))
+                          :content (build-openai-user-message-content request)))
          :stream stream)))
 
 (defun build-anthropic-request-body (provider request)
@@ -142,7 +245,7 @@
          :system (build-openai-system-prompt)
          :messages (list
                     (list :role "user"
-                          :content (build-openai-user-prompt request))))))
+                          :content (build-anthropic-user-message-content request))))))
 
 (defun extract-openai-message-content (response-object)
   (let* ((choices (json-object-value response-object "choices"))

@@ -36,6 +36,9 @@
               (merge-pathnames (parse-namestring name) root))
             (provider-key-file-names provider-name))))
 
+(defun primary-key-file-pathname (working-directory &optional (provider-name "openai-compatible"))
+  (first (key-file-pathnames working-directory provider-name)))
+
 (defun load-api-key-from-file (working-directory &optional (provider-name "openai-compatible"))
   (let ((path (find-if #'probe-file (key-file-pathnames working-directory provider-name))))
     (when path
@@ -44,6 +47,29 @@
          (let ((contents (make-string (file-length stream))))
            (read-sequence contents stream)
            contents))))))
+
+(defun write-provider-api-key-file (working-directory provider-name api-key)
+  (let* ((path (primary-key-file-pathname working-directory provider-name))
+         (normalized-key (normalize-config-string api-key)))
+    (unless path
+      (error "Could not resolve key-file path for provider ~S" provider-name))
+    (unless normalized-key
+      (error "Cannot write a blank API key for provider ~S" provider-name))
+    (ensure-directories-exist path)
+    (with-open-file (stream path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string normalized-key stream))
+    path))
+
+(defun remove-provider-api-key-file (working-directory provider-name)
+  (let ((removed nil))
+    (dolist (path (key-file-pathnames working-directory provider-name))
+      (when (probe-file path)
+        (delete-file path)
+        (setf removed t)))
+    removed))
 
 (defun resolve-provider-name (explicit-provider api-key)
   (or explicit-provider

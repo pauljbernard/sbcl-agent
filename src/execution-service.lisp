@@ -307,7 +307,7 @@
   (let ((trimmed (trim-conversation-prompt prompt)))
     (when (and (> (length trimmed) 0)
                (char= (char trimmed 0) #\()
-               (ignore-errors (parse-runtime-form trimmed)))
+               (ignore-errors (parse-runtime-forms trimmed)))
       trimmed)))
 
 (defun affirmative-runtime-eval-confirmation-p (prompt)
@@ -673,10 +673,12 @@
                                         (plist-value options :stream nil))
                                    *default-ask-streaming*
                                    (not (null *task-progress-callback*))))
+                     (attachments (plist-value options :attachments nil))
                      (result (run-conversation-turn provider
                                                    session
                                                    prompt
                                                    :stream-p stream-p
+                                                   :attachments attachments
                                                    :source source
                                                    :operator-mode operator-mode)))
                 (kernelize-service-command-response

@@ -134,10 +134,15 @@
           do (case character
                (#\" (write-string "\\\"" out))
                (#\\ (write-string "\\\\" out))
+               (#\Backspace (write-string "\\b" out))
+               (#\Page (write-string "\\f" out))
                (#\Newline (write-string "\\n" out))
                (#\Return (write-string "\\r" out))
                (#\Tab (write-string "\\t" out))
-               (t (write-char character out))))))
+               (t
+                (if (< (char-code character) 32)
+                    (format out "\\u~4,'0X" (char-code character))
+                    (write-char character out)))))))
 
 (defun keyword->json-key (keyword)
   (string-downcase (substitute #\_ #\- (symbol-name keyword))))

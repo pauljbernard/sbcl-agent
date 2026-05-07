@@ -10,6 +10,10 @@
                  :defaults *script-path*))
 
 (require :asdf)
+(load (merge-pathnames #P"src/bootstrap-runtime.lisp" *project-dir*))
+(sbcl-agent.bootstrap:bootstrap-common-lisp-package-management
+ :project-dir *project-dir*
+ :working-directory *project-dir*)
 (load (merge-pathnames #P"sbcl-agent.asd" *project-dir*))
 (asdf:load-system :sbcl-agent)
 (sb-ext:exit :code (sbcl-agent:main))

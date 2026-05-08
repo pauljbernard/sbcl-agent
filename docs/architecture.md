@@ -66,19 +66,19 @@ The following diagrams capture the current architectural loop more directly than
 
 Before looking at the kernel and service loops, it is important to understand the primary architectural choice: `sbcl-agent` is not an external agent wrapped around a target system. The agent executes inside the same live SBCL environment it inspects and controls.
 
-![Realtime introspective environment architecture]({{ '/assets/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+<img src="{{ '/assets/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Execution Kernel Architecture
 
-![Execution kernel architecture]({{ '/assets/KernelArchitecture.png' | relative_url }})
+<img src="{{ '/assets/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Conversational Context Architecture
 
-![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Governance Architecture
 
-![Governance architecture]({{ '/assets/GovernanceArchitecture.png' | relative_url }})
+<img src="{{ '/assets/GovernanceArchitecture.png' | relative_url }}" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Preserve Capabilities, Discard Metaphors
 

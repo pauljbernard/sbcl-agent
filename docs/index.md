@@ -26,19 +26,19 @@ Use this order instead:
 
 The current `Surface` desktop host for `sbcl-agent` looks like this:
 
-![Surface desktop snapshot]({{ '/Desktop.jpg' | relative_url }})
+<img src="{{ '/Desktop.jpg' | relative_url }}" alt="Surface desktop snapshot" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Current Kernel Architecture
 
 The execution-kernel structure that underlies the shell, the desktop, and the service boundary is shown below:
 
-![Execution kernel architecture]({{ '/KernelArchitecture.png' | relative_url }})
+<img src="{{ '/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Realtime Introspective Environment Architecture
 
 The diagram below shows the more fundamental architectural distinction behind `sbcl-agent`: the agent and the environment share one live runtime. This is what makes introspection, environment-native action, persistent transcript and memory, and self-executing governance possible without treating the environment as an external target.
 
-![Realtime introspective environment architecture]({{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+<img src="{{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
 

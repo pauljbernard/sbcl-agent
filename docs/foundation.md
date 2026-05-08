@@ -49,13 +49,13 @@ This is the main reason `sbcl-agent` can justify an environment-first architectu
 
 The following diagram makes that claim concrete. Traditional agents stand outside the target environment and manipulate it through APIs, shells, filesystems, browsers, and logs. `sbcl-agent` instead runs the agent inside the same live SBCL environment, where runtime state, memory, governance, evidence, and the Surface UI are all part of one introspective and persistent world.
 
-![Realtime introspective environment architecture]({{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+<img src="{{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Execution Kernel Architecture
 
 The kernel architecture below shows how that environment is operationalized: one environment contains the execution kernel, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.
 
-![Execution kernel architecture]({{ '/KernelArchitecture.png' | relative_url }})
+<img src="{{ '/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## The Three Truths
 

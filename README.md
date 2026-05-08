@@ -94,25 +94,25 @@ These four diagrams summarize the current realtime-environment model, execution 
 
 This diagram shows the defining architectural choice of `sbcl-agent`: the agent is not standing outside a target system and manipulating it through indirect interfaces. It shares the same live SBCL environment it observes, governs, remembers, and updates.
 
-![Realtime introspective environment architecture](docs/assets/RealtimeIntrospectiveEnvironmentArchitecture.png)
+<img src="docs/assets/RealtimeIntrospectiveEnvironmentArchitecture.png" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Execution Kernel Architecture
 
-![Execution kernel architecture](docs/assets/KernelArchitecture.png)
+<img src="docs/assets/KernelArchitecture.png" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Conversational Context Architecture
 
-![Conversational context architecture](docs/assets/ConversationalContextArchitecture.png)
+<img src="docs/assets/ConversationalContextArchitecture.png" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ### Governance Architecture
 
-![Governance architecture](docs/assets/GovernanceArchitecture.png)
+<img src="docs/assets/GovernanceArchitecture.png" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Current Surface Desktop
 
 The current `Surface` desktop host over `sbcl-agent` is shown below. It is the clearest concrete picture of how the environment, browser, conversations, execution surfaces, evidence, and inspector can coexist in one operator workspace.
 
-![Surface desktop snapshot](docs/Desktop.jpg)
+<img src="docs/Desktop.jpg" alt="Surface desktop snapshot" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## What It Does Today
 

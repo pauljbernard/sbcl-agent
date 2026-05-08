@@ -205,6 +205,13 @@ pre code { background: transparent; padding: 0; color: inherit; }
   border-collapse: collapse;
   margin: 1.25rem 0;
 }
+.hero img,
+.doc-content img {
+  display: block;
+  max-width: 100%;
+  height: auto;
+  margin: 1rem auto;
+}
 .doc-content th,
 .doc-content td {
   text-align: left;

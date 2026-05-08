@@ -72,6 +72,44 @@
           :divergence (getf context :divergence)
           :note (getf context :note))))
 
+(defun summarized-transcript-memory-entry (entry)
+  (list :entry-index (getf entry :entry-index)
+        :role (getf entry :role)
+        :content (retrieval-string-preview (getf entry :content) 240)
+        :match-score (getf entry :match-score)
+        :distance-from-latest (getf entry :distance-from-latest)))
+
+(defun summarized-operator-memory-entry (entry)
+  (list :memory-id (getf entry :memory-id)
+        :category (getf entry :category)
+        :attribute (getf entry :attribute)
+        :value (retrieval-string-preview (getf entry :value) 180)
+        :summary (retrieval-string-preview (getf entry :summary) 240)
+        :confidence (getf entry :confidence)
+        :score (getf entry :score)
+        :updated-at (getf entry :updated-at)
+        :recorded-at (getf entry :recorded-at)))
+
+(defun summarized-conversation-context (context)
+  (when context
+    (list :thread (getf context :thread)
+          :turn (getf context :turn)
+          :recent-transcript (getf context :recent-transcript)
+          :transcript-memory (let ((memory (getf context :transcript-memory)))
+                               (and memory
+                                    (list :query (getf memory :query)
+                                          :transcript-count (getf memory :transcript-count)
+                                          :entry-count (length (or (getf memory :entries) '()))
+                                          :entries (mapcar #'summarized-transcript-memory-entry
+                                                           (or (getf memory :entries) '())))))
+          :operator-memory (let ((memory (getf context :operator-memory)))
+                             (and memory
+                                  (list :query (getf memory :query)
+                                        :entry-count (length (or (getf memory :entries) '()))
+                                        :entries (mapcar #'summarized-operator-memory-entry
+                                                         (or (getf memory :entries) '())))))
+          :limit (getf context :limit))))
+
 (defun summarized-console-context (context)
   (when context
     (list :summary (getf context :summary)
@@ -333,7 +371,7 @@
      :observed-consequences observed
      :conversation-context (when (find :conversation domains :test #'eq)
                              (or (retrieval-dossier-conversation-context base)
-                                 (build-conversation-dossier-section session plan)))
+                                 (build-conversation-dossier-section session prompt plan)))
      :runtime-context (when (find :runtime domains :test #'eq)
                         (build-runtime-dossier-section session plan))
      :telemetry-context (when (find :telemetry domains :test #'eq)
@@ -404,7 +442,8 @@
                       :explanation (retrieval-plan-explanation plan))
           :ranking (retrieval-dossier-ranking dossier)
           :observed-consequences (retrieval-dossier-observed-consequences dossier)
-          :conversation-context (retrieval-dossier-conversation-context dossier)
+          :conversation-context (summarized-conversation-context
+                                 (retrieval-dossier-conversation-context dossier))
           :runtime-context (retrieval-dossier-runtime-context dossier)
           :telemetry-context (retrieval-dossier-telemetry-context dossier)
           :workflow-context (retrieval-dossier-workflow-context dossier)

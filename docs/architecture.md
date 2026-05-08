@@ -58,6 +58,18 @@ For the federated employee/contractor operating model, this environment also has
 
 The current implementation is environment-oriented now. Remaining transitional structure exists mainly at compatibility and persistence boundaries, not at the level of the primary architectural center of gravity.
 
+## Architecture Diagrams
+
+The following diagrams capture the current architectural loop more directly than prose alone.
+
+### Conversational Context Architecture
+
+![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+
+### Governance Architecture
+
+![Governance architecture]({{ '/assets/GovernanceArchitecture.png' | relative_url }})
+
 ## Preserve Capabilities, Discard Metaphors
 
 One of the most important design constraints introduced by the new roadmap is that the project must not drift into legacy Common Lisp IDE parity as its architectural goal.

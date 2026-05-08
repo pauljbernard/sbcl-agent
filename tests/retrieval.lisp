@@ -254,6 +254,90 @@
     (assert-true (listp (getf payload :environment-context))
                  "retrieval dossier service should return environment context")))
 
+(defun retrieval-dossier-transcript-memory-test ()
+  (let* ((session (make-test-session :cwd "/tmp/retrieval-dossier-transcript-memory/")))
+    (sbcl-agent::append-transcript-entry session :user "We investigated calculator latency in the Surface app.")
+    (sbcl-agent::append-transcript-entry session :assistant "The calculator delay came from provider round-trip latency.")
+    (sbcl-agent::append-transcript-entry session :user "Unrelated note about browser packages.")
+    (let* ((dossier (sbcl-agent::build-retrieval-dossier
+                     session
+                     "Why was the calculator in Surface slow?"
+                     :operator-mode :conversation))
+           (conversation-context (sbcl-agent::retrieval-dossier-conversation-context dossier))
+           (memory (getf conversation-context :transcript-memory))
+           (entries (getf memory :entries)))
+      (assert-true (listp conversation-context)
+                   "conversation dossier should be assembled for transcript memory retrieval")
+      (assert-true (listp (getf conversation-context :recent-transcript))
+                   "conversation dossier should continue to include recent transcript context")
+      (assert-true (listp entries)
+                   "conversation dossier should include transcript memory matches")
+      (assert-equal "Why was the calculator in Surface slow?"
+                    (getf memory :query)
+                    "transcript memory should record the query used for matching")
+      (assert-true (search "calculator"
+                           (string-downcase (getf (first entries) :content)))
+                   "transcript memory should prioritize related calculator history")
+      (assert-true (> (or (getf (first entries) :match-score) 0) 0)
+                   "transcript memory matches should record a positive match score"))))
+
+(defun retrieval-dossier-operator-memory-test ()
+  (let* ((session (make-test-session :cwd "/tmp/retrieval-dossier-operator-memory/"))
+         (thread (sbcl-agent::current-thread session))
+         (user-message (sbcl-agent::create-message session thread :user "Remember my preferences."))
+         (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :test))))
+    (sbcl-agent::remember-operator-memory-candidates
+     session
+     thread
+     turn
+     '((:category :preference
+        :attribute "preferred language"
+        :value "Common Lisp"
+        :summary "The operator explicitly prefers Common Lisp."
+        :confidence 0.9)
+       (:category :working-style
+        :attribute "iteration style"
+        :value "progress updates after each iteration"
+        :summary "The operator wants progress updates after each iteration."
+        :confidence 0.85)))
+    (let* ((dossier (sbcl-agent::build-retrieval-dossier
+                     session
+                     "Remember my Common Lisp preferences and progress update style."
+                     :operator-mode :conversation))
+           (conversation-context (sbcl-agent::retrieval-dossier-conversation-context dossier))
+           (memory (getf conversation-context :operator-memory))
+           (entries (getf memory :entries)))
+      (assert-true (listp entries)
+                   "conversation dossier should include operator memory entries")
+      (assert-true (find "operator-memory-preference-preferred-language"
+                         entries
+                         :key (lambda (entry) (getf entry :memory-id))
+                         :test #'string=
+                         )
+                   "operator memory retrieval should include the stored preference entry"))))
+
+(defun infer-operator-memory-test ()
+  (let* ((session (make-test-session :cwd "/tmp/infer-operator-memory/"))
+         (thread (sbcl-agent::current-thread session))
+         (user-message (sbcl-agent::create-message session thread :user "Remember my preferences."))
+         (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :test)))
+         (provider (make-instance 'operator-memory-provider)))
+    (sbcl-agent::infer-operator-memory session
+                                       thread
+                                       turn
+                                       "I prefer Common Lisp and I want progress updates after each iteration."
+                                       "Understood."
+                                       :provider provider)
+    (let ((entries (sbcl-agent::list-operator-memory-entries session)))
+      (assert-equal 2
+                    (length entries)
+                    "operator memory inference should persist the extracted entries")
+      (assert-true (find "operator-memory-preference-preferred-language"
+                         entries
+                         :key (lambda (entry) (getf entry :memory-id))
+                         :test #'string=)
+                   "operator memory inference should record the preferred-language memory"))))
+
 (defun retrieval-dossier-testing-context-test ()
   (let* ((session (make-test-session :cwd "/tmp/retrieval-testing-context/"))
          (work-item (sbcl-agent::create-work-item session "Testing-linked work item" :transaction-scope :test))

@@ -11,6 +11,8 @@
   thread-context
   turn-context
   environment-context
+  surface-context
+  surface-actions
   runtime-summary
   workspace-summary
   policy-summary
@@ -178,6 +180,18 @@
     (t
      value)))
 
+(defun normalize-tool-id-value (value)
+  (cond
+    ((keywordp value) value)
+    ((stringp value)
+     (let ((normalized (string-trim '(#\Space #\Tab #\Newline #\Return) value)))
+       (when (> (length normalized) 0)
+         (intern (string-upcase (if (char= (char normalized 0) #\:)
+                                    (subseq normalized 1)
+                                    normalized))
+                 :keyword))))
+    (t value)))
+
 (defun json-object-p (value)
   (and (listp value)
        (every (lambda (entry)
@@ -217,12 +231,40 @@
                      (normalize-json-derived-value value))))
 
 (defun decode-assistant-action (object)
-  (let ((payload (json-object-value object "payload")))
-    (make-assistant-action
-     :type (normalize-action-type (json-object-value object "type"))
-     :payload (if (json-object-p payload)
-                  (json-object->keyword-plist payload)
-                  (normalize-json-derived-value payload)))))
+  (let ((payload (or (json-object-value object "payload")
+                     (remove nil
+                             (append (let ((tool-id (or (json-object-value object "tool-id")
+                                                        (json-object-value object "tool_id")
+                                                        (json-object-value object "toolId"))))
+                                       (when tool-id
+                                         (list (cons "toolId" tool-id))))
+                                     (let ((arguments (json-object-value object "arguments")))
+                                       (when arguments
+                                         (list (cons "arguments" arguments))))
+                                     (let ((mode (json-object-value object "mode")))
+                                       (when mode
+                                         (list (cons "mode" mode))))
+                                     (let ((expression (json-object-value object "expression")))
+                                       (when expression
+                                         (list (cons "expression" expression)))))))))
+    (let ((normalized-payload (if (json-object-p payload)
+                                  (json-object->keyword-plist payload)
+                                  (normalize-json-derived-value payload))))
+      (when (listp normalized-payload)
+        (let ((tool-id (or (getf normalized-payload :TOOL-ID)
+                           (getf normalized-payload :TOOL_ID)
+                           (getf normalized-payload :tool-id)
+                           (getf normalized-payload :tool_id))))
+          (when tool-id
+            (let ((normalized-tool-id (normalize-tool-id-value tool-id)))
+              (when normalized-tool-id
+                (setf (getf normalized-payload :TOOL-ID) normalized-tool-id
+                      (getf normalized-payload :tool-id) normalized-tool-id
+                      (getf normalized-payload :TOOL_ID) normalized-tool-id
+                      (getf normalized-payload :tool_id) normalized-tool-id))))))
+      (make-assistant-action
+       :type (normalize-action-type (json-object-value object "type"))
+       :payload normalized-payload))))
 
 (defun valid-assistant-action-p (action)
   (case (assistant-action-type action)

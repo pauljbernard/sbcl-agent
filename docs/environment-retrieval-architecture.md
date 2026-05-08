@@ -50,6 +50,12 @@ Today the model can receive:
 - prior outcomes, playbook reuse, and self-improvement guidance
 - post-mutation retrieval in the same environment
 
+## Conversational Context Diagram
+
+The retrieval dossier now sits inside a larger conversation-context assembly loop rather than acting as a standalone prompt-enrichment trick.
+
+![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+
 The remaining gap is not “retrieval does not exist.” The remaining gap is hardening recall, ranking quality, mid-turn expansion policy, and eval-grade proof that the retrieval-and-cognition loop is consistently superior.
 
 ## Architectural Rule

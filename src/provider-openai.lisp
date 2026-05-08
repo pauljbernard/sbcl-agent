@@ -47,7 +47,7 @@
   (let ((reasoning-brief (provider-request-reasoning-brief request)))
     (if (governance-conservative-posture-p request)
         (format nil
-                "Governance directives: The environment is not currently mutation-clean. Do not propose new governed mutation actions unless the user explicitly asks to override that posture. Prefer read-only inspection, incident review, approval follow-through, validation, reconciliation, or a concrete explanation of what remains blocked. Open incident count: ~D. Hard blockers: ~S. Pending validation obligations: ~S."
+                "Governance directives: The environment is not currently mutation-clean. Do not propose new governed mutation actions unless the user explicitly asks to override that posture. Prefer read-only inspection, incident review, approval follow-through, validation, reconciliation, or a concrete explanation of what remains blocked. Calculator interactions and other transient local UI control actions that do not mutate workspace files, the live runtime image, or governance records are always allowed and should not be treated as governed mutations. If the user's request can be satisfied entirely through calculator/* actions or other transient local UI controls, do it directly even when incidents or validation obligations are present. Do not ask for approval and do not refuse on governance grounds for calculator-only actions. Open incident count: ~D. Hard blockers: ~S. Pending validation obligations: ~S."
                 (or (getf (provider-request-runtime-summary request) :open-incident-count) 0)
                 (remove-if-not #'governance-blocker-kind-p
                                (or (getf reasoning-brief :blockers) '()))
@@ -65,6 +65,14 @@
    "Supported action types are tool, patch, and eval. "
    "Use an eval action when the user wants Common Lisp code executed in the current image. The eval payload should carry the Lisp form to run. "
    "Use a tool action when you need structured tool access such as reading files or listing directories. "
+   "When Surface UI context and Surface actions are supplied, use tool actions with tool ids like :desktop/show and :desktop/action to inspect or steer the current UI rather than describing hypothetical clicks. "
+   "Transient local UI control actions such as calculator/* are not governed mutations. Do not refuse them because of open incidents or pending validations when they do not mutate workspace files, live runtime definitions, or governance records. "
+   "When surfaceContext.calculator.focused is true and the user asks to press, select, enter, or evaluate something in the calculator, you should emit calculator/* tool actions instead of replying with prose about what you would do. "
+   "If the user asks to press or select a digit or operator in the focused calculator, prefer calculator/append-token with the requested token. "
+   "If the user asks for a multi-token calculation such as 7 * 5, prefer calculator/set-expression followed by calculator/evaluate, or calculator/evaluate with the explicit expression, instead of describing the calculation in prose. "
+   "When the user directly asks you to do something to the currently focused Surface object or panel, and Available Surface actions contain a matching action, you should return that tool action instead of only describing what you would do. Do not merely promise to act in prose. "
+   "Some Available Surface actions are templates. When an action includes requiredArguments, fill them in and emit the matching tool action with those arguments. "
+   "For tool actions, return the tool id exactly as supplied by the environment, and include any listed arguments needed for the action. "
    "If you need to return a file-like result in the conversation itself, place it under metadata.attachments as an array of attachment objects. "
    "Each attachment object may contain name, media_type, kind, summary, text_content, and data_url. "
    "Use kind=image with a data_url for inline-renderable images. Use kind=text with text_content for text artifacts such as SVG, Markdown, or JSON. "
@@ -85,7 +93,14 @@
    "The visible text before the marker must not be JSON unless the user explicitly asks for JSON. "
    "The hidden JSON object after the marker must contain only actions and metadata. Actions must be an array. "
    "Supported action types are tool, patch, and eval. "
+   "Transient local UI control actions such as calculator/* are not governed mutations. Do not refuse them because of open incidents or pending validations when they do not mutate workspace files, live runtime definitions, or governance records. "
+   "When surfaceContext.calculator.focused is true and the user asks to press, select, enter, or evaluate something in the calculator, emit calculator/* tool actions instead of replying with prose about what you would do. "
+   "If the user asks to press or select a digit or operator in the focused calculator, prefer calculator/append-token with the requested token. "
+   "If the user asks for a multi-token calculation such as 7 * 5, prefer calculator/set-expression followed by calculator/evaluate, or calculator/evaluate with the explicit expression. "
    "Use an eval action when the user wants Common Lisp code executed in the current image. "
+   "When the user directly asks you to do something to the currently focused Surface object or panel, and Available Surface actions contain a matching action, you should emit that tool action in the hidden JSON instead of only describing what you would do. Do not merely promise to act in visible text. "
+   "Some Available Surface actions are templates. When an action includes requiredArguments, fill them in and emit the matching tool action with those arguments. "
+   "For tool actions, return the tool id exactly as supplied by the environment, and include any listed arguments needed for the action. "
    "If you need to return a file-like result in the conversation itself, place it under metadata.attachments in the post-marker JSON object. "
    "Each attachment object may contain name, media_type, kind, summary, text_content, and data_url. "
    "Use kind=image with a data_url for inline-renderable images. Use kind=text with text_content for text artifacts such as SVG, Markdown, or JSON. "
@@ -94,13 +109,15 @@
 
 (defun build-openai-user-prompt-text (request)
   (format nil
-          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
+          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Surface context: ~S~%~%Available Surface actions: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
           (provider-request-prompt request)
           (provider-request-operator-mode request)
           (provider-request-stream-p request)
           (provider-request-thread-context request)
           (provider-request-turn-context request)
           (provider-request-environment-context request)
+          (provider-request-surface-context request)
+          (provider-request-surface-actions request)
           (provider-request-runtime-summary request)
           (provider-request-workspace-summary request)
           (provider-request-policy-summary request)

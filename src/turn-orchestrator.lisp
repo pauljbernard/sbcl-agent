@@ -196,18 +196,36 @@
                                     turn
                                     prompt
                                     bundle
-                                    assistant-message))))
+                                    assistant-message))
+    (infer-operator-memory session
+                           thread
+                           turn
+                           prompt
+                           assistant-message)))
 
 (defun build-turn-provider-request (session prompt thread turn operator-mode stream-p
-                                    &key retrieval-dossier attachments)
-  (make-provider-request-from-session prompt
-                                     session
-                                     :thread thread
-                                     :turn turn
-                                     :attachments attachments
-                                     :retrieval-dossier retrieval-dossier
-                                     :operator-mode operator-mode
-                                     :stream-p stream-p))
+                                    &key retrieval-dossier attachments
+                                      surface-context surface-actions)
+  (let* ((user-message (and turn
+                            (find-message session (turn-user-message-id turn))))
+         (resolved-surface-context (or surface-context
+                                       (and turn (getf (turn-metadata turn) :surface-context))
+                                       (and user-message
+                                            (getf (message-metadata user-message) :surface-context))))
+         (resolved-surface-actions (or surface-actions
+                                       (and turn (getf (turn-metadata turn) :surface-actions))
+                                       (and user-message
+                                            (getf (message-metadata user-message) :surface-actions)))))
+    (make-provider-request-from-session prompt
+                                        session
+                                        :thread thread
+                                        :turn turn
+                                        :attachments attachments
+                                        :retrieval-dossier retrieval-dossier
+                                        :surface-context resolved-surface-context
+                                        :surface-actions resolved-surface-actions
+                                        :operator-mode operator-mode
+                                        :stream-p stream-p)))
 
 (defun record-turn-retrieval-dossier (session thread turn request source
                                       &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
@@ -370,14 +388,21 @@
 
 (defun run-conversation-turn-streaming (provider session thread prompt
                                          &key (source :say) (operator-mode :conversation)
-                                           attachments)
+                                           attachments surface-context surface-actions)
   (let* ((user-message (create-message session thread :user prompt
-                                       :metadata (list :source source)
+                                       :metadata (list :source source
+                                                       :surface-context surface-context
+                                                       :surface-actions surface-actions)
                                        :attachments attachments))
          (turn (start-turn session thread user-message
-                           :metadata (list :source source :streamed-p t)))
+                           :metadata (list :source source
+                                           :streamed-p t
+                                           :surface-context surface-context
+                                           :surface-actions surface-actions)))
          (request (build-turn-provider-request session prompt thread turn operator-mode t
-                                              :attachments attachments))
+                                              :attachments attachments
+                                              :surface-context surface-context
+                                              :surface-actions surface-actions))
          (operation (start-operation session
                                      thread
                                      turn
@@ -428,7 +453,10 @@
                                                    :reasoning-brief
                                                    (provider-request-reasoning-brief request)
                                                    :retrieval-dossier
-                                                   (provider-request-retrieval-dossier request)))
+                                                   (provider-request-retrieval-dossier request)
+                                                   :prompt prompt
+                                                   :surface-context
+                                                   (provider-request-surface-context request)))
            (work-item (ensure-turn-mutation-work-item session
                                                      thread
                                                      turn
@@ -504,14 +532,21 @@
 
 (defun run-conversation-turn-sync (provider session thread prompt
                                     &key (source :say) (operator-mode :conversation)
-                                      attachments)
+                                      attachments surface-context surface-actions)
   (let* ((user-message (create-message session thread :user prompt
-                                       :metadata (list :source source)
+                                       :metadata (list :source source
+                                                       :surface-context surface-context
+                                                       :surface-actions surface-actions)
                                        :attachments attachments))
          (turn (start-turn session thread user-message
-                           :metadata (list :source source :streamed-p nil)))
+                           :metadata (list :source source
+                                           :streamed-p nil
+                                           :surface-context surface-context
+                                           :surface-actions surface-actions)))
          (request (build-turn-provider-request session prompt thread turn operator-mode nil
-                                              :attachments attachments))
+                                              :attachments attachments
+                                              :surface-context surface-context
+                                              :surface-actions surface-actions))
          (operation (start-operation session
                                      thread
                                      turn
@@ -541,7 +576,9 @@
                                                  :reasoning-brief
                                                  (provider-request-reasoning-brief request)
                                                  :retrieval-dossier
-                                                 (provider-request-retrieval-dossier request)))
+                                                 (provider-request-retrieval-dossier request)
+                                                 :prompt prompt
+                                                 :surface-context surface-context))
          (work-item (ensure-turn-mutation-work-item session
                                                    thread
                                                    turn
@@ -614,7 +651,7 @@
 
 (defun run-conversation-turn (provider session prompt
                               &key stream-p (source :say) (operator-mode :conversation)
-                                attachments)
+                                attachments surface-context surface-actions)
   (let ((thread (current-thread session)))
     (append-transcript-entry session :user prompt)
     (emit-conversation-progress (conversation-progress-phase source :started)
@@ -625,11 +662,15 @@
         (run-conversation-turn-streaming provider session thread prompt
                                          :source source
                                          :operator-mode operator-mode
-                                         :attachments attachments)
+                                         :attachments attachments
+                                         :surface-context surface-context
+                                         :surface-actions surface-actions)
         (run-conversation-turn-sync provider session thread prompt
                                     :source source
                                     :operator-mode operator-mode
-                                    :attachments attachments))))
+                                    :attachments attachments
+                                    :surface-context surface-context
+                                    :surface-actions surface-actions))))
 
 (defun run-say-turn-streaming (provider session thread prompt)
   (run-conversation-turn-streaming provider session thread prompt
@@ -736,7 +777,10 @@
                                                    :reasoning-brief
                                                    (provider-request-reasoning-brief request)
                                                    :retrieval-dossier
-                                                   (provider-request-retrieval-dossier request)))
+                                                   (provider-request-retrieval-dossier request)
+                                                   :prompt prompt
+                                                   :surface-context
+                                                   (provider-request-surface-context request)))
            (work-item (ensure-turn-mutation-work-item session
                                                      thread
                                                      turn

@@ -26,15 +26,303 @@
             (second plist)
             (remove-plist-key (cddr plist) key)))))
 
+(defun immediate-assistant-action-p (action)
+  (case (assistant-action-type action)
+    (:eval
+     (not (mutating-eval-action-p action)))
+    (:tool
+     (let ((policy-id (assistant-action-policy-id action)))
+       (and policy-id
+            (not (assistant-action-requires-approval-p action))
+            (not (governed-assistant-action-p action)))))
+    (t nil)))
+
 (defun split-assistant-actions (actions)
   (let ((immediate '())
         (staged '()))
     (dolist (action actions)
-      (if (and (eq (assistant-action-type action) :eval)
-               (not (mutating-eval-action-p action)))
+      (if (immediate-assistant-action-p action)
           (push action immediate)
           (push action staged)))
     (values (nreverse immediate) (nreverse staged))))
+
+(defun calculator-focused-surface-context-p (surface-context)
+  (let ((calculator (and (listp surface-context)
+                         (getf surface-context :calculator))))
+    (and (listp calculator)
+         (getf calculator :focused))))
+
+(defun prompt-contains-any-p (prompt needles)
+  (some (lambda (needle)
+          (search needle prompt :test #'char-equal))
+        needles))
+
+(defun digit-char-string-p (value)
+  (and (stringp value)
+       (= (length value) 1)
+       (digit-char-p (char value 0))))
+
+(defun extract-calculator-single-token (prompt)
+  (let ((text (string-downcase (or prompt ""))))
+    (when (and (search "calculator" text :test #'char=)
+               (prompt-contains-any-p text '("press" "select" "enter" "type" "key" "button")))
+      (or (loop for char across text
+                when (digit-char-p char)
+                  return (string char))
+          (when (search "plus" text :test #'char=) "+")
+          (when (search "minus" text :test #'char=) "-")
+          (when (or (search "times" text :test #'char=)
+                    (search "multiply" text :test #'char=))
+            "*")
+          (when (or (search "divide" text :test #'char=)
+                    (search "over" text :test #'char=))
+            "/")))))
+
+(defun replace-all-substrings (text old new)
+  (with-output-to-string (out)
+    (loop with old-length = (length old)
+          for start = 0 then (+ position old-length)
+          for position = (search old text :start2 start :test #'char-equal)
+          do (if position
+                 (progn
+                   (write-string text out :start start :end position)
+                   (write-string new out))
+                 (progn
+                   (write-string text out :start start)
+                   (loop-finish))))))
+
+(defun normalize-calculator-expression-text (prompt)
+  (let ((text (string-downcase (or prompt ""))))
+    (dolist (pair '(("multiplied by" . "*")
+                    ("times" . "*")
+                    ("plus" . "+")
+                    ("minus" . "-")
+                    ("divided by" . "/")
+                    ("divide by" . "/")
+                    ("over" . "/")
+                    ("open paren" . "(")
+                    ("close paren" . ")")))
+      (setf text (replace-all-substrings text (car pair) (cdr pair))))
+    text))
+
+(defun extract-calculator-expression (prompt)
+  (let* ((text (normalize-calculator-expression-text prompt))
+         (chars
+           (loop for char across text
+                 when (or (digit-char-p char)
+                          (member char '(#\+ #\- #\* #\/ #\( #\) #\.)))
+                   collect char into kept
+                 when (and kept
+                           (or (char= char #\Space)
+                               (char= char #\Tab)
+                               (char= char #\Newline)))
+                   collect #\Space into kept
+                 finally (return kept)))
+         (raw (string-trim " " (coerce chars 'string))))
+    (when (and (> (length raw) 0)
+               (some #'digit-char-p raw)
+               (or (prompt-contains-any-p text '("evaluate" "calculate" "compute"))
+                   (find-if (lambda (char)
+                              (member char '(#\+ #\- #\* #\/) :test #'char=))
+                            raw)))
+      (replace-all-substrings raw " " ""))))
+
+(defun calculator-expression-request-p (prompt)
+  (let ((text (string-downcase (or prompt ""))))
+    (and (search "calculator" text :test #'char=)
+         (or (prompt-contains-any-p text '("evaluate" "calculate" "compute"))
+             (find-if (lambda (char)
+                        (member char '(#\+ #\- #\* #\/ #\( #\)) :test #'char=))
+                      text)
+             (prompt-contains-any-p text '("times" "plus" "minus" "divide" "multiplied"))))))
+
+(defun synthesize-calculator-actions-from-prompt (prompt surface-context)
+  (when (calculator-focused-surface-context-p surface-context)
+    (let ((token (extract-calculator-single-token prompt))
+          (expression (extract-calculator-expression prompt)))
+      (cond
+        ((and (calculator-expression-request-p prompt)
+              expression
+              (> (length expression) 0))
+         (list (make-assistant-action
+                :type :tool
+                :payload (list :tool-id :calculator/set-expression
+                               :arguments (list :expression expression)))
+               (make-assistant-action
+                :type :tool
+                :payload (list :tool-id :calculator/evaluate
+                               :arguments (list :expression expression)))))
+        ((and token
+              (= (length token) 1))
+         (list (make-assistant-action
+                :type :tool
+                :payload (list :tool-id :calculator/append-token
+                               :arguments (list :token token)))))
+        (t nil)))))
+
+(defun effective-response-actions (response prompt surface-context session)
+  (let ((actions (assistant-response-actions response)))
+    (or actions
+        (let ((fallback (synthesize-calculator-actions-from-prompt prompt surface-context)))
+          (when fallback
+            (append-session-event session
+                                  :assistant-action-fallback-synthesized
+                                  (list :prompt prompt
+                                        :action-count (length fallback)
+                                        :actions fallback)
+                                  :family :assistant
+                                  :visibility :operator))
+          fallback)
+        '())))
+
+(defun direct-calculator-actions-for-prompt (prompt surface-context)
+  (let ((actions (synthesize-calculator-actions-from-prompt prompt surface-context)))
+    (and actions
+         (every (lambda (action)
+                  (and (eq (assistant-action-type action) :tool)
+                       (let* ((payload (assistant-action-payload action))
+                              (tool-id (or (getf payload :tool-id)
+                                           (getf payload :TOOL-ID))))
+                         (member tool-id
+                                 '(:calculator/append-token
+                                   :calculator/set-expression
+                                   :calculator/evaluate
+                                   :calculator/clear
+                                   :calculator/backspace
+                                   :calculator/set-mode
+                                   :calculator/set-base
+                                   :calculator/set-word-size
+                                   :calculator/set-angle-unit)
+                                 :test #'eq))))
+                actions)
+         actions)))
+
+(defun calculator-action-expression (action)
+  (let* ((payload (assistant-action-payload action))
+         (arguments (or (getf payload :arguments)
+                        (getf payload :ARGUMENTS))))
+    (or (and (listp arguments) (getf arguments :expression))
+        (and (listp arguments) (getf arguments :EXPRESSION)))))
+
+(defun calculator-action-token (action)
+  (let* ((payload (assistant-action-payload action))
+         (arguments (or (getf payload :arguments)
+                        (getf payload :ARGUMENTS))))
+    (or (and (listp arguments) (getf arguments :token))
+        (and (listp arguments) (getf arguments :TOKEN)))))
+
+(defun direct-calculator-assistant-message (actions results)
+  (let* ((first-action (first actions))
+         (last-result (and results (getf (first (last results)) :result)))
+         (latest-result-summary (and (listp last-result) (getf last-result :summary)))
+         (latest-display-value (and (listp last-result) (getf last-result :display-value)))
+         (token (and first-action (calculator-action-token first-action)))
+         (expression (or (and first-action (calculator-action-expression first-action))
+                         (and (> (length actions) 1)
+                              (calculator-action-expression (second actions))))))
+    (cond
+      ((and expression latest-display-value)
+       (format nil
+               "Set the calculator expression to ~S and evaluated it. Result: ~A."
+               expression
+               latest-display-value))
+      (latest-result-summary
+       (format nil
+               "Set the calculator expression to ~S and evaluated it. ~A"
+               expression
+               latest-result-summary))
+      (token
+       (format nil
+               "Appended the token ~S in the focused calculator expression buffer."
+               token))
+      (expression
+       (format nil
+               "Set the focused calculator expression to ~S."
+               expression))
+      (t
+       "Updated the focused calculator."))))
+
+(defun run-direct-conversation-calculator-actions (session prompt actions
+                                                    &key (source :say) (operator-mode :conversation)
+                                                      surface-context surface-actions)
+  (declare (ignore operator-mode))
+  (let* ((thread (current-thread session)))
+    (append-transcript-entry session :user prompt)
+    (emit-conversation-progress (conversation-progress-phase source :started)
+                                (list :prompt prompt
+                                      :stream-p nil
+                                      :thread-id (thread-id thread)
+                                      :auto-routed-p t
+                                      :direct-calculator-p t))
+    (let* ((user-message (create-message session thread :user prompt
+                                         :metadata (list :source source
+                                                         :auto-routed-p t
+                                                         :direct-calculator-p t
+                                                         :surface-context surface-context
+                                                         :surface-actions surface-actions)))
+           (turn (start-turn session thread user-message
+                             :metadata (list :source source
+                                             :streamed-p nil
+                                             :auto-routed-p t
+                                             :direct-calculator-p t
+                                             :surface-context surface-context
+                                             :surface-actions surface-actions)))
+           (immediate-results (execute-assistant-action-list actions session :thread thread :turn turn))
+           (action-report (list :immediate-actions actions
+                                :immediate-results immediate-results
+                                :staged-actions '()
+                                :deferred-actions '()
+                                :action-assessments '()))
+           (action-operations (record-assistant-action-operations session thread turn action-report))
+           (assistant-content (direct-calculator-assistant-message actions immediate-results))
+           (assistant-message (create-message session thread :assistant assistant-content
+                                              :content-type :text
+                                              :metadata (list :source source
+                                                              :streamed-p nil
+                                                              :auto-routed-p t
+                                                              :direct-calculator-p t)))
+           (completed-turn (complete-turn session
+                                          thread
+                                          turn
+                                          assistant-message
+                                          :status (turn-status-from-action-operations action-operations)
+                                          :metadata (list :stream-event-count 0
+                                                          :action-operation-ids (mapcar #'operation-id action-operations)
+                                                          :auto-routed-p t
+                                                          :direct-calculator-p t))))
+      (append-transcript-entry session :assistant assistant-content)
+      (append-session-event session
+                            :conversation-calculator-control
+                            (list :prompt prompt
+                                  :action-count (length actions)
+                                  :actions actions
+                                  :result-count (length immediate-results))
+                            :family :calculator
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id completed-turn)
+                            :visibility :operator
+                            :metadata (list :source source
+                                            :auto-routed-p t
+                                            :direct-calculator-p t))
+      (emit-conversation-progress (conversation-progress-phase source :response)
+                                  (list :message assistant-content
+                                        :staged-action-count 0
+                                        :deferred-action-count 0
+                                        :immediate-action-count (length actions)
+                                        :stream-event-count 0
+                                        :thread-id (thread-id thread)
+                                        :turn-id (turn-id completed-turn)
+                                        :auto-routed-p t
+                                        :direct-calculator-p t))
+      (make-say-turn-result thread
+                            user-message
+                            assistant-message
+                            completed-turn
+                            nil
+                            action-report
+                            :streamed-p nil
+                            :stream-event-count 0
+                            :action-results immediate-results))))
 
 (defun governed-mutation-blocked-p (session reasoning-brief)
   (or (find-if (lambda (entry)
@@ -182,9 +470,9 @@
             (push action allowed))))
     (values (nreverse allowed) (nreverse deferred) (nreverse assessments))))
 
-(defun process-response-actions (response session &key reasoning-brief retrieval-dossier cognition-bundle)
+(defun process-response-actions (response session &key reasoning-brief retrieval-dossier cognition-bundle prompt surface-context)
   (multiple-value-bind (immediate staged)
-      (split-assistant-actions (assistant-response-actions response))
+      (split-assistant-actions (effective-response-actions response prompt surface-context session))
     (multiple-value-bind (staged-actions deferred-actions assessments)
         (partition-weakly-grounded-governed-actions staged retrieval-dossier)
       (let ((project-governance-intent-p (project-governance-intent-p retrieval-dossier)))
@@ -674,13 +962,28 @@
                                    *default-ask-streaming*
                                    (not (null *task-progress-callback*))))
                      (attachments (plist-value options :attachments nil))
-                     (result (run-conversation-turn provider
-                                                   session
-                                                   prompt
-                                                   :stream-p stream-p
-                                                   :attachments attachments
-                                                   :source source
-                                                   :operator-mode operator-mode)))
+                     (surface-context (plist-value options :surface-context nil))
+                     (surface-actions (plist-value options :surface-actions nil))
+                     (direct-calculator-actions
+                       (direct-calculator-actions-for-prompt prompt surface-context))
+                     (result
+                       (if direct-calculator-actions
+                           (run-direct-conversation-calculator-actions session
+                                                                      prompt
+                                                                      direct-calculator-actions
+                                                                      :source source
+                                                                      :operator-mode operator-mode
+                                                                      :surface-context surface-context
+                                                                      :surface-actions surface-actions)
+                           (run-conversation-turn provider
+                                                  session
+                                                  prompt
+                                                  :stream-p stream-p
+                                                  :attachments attachments
+                                                  :surface-context surface-context
+                                                  :surface-actions surface-actions
+                                                  :source source
+                                                  :operator-mode operator-mode))))
                 (kernelize-service-command-response
                  (make-service-command-response :execution
                                                 source
@@ -696,7 +999,11 @@
                                (:ask :conversation/ask)
                                (:say :conversation/say))
                  :authority operator-mode
-                 :context (list :stream-p stream-p :operator-mode operator-mode))))))))
+                 :context (append (list :stream-p stream-p
+                                        :operator-mode operator-mode)
+                                  (when direct-calculator-actions
+                                    (list :direct-calculator-p t
+                                          :action-count (length direct-calculator-actions)))))))))))
 
 (defun command-execute-assistant-action-service (session action &key thread turn operation)
   (kernelize-service-command-response

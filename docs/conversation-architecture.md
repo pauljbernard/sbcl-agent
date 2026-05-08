@@ -21,6 +21,12 @@ It is intentionally not a plan to replace the existing shell. The shell, direct 
 
 The newer roadmap narrows the role of this document: conversation is now one native medium within the Environment rather than the singular destination of the architecture.
 
+## Conversational Context Architecture
+
+This diagram shows the current turn-assembly loop: Surface context, environment state, transcript history, and deliberate operator memory are assembled before provider execution and then fed back into thread, transcript, and memory state after the turn completes.
+
+![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+
 ## Ownership Rule
 
 The architectural rule is:

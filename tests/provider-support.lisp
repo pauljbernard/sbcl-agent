@@ -136,12 +136,27 @@
 
 (defmethod sbcl-agent::send-request ((provider git-write-action-provider) request)
   (declare (ignore provider request))
-  (sbcl-agent::make-assistant-response
+   (sbcl-agent::make-assistant-response
    :message "Prepared a git write action that requires approval."
    :actions (list (sbcl-agent::make-assistant-action
                    :type :tool
                    :payload '(:tool-id :git/add :arguments (:paths ("README.md")))))
    :metadata '(:provider :git-write-action-test)))
+
+(defclass operator-memory-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider operator-memory-provider))
+  "operator-memory-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider operator-memory-provider))
+  '(:chat :structured-response))
+
+(defmethod sbcl-agent::send-request ((provider operator-memory-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "{\"memories\":[{\"category\":\"preference\",\"attribute\":\"preferred-language\",\"value\":\"Common Lisp\",\"summary\":\"The operator explicitly prefers Common Lisp.\",\"confidence\":0.91},{\"category\":\"working-style\",\"attribute\":\"iteration-style\",\"value\":\"progress updates after each iteration\",\"summary\":\"The operator wants iterative progress reporting.\",\"confidence\":0.88}]}"
+   :actions '()
+   :metadata '(:provider :operator-memory-test)))
 
 (defclass project-create-action-provider (sbcl-agent::provider) ())
 

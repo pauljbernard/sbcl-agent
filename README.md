@@ -86,6 +86,18 @@ Then use these as secondary or forward-looking material:
 
 If you are new to Common Lisp, start with [Common Lisp as a Runtime](docs/common-lisp-runtime.md) and then [Common Lisp Reference](docs/common-lisp-guide.md).
 
+## Architecture At A Glance
+
+These two diagrams summarize the current conversational-context and governance loops that the architecture and runtime documentation describe in detail.
+
+### Conversational Context Architecture
+
+![Conversational context architecture](docs/assets/ConversationalContextArchitecture.png)
+
+### Governance Architecture
+
+![Governance architecture](docs/assets/GovernanceArchitecture.png)
+
 ## What It Does Today
 
 The current runtime already provides:

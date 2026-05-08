@@ -879,11 +879,16 @@
                  "openai provider capabilities should include streaming")
     (assert-true (search "Return only valid JSON" (sbcl-agent::build-openai-system-prompt))
                  "system prompt should mention JSON response shape")
+    (assert-true (search "Do not merely promise to act in prose"
+                         (sbcl-agent::build-openai-system-prompt))
+                 "system prompt should require structured actions for direct Surface requests")
     (let ((stream-prompt (sbcl-agent::build-openai-stream-system-prompt)))
       (assert-true (search sbcl-agent::+stream-actions-marker+ stream-prompt)
                    "stream prompt should include start marker")
       (assert-true (search sbcl-agent::+stream-actions-end-marker+ stream-prompt)
-                   "stream prompt should include end marker"))
+                   "stream prompt should include end marker")
+      (assert-true (search "Do not merely promise to act in visible text" stream-prompt)
+                   "stream prompt should require hidden structured actions for direct Surface requests"))
     (assert-true (search "User prompt: Need a quick answer"
                          (sbcl-agent::build-openai-user-prompt request))
                  "user prompt should embed provider prompt")
@@ -930,6 +935,19 @@
                  "openai-stream-data-line-p should detect stream data lines")
     (assert-true (not (sbcl-agent::openai-stream-data-line-p "event: ping"))
                  "openai-stream-data-line-p should reject non-data lines")
+    (let* ((action (sbcl-agent::decode-assistant-action
+                    '(("type" . "tool")
+                      ("payload" . (("toolId" . "calculator/append-token")
+                                    ("arguments" . (("token" . "7"))))))))
+           (payload (sbcl-agent::assistant-action-payload action)))
+      (assert-equal :tool
+                    (sbcl-agent::assistant-action-type action)
+                    "decode-assistant-action should preserve decoded tool action type")
+      (assert-equal :CALCULATOR/APPEND-TOKEN
+                    (getf payload :tool-id)
+                    "decode-assistant-action should normalize plain string slash tool ids")
+      (assert-true (sbcl-agent::valid-assistant-action-p action)
+                   "valid-assistant-action-p should accept normalized plain string slash tool ids"))
     (assert-equal "part"
                   (getf (sbcl-agent::assistant-response-metadata
                          (sbcl-agent::decode-openai-content-response
@@ -986,7 +1004,28 @@
                   "finalize-stream-response should preserve metadata")
     (assert-equal 1
                   (length (sbcl-agent::assistant-response-actions response))
-                  "finalize-stream-response should decode actions")))
+                  "finalize-stream-response should decode actions"))
+  (let* ((response (sbcl-agent::finalize-stream-response
+                    "visible text
+"
+                    "{\"actions\":[{\"type\":\"tool\",\"tool-id\":\"calculator/append-token\",\"arguments\":{\"token\":\"7\"}}],\"metadata\":{}}<<<END-SBCL-ACTIONS>>>"
+                    "gpt-test"))
+         (action (first (sbcl-agent::assistant-response-actions response)))
+         (payload (and action (sbcl-agent::assistant-action-payload action))))
+    (assert-equal 1
+                  (length (sbcl-agent::assistant-response-actions response))
+                  "finalize-stream-response should decode top-level streamed tool actions")
+    (assert-equal :CALCULATOR/APPEND-TOKEN
+                  (and payload (getf payload :tool-id))
+                  "finalize-stream-response should preserve top-level streamed tool ids")
+    (assert-equal "7"
+                  (and (listp payload)
+                       (let ((arguments (or (getf payload :arguments)
+                                            (getf payload :ARGUMENTS))))
+                         (and (listp arguments)
+                              (or (getf arguments :token)
+                                  (getf arguments :TOKEN)))))
+                  "finalize-stream-response should preserve top-level streamed tool arguments")))
 
 (defun json-helper-coverage-test ()
   (assert-true (sbcl-agent::json-whitespace-char-p #\Space)
@@ -1825,10 +1864,10 @@ fi
         (tool-action (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read))))
     (multiple-value-bind (immediate staged)
         (sbcl-agent::split-assistant-actions (list tool-action eval-action))
-      (assert-equal 1 (length immediate)
-                    "split-assistant-actions should collect eval actions")
-      (assert-equal 1 (length staged)
-                    "split-assistant-actions should stage non-eval actions")))
+      (assert-equal 2 (length immediate)
+                    "split-assistant-actions should collect implicit-safe eval and tool actions")
+      (assert-equal 0 (length staged)
+                    "split-assistant-actions should not stage implicit-safe tool actions")))
   (assert-equal :fallback
                 (sbcl-agent::plist-value '(:a 1) :missing :fallback)
                 "plist-value should return defaults")
@@ -2361,19 +2400,19 @@ fi
         (assert-equal nil
                       (getf result :streamed-p)
                       "run-say-turn-sync should report non-streaming turns")
-        (assert-equal 1
+        (assert-equal 2
                       (getf result :immediate-action-count)
-                      "run-say-turn-sync should record immediate actions")
-        (assert-equal 1
+                      "run-say-turn-sync should record immediate eval and tool actions")
+        (assert-equal 0
                       (getf result :staged-action-count)
-                      "run-say-turn-sync should record staged actions")
+                      "run-say-turn-sync should not stage implicit-safe tool actions")
         (assert-equal :completed
                       (sbcl-agent::turn-status
                        (first (last (sbcl-agent::agent-session-turns session))))
-                      "run-say-turn-sync should complete the turn after staging follow-up actions")
-        (assert-equal 1
+                      "run-say-turn-sync should complete the turn after immediate actions")
+        (assert-equal 0
                       (length (sbcl-agent::agent-session-pending-actions session))
-                      "run-say-turn-sync should stage non-immediate actions")))
+                      "run-say-turn-sync should not leave pending implicit-safe tool actions")))
     (assert-true (find :say-response progress :key #'first)
                  "run-say-turn-sync should emit say-response progress"))
   (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
@@ -2391,9 +2430,9 @@ fi
     (assert-equal 4
                   (length (getf result :stream-events))
                   "run-say-turn-streaming should return the captured stream events")
-    (assert-equal 1
+    (assert-equal 0
                   (length (sbcl-agent::agent-session-pending-actions session))
-                  "run-say-turn-streaming should stage tool actions")
+                  "run-say-turn-streaming should not stage implicit-safe tool actions")
     (assert-true (find :provider-stream
                        (sbcl-agent::agent-session-events session)
                        :key #'sbcl-agent::event-kind)
@@ -6506,14 +6545,14 @@ fi
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
       (declare (ignore kind))
-      (assert-equal 1 (getf result :staged-action-count)
-                    "ask flow should stage one proposed action")
-      (assert-equal 0 (getf result :immediate-action-count)
-                    "tool-only ask flow should not auto-execute any actions")
-      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
-                    "session should retain one staged action")
-      (assert-true (= 0 (length (or (getf result :action-results) '())))
-                   "tool and patch actions should not execute immediately"))))
+      (assert-equal 0 (getf result :staged-action-count)
+                    "ask flow should not stage implicit-safe tool actions")
+      (assert-equal 1 (getf result :immediate-action-count)
+                    "tool-only ask flow should auto-execute implicit-safe actions")
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "session should not retain pending implicit-safe tool actions")
+      (assert-equal 1 (length (or (getf result :action-results) '()))
+                    "implicit-safe tool actions should execute immediately"))))
 
 (defun assistant-mixed-action-ask-test ()
   (let* ((provider (make-instance 'mixed-action-provider))
@@ -6522,22 +6561,19 @@ fi
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
       (assert-equal :ask kind "mixed-action ask should dispatch as :ask")
-      (assert-equal 1 (getf result :immediate-action-count)
-                    "ask should auto-execute eval actions")
-      (assert-equal 1 (getf result :staged-action-count)
-                    "ask should still stage tool actions")
-      (assert-equal 1 (length (getf result :action-results))
-                    "ask should return immediate eval results")
+      (assert-equal 2 (getf result :immediate-action-count)
+                    "ask should auto-execute eval and implicit-safe tool actions")
+      (assert-equal 0 (getf result :staged-action-count)
+                    "ask should not stage implicit-safe tool actions")
+      (assert-equal 2 (length (getf result :action-results))
+                    "ask should return immediate eval and tool results")
       (assert-equal 303
                     (getf (getf (first (getf result :action-results)) :result) :result)
                     "immediate eval action should execute in the current image")
-      (assert-equal 1 (length (sbcl-agent::agent-session-pending-actions updated-session))
-                    "only non-eval actions should remain staged")
+      (assert-equal 0 (length (sbcl-agent::agent-session-pending-actions updated-session))
+                    "implicit-safe tool actions should not remain staged")
       (assert-equal 3 (length (sbcl-agent::agent-session-operations updated-session))
-                    "ask should now persist provider, immediate, and staged action operations")
-      (assert-equal :tool
-                    (sbcl-agent::assistant-action-type (first (sbcl-agent::agent-session-pending-actions updated-session)))
-                    "the staged remainder should be the tool action"))))
+                    "ask should now persist provider plus two immediate action operations"))))
 
 (defun assistant-action-execution-test ()
   (let* ((provider (make-test-provider))

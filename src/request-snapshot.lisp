@@ -13,6 +13,8 @@
   thread-context
   turn-context
   environment-context
+  surface-context
+  surface-actions
   runtime-summary
   workspace-summary
   policy-summary
@@ -27,6 +29,8 @@
   thread-context
   turn-context
   environment-context
+  surface-context
+  surface-actions
   runtime-summary
   workspace-summary
   policy-summary
@@ -274,6 +278,7 @@
                                                          :extra-keys '(:kind :status :turn-id)))))))
 
 (defun build-provider-context-bundle (session &key thread turn prompt retrieval-dossier outcome-brief
+                                        surface-context surface-actions
                                         (operator-mode :repl-bridge))
   (ensure-default-thread session)
   (let* ((snapshot (build-provider-environment-snapshot session))
@@ -302,6 +307,8 @@
      :thread-context thread-context
      :turn-context turn-context
      :environment-context environment-context
+     :surface-context surface-context
+     :surface-actions surface-actions
      :runtime-summary (provider-runtime-summary session snapshot)
      :workspace-summary (provider-workspace-summary session snapshot)
      :policy-summary (provider-policy-summary session snapshot)
@@ -321,6 +328,8 @@
      :thread-context (provider-context-bundle-thread-context bundle)
      :turn-context (provider-context-bundle-turn-context bundle)
      :environment-context (provider-context-bundle-environment-context bundle)
+     :surface-context (provider-context-bundle-surface-context bundle)
+     :surface-actions (provider-context-bundle-surface-actions bundle)
      :runtime-summary (provider-context-bundle-runtime-summary bundle)
      :workspace-summary (provider-context-bundle-workspace-summary bundle)
      :policy-summary (provider-context-bundle-policy-summary bundle)
@@ -344,6 +353,10 @@
                                             (provider-request-snapshot-turn-context request-snapshot))
                          :environment-context (and request-snapshot
                                                  (provider-request-snapshot-environment-context request-snapshot))
+                         :surface-context (and request-snapshot
+                                               (provider-request-snapshot-surface-context request-snapshot))
+                         :surface-actions (and request-snapshot
+                                               (provider-request-snapshot-surface-actions request-snapshot))
                          :runtime-summary (and request-snapshot
                                                (provider-request-snapshot-runtime-summary request-snapshot))
                          :workspace-summary (and request-snapshot
@@ -367,6 +380,8 @@
                                           &key thread turn
                                             retrieval-dossier
                                             outcome-brief
+                                            surface-context
+                                            surface-actions
                                             (operator-mode :repl-bridge)
                                             stream-p
                                             attachments)
@@ -378,6 +393,8 @@
                                                      :prompt prompt
                                                      :retrieval-dossier retrieval-dossier
                                                      :outcome-brief outcome-brief
+                                                     :surface-context surface-context
+                                                     :surface-actions surface-actions
                                                      :operator-mode operator-mode)))
          (request-snapshot (provider-context-bundle->request-snapshot bundle)))
     (make-provider-request-from-snapshot prompt

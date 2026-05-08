@@ -51,6 +51,14 @@
                             "Read-only operations that stay within the current session workspace."
                             :risk-level :low
                             :default-grant-mode :implicit)
+(register-capability-policy :desktop-control
+                            "Inspect or steer Surface desktop state through governed desktop tools."
+                            :risk-level :low
+                            :default-grant-mode :implicit)
+(register-capability-policy :calculator-control
+                            "Use the Surface calculator as transient local computational state without mutating workspace, runtime, or governance records."
+                            :risk-level :low
+                            :default-grant-mode :implicit)
 (register-capability-policy :runtime-read
                             "Inspect read-only runtime state in the current image."
                             :risk-level :low

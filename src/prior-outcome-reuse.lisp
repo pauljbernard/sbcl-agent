@@ -88,6 +88,317 @@
 (defun environment-memory-evaluation-failure-entry-p (entry)
   (eq (getf entry :kind) :evaluation-failure))
 
+(defun environment-memory-operator-memory-entry-p (entry)
+  (eq (getf entry :kind) :operator-memory))
+
+(defun operator-memory-category-keyword (value)
+  (cond
+    ((keywordp value) value)
+    ((stringp value)
+     (intern (string-upcase (string-trim '(#\Space #\Tab #\Newline #\Return) value))
+             :keyword))
+    (t :general)))
+
+(defun operator-memory-normalize-attribute (value)
+  (let* ((text (string-downcase (string-trim '(#\Space #\Tab #\Newline #\Return)
+                                             (princ-to-string (or value "fact")))))
+         (normalized
+           (with-output-to-string (stream)
+             (loop with pending-separator-p = nil
+                   for character across text
+                   do (cond
+                        ((alphanumeric-char-p character)
+                         (when pending-separator-p
+                           (write-char #\- stream)
+                           (setf pending-separator-p nil))
+                         (write-char character stream))
+                        (t
+                         (setf pending-separator-p t)))))))
+    (if (> (length normalized) 0)
+        normalized
+        "fact")))
+
+(defun operator-memory-entry-id (category attribute)
+  (format nil "operator-memory-~A-~A"
+          (string-downcase (string (operator-memory-category-keyword category)))
+          (operator-memory-normalize-attribute attribute)))
+
+(defun compact-operator-memory-entry (entry)
+  (list :memory-id (getf entry :memory-id)
+        :kind :operator-memory
+        :category (getf entry :category)
+        :attribute (getf entry :attribute)
+        :value (getf entry :value)
+        :summary (getf entry :summary)
+        :confidence (getf entry :confidence)
+        :source-turn-id (getf entry :source-turn-id)
+        :recorded-at (getf entry :recorded-at)
+        :updated-at (getf entry :updated-at)))
+
+(defun operator-memory-document-text (entry)
+  (format nil "~{~A~^ ~}"
+          (remove nil
+                  (list (getf entry :category)
+                        (getf entry :attribute)
+                        (getf entry :value)
+                        (getf entry :summary)))))
+
+(defun scored-operator-memory-entry (prompt entry)
+  (let* ((category (getf entry :category))
+         (base-score (retrieval-token-match-score prompt
+                                                  (operator-memory-document-text entry)))
+         (identity-bonus (if (member category '(:identity :self-description :attribution)
+                                     :test #'eq)
+                             2
+                             0))
+         (confidence-bonus (round (* 10 (or (getf entry :confidence) 0.0))))
+         (score (+ base-score identity-bonus confidence-bonus)))
+    (when (> score 0)
+      (append (compact-operator-memory-entry entry)
+              (list :score score)))))
+
+(defun ranked-operator-memory-entries (session prompt &key (limit 6))
+  (let* ((entries (remove-if-not #'environment-memory-operator-memory-entry-p
+                                 (environment-memory-entries session)))
+         (scored (remove nil
+                         (mapcar (lambda (entry)
+                                   (scored-operator-memory-entry prompt entry))
+                                 entries)))
+         (fill (remove-if (lambda (entry)
+                            (find (getf entry :memory-id)
+                                  scored
+                                  :key (lambda (candidate) (getf candidate :memory-id))
+                                  :test #'string=))
+                          (sort (mapcar #'compact-operator-memory-entry entries)
+                                #'>
+                                :key (lambda (entry)
+                                       (+ (if (member (getf entry :category)
+                                                      '(:identity :preference :self-description :attribution :working-style)
+                                                      :test #'eq)
+                                              100
+                                              0)
+                                          (or (getf entry :updated-at)
+                                              (getf entry :recorded-at)
+                                              0)))))))
+    (subseq (append (sort scored #'>
+                           :key (lambda (entry)
+                                  (or (getf entry :score) 0)))
+                    fill)
+            0
+            (min limit (+ (length scored) (length fill))))))
+
+(defun list-operator-memory-entries (session)
+  (sort (mapcar #'compact-operator-memory-entry
+                (remove-if-not #'environment-memory-operator-memory-entry-p
+                               (environment-memory-entries session)))
+        #'>
+        :key (lambda (entry)
+               (or (getf entry :updated-at)
+                   (getf entry :recorded-at)
+                   0))))
+
+(defun find-operator-memory-entry (session memory-id)
+  (find memory-id
+        (environment-memory-entries session)
+        :key (lambda (entry) (getf entry :memory-id))
+        :test #'string=))
+
+(defun remove-environment-memory-entry (environment memory-id)
+  (let* ((entries (or (environment-memory environment) '())))
+    (setf (environment-memory environment)
+          (remove memory-id entries
+                  :key (lambda (entry) (getf entry :memory-id))
+                  :test #'string=))
+    t))
+
+(defun delete-operator-memory-entry (session memory-id)
+  (let ((environment (session-bound-environment session)))
+    (unless environment
+      (error "Cannot delete operator memory without a bound environment."))
+    (let ((entry (find-operator-memory-entry session memory-id)))
+      (unless (and entry (environment-memory-operator-memory-entry-p entry))
+        (error "Unknown operator memory entry ~S" memory-id))
+      (remove-environment-memory-entry environment memory-id)
+      (append-session-event session
+                            :operator-memory-entry-deleted
+                            (compact-operator-memory-entry entry)
+                            :family :assistant
+                            :entity-id memory-id
+                            :thread-id (getf entry :thread-id)
+                            :turn-id (getf entry :source-turn-id)
+                            :visibility :operator)
+      t)))
+
+(defun update-operator-memory-entry (session memory-id &key category attribute value summary confidence)
+  (let* ((environment (session-bound-environment session))
+         (entry (find-operator-memory-entry session memory-id)))
+    (unless environment
+      (error "Cannot update operator memory without a bound environment."))
+    (unless (and entry (environment-memory-operator-memory-entry-p entry))
+      (error "Unknown operator memory entry ~S" memory-id))
+    (let* ((resolved-category (or category (getf entry :category) :general))
+           (resolved-attribute (or attribute (getf entry :attribute) "fact"))
+           (updated (copy-list entry)))
+      (setf (getf updated :memory-id) (operator-memory-entry-id resolved-category resolved-attribute)
+            (getf updated :category) (operator-memory-category-keyword resolved-category)
+            (getf updated :attribute) (operator-memory-normalize-attribute resolved-attribute)
+            (getf updated :value) (or value (getf entry :value))
+            (getf updated :summary) (or summary
+                                       (getf updated :summary)
+                                       (format nil "~A: ~A"
+                                               (getf updated :attribute)
+                                               (getf updated :value)))
+            (getf updated :confidence) (or confidence (getf entry :confidence) 0.5)
+            (getf updated :updated-at) (get-universal-time)
+            (getf updated :manual-edited-p) t)
+      (unless (string= memory-id (getf updated :memory-id))
+        (remove-environment-memory-entry environment memory-id))
+      (upsert-environment-memory-entry environment updated)
+      (append-session-event session
+                            :operator-memory-entry-updated
+                            (compact-operator-memory-entry updated)
+                            :family :assistant
+                            :entity-id (getf updated :memory-id)
+                            :thread-id (getf updated :thread-id)
+                            :turn-id (getf updated :source-turn-id)
+                            :visibility :operator)
+      updated)))
+
+(defun make-operator-memory-entry (thread turn candidate)
+  (let* ((category (operator-memory-category-keyword
+                    (or (getf candidate :category)
+                        (getf candidate :kind)
+                        :general)))
+         (attribute (operator-memory-normalize-attribute
+                     (or (getf candidate :attribute)
+                         (getf candidate :name)
+                         (getf candidate :key)
+                         "fact")))
+         (value (or (getf candidate :value)
+                    (getf candidate :fact)
+                    (getf candidate :content)
+                    ""))
+         (summary (or (getf candidate :summary)
+                      (getf candidate :evidence)
+                      (format nil "~A: ~A" attribute value)))
+         (confidence (or (getf candidate :confidence) 0.5)))
+    (list :memory-id (operator-memory-entry-id category attribute)
+          :kind :operator-memory
+          :recorded-at (get-universal-time)
+          :updated-at (get-universal-time)
+          :thread-id (and thread (thread-id thread))
+          :source-turn-id (and turn (turn-id turn))
+          :category category
+          :attribute attribute
+          :value value
+          :summary summary
+          :confidence confidence
+          :source :memory)))
+
+(defun json-array-value (value)
+  (cond
+    ((null value) '())
+    ((json-object-p value) (list (json-object->keyword-plist value)))
+    ((listp value)
+     (mapcar (lambda (entry)
+               (if (json-object-p entry)
+                   (json-object->keyword-plist entry)
+                   entry))
+             value))
+    (t '())))
+
+(defun parse-operator-memory-extraction-response (message)
+  (let* ((decoded (ignore-errors (parse-json (or message "")))))
+    (when (json-object-p decoded)
+      (let* ((entries (json-array-value
+                       (or (json-object-value decoded "memories")
+                           (json-object-value decoded "entries")))))
+        (remove nil
+                (mapcar (lambda (entry)
+                          (when (listp entry)
+                            (list :category (or (getf entry :CATEGORY)
+                                                (getf entry :category)
+                                                :general)
+                                  :attribute (or (getf entry :ATTRIBUTE)
+                                                 (getf entry :attribute)
+                                                 (getf entry :KEY)
+                                                 (getf entry :key)
+                                                 "fact")
+                                  :value (or (getf entry :VALUE)
+                                             (getf entry :value)
+                                             (getf entry :FACT)
+                                             (getf entry :fact)
+                                             "")
+                                  :summary (or (getf entry :SUMMARY)
+                                               (getf entry :summary)
+                                               (getf entry :EVIDENCE)
+                                               (getf entry :evidence))
+                                  :confidence (or (getf entry :CONFIDENCE)
+                                                  (getf entry :confidence)
+                                                  0.5))))
+                        entries))))))
+
+(defun operator-memory-extraction-prompt (prompt assistant-message)
+  (format nil
+          "Analyze the completed exchange below and decide whether it contains durable facts worth remembering about the operator. Only remember stable identity, preferences, self-description, attribution, or persistent working style. Do not remember transient task details, one-off calculator values, temporary incidents, or implementation specifics unless they clearly describe a durable operator preference. Return your outer provider response with message containing only JSON in the form {\"memories\":[{\"category\":\"identity|preference|self-description|attribution|working-style\",\"attribute\":\"stable_attribute_name\",\"value\":\"remembered fact\",\"summary\":\"short evidence summary\",\"confidence\":0.0}]}. Use an empty memories array when nothing durable should be remembered.~%~%User message: ~A~%Assistant response: ~A"
+          (or prompt "")
+          (or assistant-message "")))
+
+(defun remember-operator-memory-candidates (session thread turn candidates)
+  (let ((environment (session-bound-environment session))
+        (recorded '()))
+    (when environment
+      (dolist (candidate candidates)
+        (let ((entry (make-operator-memory-entry thread turn candidate)))
+          (upsert-environment-memory-entry environment entry)
+          (push entry recorded)
+          (append-session-event session
+                                :operator-memory-entry-recorded
+                                (compact-operator-memory-entry entry)
+                                :family :assistant
+                                :entity-id (getf entry :memory-id)
+                                :thread-id (and thread (thread-id thread))
+                                :turn-id (and turn (turn-id turn))
+                                :visibility :operator)))
+      (nreverse recorded))))
+
+(defun infer-operator-memory (session thread turn prompt assistant-message &key provider)
+  (let* ((environment (session-bound-environment session))
+         (resolved-provider
+           (or provider
+               (when environment
+                 (let* ((route (ignore-errors
+                                 (select-environment-provider-profile prompt
+                                                                     :environment environment
+                                                                     :session session)))
+                        (profile (and route (getf route :selected-profile))))
+                   (and profile (ignore-errors (provider-from-profile profile))))))))
+    (when resolved-provider
+      (let* ((request (make-provider-request-from-session
+                       (operator-memory-extraction-prompt prompt assistant-message)
+                       session
+                       :thread thread
+                       :turn turn
+                       :operator-mode :conversation
+                       :stream-p nil))
+             (response (ignore-errors (send-provider-request resolved-provider request)))
+             (candidates (and response
+                              (parse-operator-memory-extraction-response
+                               (assistant-response-message response)))))
+        (append-session-event session
+                              :operator-memory-inference
+                              (list :candidate-count (length candidates)
+                                    :prompt (provider-summary-content prompt)
+                                    :response-preview (and response
+                                                           (provider-summary-content
+                                                            (assistant-response-message response))))
+                              :family :assistant
+                              :entity-id (and turn (turn-id turn))
+                              :thread-id (and thread (thread-id thread))
+                              :turn-id (and turn (turn-id turn))
+                              :visibility :operator)
+        (remember-operator-memory-candidates session thread turn candidates)))))
+
 (defun self-improvement-prompt-p (prompt)
   (let ((tokens (prompt-keyword-tokens prompt)))
     (or (intersection tokens
@@ -620,9 +931,10 @@
 
 (defun upsert-environment-memory-entry (environment entry)
   (let* ((entries (or (environment-memory environment) '()))
-         (turn-id (getf entry :turn-id))
-         (updated (if turn-id
-                      (remove turn-id entries
+         (entry-key (or (getf entry :turn-id)
+                        (getf entry :memory-id)))
+         (updated (if entry-key
+                      (remove entry-key entries
                               :key (lambda (candidate)
                                      (or (getf candidate :turn-id)
                                          (getf candidate :memory-id)))

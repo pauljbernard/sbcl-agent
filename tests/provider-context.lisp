@@ -114,6 +114,69 @@
     (assert-true (listp (sbcl-agent::provider-request-session-summary request))
                  "provider request should preserve the compact session summary")))
 
+(defun provider-request-transcript-memory-context-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-transcript-memory/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-request-transcript-memory/"
+                       :session session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (sbcl-agent::append-transcript-entry session :user "We previously debugged calculator latency in Surface.")
+    (sbcl-agent::append-transcript-entry session :assistant "The root cause was provider round-trip latency.")
+    (let* ((request (sbcl-agent::make-provider-request-from-session
+                     "Why was the calculator in Surface slow?"
+                     session
+                     :operator-mode :conversation
+                     :stream-p nil))
+           (conversation-context (getf (sbcl-agent::provider-request-retrieval-dossier request)
+                                       :conversation-context))
+           (memory (getf conversation-context :transcript-memory))
+           (entries (getf memory :entries)))
+      (assert-true (listp conversation-context)
+                   "provider request dossier should include conversation context")
+      (assert-true (listp entries)
+                   "provider request dossier should include transcript memory entries")
+      (assert-true (search "calculator"
+                           (string-downcase (getf (first entries) :content)))
+                   "provider request transcript memory should include calculator-related history"))))
+
+(defun provider-request-operator-memory-context-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-operator-memory/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-request-operator-memory/"
+                       :session session))
+         (thread nil)
+         (turn nil))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (setf thread (sbcl-agent::current-thread session)
+          turn (sbcl-agent::start-turn
+                session
+                thread
+                (sbcl-agent::create-message session thread :user "Remember my preferences.")
+                :metadata '(:source :test)))
+    (sbcl-agent::remember-operator-memory-candidates
+     session
+     thread
+     turn
+     '((:category :preference
+        :attribute "preferred language"
+        :value "Common Lisp"
+        :summary "The operator explicitly prefers Common Lisp."
+        :confidence 0.9)))
+    (let* ((request (sbcl-agent::make-provider-request-from-session
+                     "What language do I prefer?"
+                     session
+                     :operator-mode :conversation
+                     :stream-p nil))
+           (conversation-context (getf (sbcl-agent::provider-request-retrieval-dossier request)
+                                       :conversation-context))
+           (memory (getf conversation-context :operator-memory))
+           (entries (getf memory :entries)))
+      (assert-true (listp entries)
+                   "provider request dossier should include operator memory entries")
+      (assert-equal "operator-memory-preference-preferred-language"
+                    (getf (first entries) :memory-id)
+                    "provider request operator memory should include the stored preference"))))
+
 (defun environment-provider-context-precedence-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/environment-provider-precedence/"))
          (environment (sbcl-agent::make-default-environment
@@ -147,6 +210,16 @@
                                           :thread-count 2
                                           :work-item-count 1
                                           :thread-refs ((:id "thread-1" :title "Default Thread" :status :active)))
+                   :surface-context '(:active-workspace "conversations"
+                                      :selected-conversation-section "draft"
+                                      :focus (:kind :approval
+                                              :approval-id "approval-1")
+                                      :draft-summary "Need approval-aware follow-up.")
+                   :surface-actions '((:tool-id :desktop/show
+                                       :label "Inspect Surface")
+                                      (:tool-id :desktop/action
+                                       :label "Open approval in Surface"
+                                       :arguments (:action-id "open-approval-1")))
                    :runtime-summary '(:cwd "/tmp/project" :package "SBCL-AGENT-USER" :open-incident-count 1)
                    :workspace-summary '(:cwd "/tmp/project" :artifact-count 2 :incident-count 1)
                    :policy-summary '(:approved-policies (:safe-read) :open-incident-count 1)
@@ -201,6 +274,10 @@
                  "build-openai-user-prompt should render thread context")
     (assert-true (search "Environment context: (:ENVIRONMENT-ID \"env-1\"" prompt)
                  "build-openai-user-prompt should render environment context")
+    (assert-true (search "Surface context: (:ACTIVE-WORKSPACE \"conversations\"" prompt)
+                 "build-openai-user-prompt should render surface context")
+    (assert-true (search "Available Surface actions: ((:TOOL-ID :DESKTOP/SHOW" prompt)
+                 "build-openai-user-prompt should render available surface actions")
     (assert-true (search "Runtime summary: (:CWD \"/tmp/project\"" prompt)
                  "build-openai-user-prompt should render runtime summary")
     (assert-true (search "Retrieved environment dossier: (:INTENT (:CATEGORY :RUNTIME-INSPECTION)" prompt)
@@ -237,6 +314,8 @@
                  "build-openai-user-prompt should render conservative governance directives when incidents are open")
     (assert-true (search "Do not propose new governed mutation actions" prompt)
                  "build-openai-user-prompt should tell the provider to avoid new governed mutations under active governance burden")
+    (assert-true (search "Calculator interactions and other transient local UI control actions" prompt)
+                 "build-openai-user-prompt should exempt calculator control from governed mutation posture")
     (assert-equal :conversation
                   (getf (sbcl-agent::assistant-response-metadata mock-response) :operator-mode)
                   "mock provider responses should preserve operator mode metadata")
@@ -246,6 +325,21 @@
     (assert-equal "env-1"
                   (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :environment) :environment-id)
                   "mock provider responses should preserve environment context metadata")))
+
+(defun calculator-control-policy-test ()
+  (assert-equal :calculator-control
+                (getf (sbcl-agent::describe-tool :calculator/append-token) :policy)
+                "calculator append-token should use calculator-control policy")
+  (assert-equal :calculator-control
+                (getf (sbcl-agent::describe-tool :calculator/evaluate) :policy)
+                "calculator evaluate should use calculator-control policy")
+  (let ((action (sbcl-agent::make-assistant-action
+                 :type :tool
+                 :payload '(:tool-id :calculator/append-token :arguments (:token "7")))))
+    (assert-true (sbcl-agent::immediate-assistant-action-p action)
+                 "calculator control actions should execute immediately")
+    (assert-true (not (sbcl-agent::governed-assistant-action-p action))
+                 "calculator control actions should not be treated as governed mutations")))
 
 (defun provider-rendering-governance-ready-test ()
   (let* ((request (sbcl-agent::make-provider-request
@@ -322,12 +416,28 @@
            (turn (sbcl-agent::start-turn session thread user-message :metadata '(:source :bundle-test)))
            (assistant-message (sbcl-agent::create-message session thread :assistant "bundle response"))
            (ignore (sbcl-agent::complete-turn session thread turn assistant-message :status :completed))
+           (surface-context '(:active-workspace "conversations"
+                              :selected-conversation-section "draft"
+                              :environment-focus (:kind :approval
+                                                  :approval-id "approval-1")))
+           (surface-actions '((:tool-id :desktop/show
+                               :label "Inspect Surface")
+                              (:tool-id :desktop/action
+                               :label "Open approval"
+                               :arguments (:action-id "approval-open-1"))))
            (bundle (sbcl-agent::build-provider-context-bundle session
                                                               :thread thread
                                                               :turn turn
                                                               :prompt "bundle check"
+                                                              :surface-context surface-context
+                                                              :surface-actions surface-actions
                                                               :operator-mode :repl-bridge))
-           (request (sbcl-agent::make-provider-request-from-session "bundle check" session :thread thread :turn turn)))
+           (request (sbcl-agent::make-provider-request-from-session "bundle check"
+                                                                    session
+                                                                    :thread thread
+                                                                    :turn turn
+                                                                    :surface-context surface-context
+                                                                    :surface-actions surface-actions)))
       (declare (ignore ignore))
       (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
                     (sbcl-agent::provider-request-session-summary request)
@@ -350,6 +460,18 @@
       (assert-equal (sbcl-agent::provider-context-bundle-policy-summary bundle)
                     (sbcl-agent::provider-request-policy-summary request)
                     "provider request policy summary should come from the provider context bundle")
+      (assert-equal surface-context
+                    (sbcl-agent::provider-context-bundle-surface-context bundle)
+                    "provider context bundle should preserve supplied Surface context")
+      (assert-equal surface-actions
+                    (sbcl-agent::provider-context-bundle-surface-actions bundle)
+                    "provider context bundle should preserve supplied Surface actions")
+      (assert-equal (sbcl-agent::provider-context-bundle-surface-context bundle)
+                    (sbcl-agent::provider-request-surface-context request)
+                    "provider request should preserve Surface context from the context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-surface-actions bundle)
+                    (sbcl-agent::provider-request-surface-actions request)
+                    "provider request should preserve Surface actions from the context bundle")
       (assert-equal (sbcl-agent::provider-context-bundle-retrieval-dossier bundle)
                     (sbcl-agent::provider-request-retrieval-dossier request)
                     "provider request retrieval dossier should come from the provider context bundle")
@@ -375,17 +497,43 @@
                        :session session)))
     (sbcl-agent::bind-session-to-environment session environment)
     (sbcl-agent::create-work-item session "Request snapshot conversion" :transaction-scope :test)
-    (let* ((bundle (sbcl-agent::build-provider-context-bundle session
+    (let* ((surface-context '(:active-workspace "browser"
+                              :selected-browser-domain "packages"
+                              :environment-focus (:kind :runtime
+                                                  :runtime-package "SBCL-AGENT.CALCULATOR")))
+           (surface-actions '((:tool-id :desktop/show
+                               :label "Inspect Surface")
+                              (:tool-id :desktop/action
+                               :label "Open package browser"
+                               :arguments (:action-id "packages-open-1"))))
+           (bundle (sbcl-agent::build-provider-context-bundle session
                                                               :prompt "snapshot conversion"
+                                                              :surface-context surface-context
+                                                              :surface-actions surface-actions
                                                               :operator-mode :repl-bridge))
            (snapshot (sbcl-agent::provider-context-bundle->request-snapshot bundle))
-           (request (sbcl-agent::make-provider-request-from-session "snapshot conversion" session)))
+           (request (sbcl-agent::make-provider-request-from-session "snapshot conversion"
+                                                                    session
+                                                                    :surface-context surface-context
+                                                                    :surface-actions surface-actions)))
       (assert-equal (sbcl-agent::provider-context-bundle-session-summary bundle)
                     (sbcl-agent::provider-request-snapshot-session-summary snapshot)
                     "provider request snapshot should preserve the bundle session summary")
       (assert-equal (sbcl-agent::provider-context-bundle-environment-context bundle)
                     (sbcl-agent::provider-request-snapshot-environment-context snapshot)
                     "provider request snapshot should preserve the bundle environment context")
+      (assert-equal surface-context
+                    (sbcl-agent::provider-request-snapshot-surface-context snapshot)
+                    "provider request snapshot should preserve Surface context")
+      (assert-equal surface-actions
+                    (sbcl-agent::provider-request-snapshot-surface-actions snapshot)
+                    "provider request snapshot should preserve Surface actions")
+      (assert-equal (sbcl-agent::provider-request-snapshot-surface-context snapshot)
+                    (sbcl-agent::provider-request-surface-context request)
+                    "provider request should consume the request snapshot Surface context")
+      (assert-equal (sbcl-agent::provider-request-snapshot-surface-actions snapshot)
+                    (sbcl-agent::provider-request-surface-actions request)
+                    "provider request should consume the request snapshot Surface actions")
       (assert-equal (sbcl-agent::provider-request-snapshot-runtime-summary snapshot)
                     (sbcl-agent::provider-request-runtime-summary request)
                     "provider request should consume the request snapshot runtime summary")

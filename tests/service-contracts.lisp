@@ -5837,3 +5837,46 @@
       (assert-equal :committed
                     (getf (sbcl-agent::service-response-data complete-response) :status)
                     "workflow complete-validations service should finalize awaiting cold validation work"))))
+
+(defun operator-memory-service-contract-test ()
+  (let* ((session (make-test-session :cwd "/tmp/operator-memory-service/"))
+         (thread (sbcl-agent::current-thread session))
+         (turn (sbcl-agent::start-turn
+                session
+                thread
+                (sbcl-agent::create-message session thread :user "Remember my preferences.")
+                :metadata '(:source :test))))
+    (sbcl-agent::remember-operator-memory-candidates
+     session
+     thread
+     turn
+     '((:category :preference
+        :attribute "preferred language"
+        :value "Common Lisp"
+        :summary "The operator explicitly prefers Common Lisp."
+        :confidence 0.9)))
+    (let* ((memory-id "operator-memory-preference-preferred-language")
+           (list-response (sbcl-agent::query-memory-list-service session))
+           (detail-response (sbcl-agent::query-memory-detail-service session memory-id))
+           (update-response (sbcl-agent::command-memory-update-service
+                             session
+                             memory-id
+                             :value "Common Lisp and SBCL"
+                             :summary "The operator prefers Common Lisp and SBCL."))
+           (delete-response (sbcl-agent::command-memory-delete-service session memory-id)))
+      (assert-equal :memory
+                    (getf list-response :domain)
+                    "memory list service should report the memory domain")
+      (assert-equal :list
+                    (getf list-response :operation)
+                    "memory list service should identify the list operation")
+      (assert-service-metadata-shape list-response "memory list service")
+      (assert-equal memory-id
+                    (getf (sbcl-agent::service-response-data detail-response) :memory-id)
+                    "memory detail service should return the requested entry")
+      (assert-equal "Common Lisp and SBCL"
+                    (getf (sbcl-agent::service-response-data update-response) :value)
+                    "memory update service should persist the updated value")
+      (assert-equal t
+                    (getf (sbcl-agent::service-response-data delete-response) :deleted-p)
+                    "memory delete service should confirm deletion"))))

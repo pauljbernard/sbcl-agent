@@ -96,6 +96,12 @@ The architecture assumes that useful runtime mutation must be:
 
 That is why workflow records, incidents, approvals, and artifacts exist as native concepts in the codebase rather than as external documentation concerns.
 
+## Governance Architecture
+
+The governance model is architectural, not merely procedural. Policy evaluation, approvals, work-items, incidents, evidence, validation, and recovery all live inside the same environment loop.
+
+![Governance architecture]({{ '/assets/GovernanceArchitecture.png' | relative_url }})
+
 ## Current Maturity
 
 The present system should be understood as:

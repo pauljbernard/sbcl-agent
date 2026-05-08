@@ -85,6 +85,41 @@
                 (search (string-downcase token) haystack))
               tokens)))
 
+(defun transcript-memory-match-entry (entry index total-count prompt)
+  (let* ((role (getf entry :role))
+         (content (getf entry :content))
+         (score (retrieval-token-match-score prompt role content)))
+    (when (> score 0)
+      (list :entry-index index
+            :role role
+            :content (provider-summary-content content :limit 320)
+            :match-score score
+            :distance-from-latest (- (1- total-count) index)))))
+
+(defun transcript-memory-match-better-p (left right)
+  (let ((left-score (or (getf left :match-score) 0))
+        (right-score (or (getf right :match-score) 0)))
+    (if (/= left-score right-score)
+        (> left-score right-score)
+        (< (or (getf left :distance-from-latest) most-positive-fixnum)
+           (or (getf right :distance-from-latest) most-positive-fixnum)))))
+
+(defun transcript-memory-matches (session prompt &key (limit 4))
+  (let* ((entries (agent-session-transcript session))
+         (total-count (length entries))
+         (last-index (1- total-count))
+         (scored '()))
+    (loop for entry in entries
+          for index from 0
+          do (unless (and (= index last-index)
+                          (eq (getf entry :role) :user)
+                          (stringp (getf entry :content))
+                          (string= (getf entry :content) (or prompt "")))
+               (let ((match (transcript-memory-match-entry entry index total-count prompt)))
+                 (when match
+                   (push match scored)))))
+    (compact-list (sort scored #'transcript-memory-match-better-p) limit)))
+
 (defun host-console-entry-from-json-line (line index)
   (let ((trimmed (string-trim '(#\Space #\Tab #\Newline #\Return) line)))
     (when (and (> (length trimmed) 1)
@@ -389,13 +424,24 @@
         :metadata (service-response-metadata response)
         :data (service-response-data response)))
 
-(defun build-conversation-dossier-section (session plan)
+(defun build-conversation-dossier-section (session prompt plan)
   (let ((thread-response (query-conversation-thread-detail-service session))
-        (turn-response (ignore-errors (query-conversation-turn-detail-service session))))
+        (turn-response (ignore-errors (query-conversation-turn-detail-service session)))
+        (memory-limit (retrieval-plan-limit plan :conversation 4)))
     (list :thread (dossier-section :conversation :thread-detail thread-response)
           :turn (and turn-response
                      (dossier-section :conversation :turn-detail turn-response))
-          :limit (retrieval-plan-limit plan :conversation 4))))
+          :recent-transcript (mapcar #'provider-transcript-entry
+                                     (recent-session-transcript session :limit memory-limit))
+          :transcript-memory (list :query prompt
+                                   :transcript-count (length (agent-session-transcript session))
+                                   :entries (transcript-memory-matches session prompt
+                                                                       :limit memory-limit))
+          :operator-memory (list :query prompt
+                                 :entry-count (length (list-operator-memory-entries session))
+                                 :entries (ranked-operator-memory-entries session prompt
+                                                                         :limit memory-limit))
+          :limit memory-limit)))
 
 (defun build-runtime-dossier-section (session plan)
   (let ((summary-response (query-runtime-summary-service session))
@@ -882,6 +928,9 @@
 
 (defun build-retrieval-dossier-from-plan (session prompt intent plan)
   (let* ((domains (retrieval-plan-domains plan))
+         (operator-memory-present-p
+           (find-if #'environment-memory-operator-memory-entry-p
+                    (environment-memory-entries session)))
          (alignment-intent-context (when (find :intent domains)
                                      (build-intent-dossier-section session plan)))
          (artifact-context (when (find :artifact domains)
@@ -910,8 +959,9 @@
      :alignment-intent-context alignment-intent-context
      :plan plan
      :observed-consequences nil
-     :conversation-context (when (find :conversation domains)
-                             (build-conversation-dossier-section session plan))
+     :conversation-context (when (or (find :conversation domains)
+                                     operator-memory-present-p)
+                             (build-conversation-dossier-section session prompt plan))
      :runtime-context (when (find :runtime domains)
                         (build-runtime-dossier-section session plan))
      :telemetry-context (when (find :telemetry domains)

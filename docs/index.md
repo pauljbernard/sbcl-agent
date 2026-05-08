@@ -34,6 +34,12 @@ The execution-kernel structure that underlies the shell, the desktop, and the se
 
 ![Execution kernel architecture]({{ '/KernelArchitecture.png' | relative_url }})
 
+## Realtime Introspective Environment Architecture
+
+The diagram below shows the more fundamental architectural distinction behind `sbcl-agent`: the agent and the environment share one live runtime. This is what makes introspection, environment-native action, persistent transcript and memory, and self-executing governance possible without treating the environment as an external target.
+
+![Realtime introspective environment architecture]({{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+
 If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
 
 <div class="quick-links">

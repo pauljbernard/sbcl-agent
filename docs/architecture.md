@@ -62,6 +62,12 @@ The current implementation is environment-oriented now. Remaining transitional s
 
 The following diagrams capture the current architectural loop more directly than prose alone.
 
+### Realtime Introspective Environment Architecture
+
+Before looking at the kernel and service loops, it is important to understand the primary architectural choice: `sbcl-agent` is not an external agent wrapped around a target system. The agent executes inside the same live SBCL environment it inspects and controls.
+
+![Realtime introspective environment architecture]({{ '/assets/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+
 ### Execution Kernel Architecture
 
 ![Execution kernel architecture]({{ '/assets/KernelArchitecture.png' | relative_url }})

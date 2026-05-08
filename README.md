@@ -88,7 +88,13 @@ If you are new to Common Lisp, start with [Common Lisp as a Runtime](docs/common
 
 ## Architecture At A Glance
 
-These two diagrams summarize the current conversational-context and governance loops that the architecture and runtime documentation describe in detail.
+These four diagrams summarize the current realtime-environment model, execution kernel, conversational-context loop, and governance loop that the architecture and runtime documentation describe in detail.
+
+### Realtime Introspective Environment Architecture
+
+This diagram shows the defining architectural choice of `sbcl-agent`: the agent is not standing outside a target system and manipulating it through indirect interfaces. It shares the same live SBCL environment it observes, governs, remembers, and updates.
+
+![Realtime introspective environment architecture](docs/assets/RealtimeIntrospectiveEnvironmentArchitecture.png)
 
 ### Execution Kernel Architecture
 

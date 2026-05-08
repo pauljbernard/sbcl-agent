@@ -45,6 +45,12 @@ That matters because the runtime holds truths that source files alone do not:
 
 This is the main reason `sbcl-agent` can justify an environment-first architecture instead of a file-first agent architecture.
 
+## Realtime Introspective Environment Architecture
+
+The following diagram makes that claim concrete. Traditional agents stand outside the target environment and manipulate it through APIs, shells, filesystems, browsers, and logs. `sbcl-agent` instead runs the agent inside the same live SBCL environment, where runtime state, memory, governance, evidence, and the Surface UI are all part of one introspective and persistent world.
+
+![Realtime introspective environment architecture]({{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }})
+
 ## Execution Kernel Architecture
 
 The kernel architecture below shows how that environment is operationalized: one environment contains the execution kernel, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.

@@ -62,6 +62,10 @@ The current implementation is environment-oriented now. Remaining transitional s
 
 The following diagrams capture the current architectural loop more directly than prose alone.
 
+### Execution Kernel Architecture
+
+![Execution kernel architecture]({{ '/assets/KernelArchitecture.png' | relative_url }})
+
 ### Conversational Context Architecture
 
 ![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})

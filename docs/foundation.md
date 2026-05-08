@@ -45,6 +45,12 @@ That matters because the runtime holds truths that source files alone do not:
 
 This is the main reason `sbcl-agent` can justify an environment-first architecture instead of a file-first agent architecture.
 
+## Execution Kernel Architecture
+
+The kernel architecture below shows how that environment is operationalized: one environment contains the execution kernel, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.
+
+![Execution kernel architecture]({{ '/KernelArchitecture.png' | relative_url }})
+
 ## The Three Truths
 
 The project is organized around three linked truth domains.

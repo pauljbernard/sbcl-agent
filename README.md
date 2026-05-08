@@ -90,6 +90,10 @@ If you are new to Common Lisp, start with [Common Lisp as a Runtime](docs/common
 
 These two diagrams summarize the current conversational-context and governance loops that the architecture and runtime documentation describe in detail.
 
+### Execution Kernel Architecture
+
+![Execution kernel architecture](docs/assets/KernelArchitecture.png)
+
 ### Conversational Context Architecture
 
 ![Conversational context architecture](docs/assets/ConversationalContextArchitecture.png)

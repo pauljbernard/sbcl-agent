@@ -28,6 +28,12 @@ The current `Surface` desktop host for `sbcl-agent` looks like this:
 
 ![Surface desktop snapshot]({{ '/Desktop.jpg' | relative_url }})
 
+## Current Kernel Architecture
+
+The execution-kernel structure that underlies the shell, the desktop, and the service boundary is shown below:
+
+![Execution kernel architecture]({{ '/KernelArchitecture.png' | relative_url }})
+
 If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
 
 <div class="quick-links">

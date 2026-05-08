@@ -22,6 +22,12 @@ Use this order instead:
 4. [User Guide](https://pauljbernard.github.io/sbcl-agent/user-guide.html)
 5. [Architecture](https://pauljbernard.github.io/sbcl-agent/architecture.html)
 
+## Current Surface Desktop
+
+The current `Surface` desktop host for `sbcl-agent` looks like this:
+
+![Surface desktop snapshot]({{ '/Desktop.jpg' | relative_url }})
+
 If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
 
 <div class="quick-links">

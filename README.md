@@ -98,6 +98,12 @@ These two diagrams summarize the current conversational-context and governance l
 
 ![Governance architecture](docs/assets/GovernanceArchitecture.png)
 
+## Current Surface Desktop
+
+The current `Surface` desktop host over `sbcl-agent` is shown below. It is the clearest concrete picture of how the environment, browser, conversations, execution surfaces, evidence, and inspector can coexist in one operator workspace.
+
+![Surface desktop snapshot](docs/Desktop.jpg)
+
 ## What It Does Today
 
 The current runtime already provides:

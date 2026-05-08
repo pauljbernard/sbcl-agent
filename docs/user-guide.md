@@ -21,6 +21,10 @@ This page is the detailed operator reference. It assumes you already understand 
 - conversation-style operation, where you work in durable threads and turns using `(say ...)`
 - workflow-style operation, where governed work-items, validations, approvals, and reconciliations remain visible and inspectable
 
+The current `Surface` desktop host that sits on top of these capabilities looks like this:
+
+![Surface desktop snapshot]({{ '/Desktop.jpg' | relative_url }})
+
 These styles share the same provider, tool, session, policy, task, workflow, and execution-kernel layers. They should now be understood as coexisting modes inside one implemented Environment architecture rather than as separate products.
 
 ## Installation Expectations

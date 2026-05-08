@@ -54,7 +54,7 @@ Today the model can receive:
 
 The retrieval dossier now sits inside a larger conversation-context assembly loop rather than acting as a standalone prompt-enrichment trick.
 
-![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 The remaining gap is not “retrieval does not exist.” The remaining gap is hardening recall, ranking quality, mid-turn expansion policy, and eval-grade proof that the retrieval-and-cognition loop is consistently superior.
 

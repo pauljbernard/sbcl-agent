@@ -25,7 +25,7 @@ The newer roadmap narrows the role of this document: conversation is now one nat
 
 This diagram shows the current turn-assembly loop: Surface context, environment state, transcript history, and deliberate operator memory are assembled before provider execution and then fed back into thread, transcript, and memory state after the turn completes.
 
-![Conversational context architecture]({{ '/assets/ConversationalContextArchitecture.png' | relative_url }})
+<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Ownership Rule
 

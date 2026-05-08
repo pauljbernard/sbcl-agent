@@ -2,7 +2,7 @@
 
 ## Historical Baseline Diagram
 
-![sbcl-agent / sbcl-agent-ux historical baseline architecture diagram](assets/sbcl-agent-current-state-architecture-diagram.png)
+<img src="assets/sbcl-agent-current-state-architecture-diagram.png" alt="sbcl-agent / sbcl-agent-ux historical baseline architecture diagram" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Executive Summary
 

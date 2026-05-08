@@ -29,7 +29,7 @@ That makes the most precise description:
 
 ## Architecture Context Diagram
 
-![IntentOS target architecture context diagram](assets/intentos-target-architecture-context-diagram.png)
+<img src="assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Kernel Doctrine
 

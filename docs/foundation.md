@@ -112,7 +112,7 @@ That is why workflow records, incidents, approvals, and artifacts exist as nativ
 
 The governance model is architectural, not merely procedural. Policy evaluation, approvals, work-items, incidents, evidence, validation, and recovery all live inside the same environment loop.
 
-![Governance architecture]({{ '/assets/GovernanceArchitecture.png' | relative_url }})
+<img src="{{ '/assets/GovernanceArchitecture.png' | relative_url }}" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 ## Current Maturity
 

@@ -23,7 +23,7 @@ This page is the detailed operator reference. It assumes you already understand 
 
 The current `Surface` desktop host that sits on top of these capabilities looks like this:
 
-![Surface desktop snapshot]({{ '/Desktop.jpg' | relative_url }})
+<img src="{{ '/Desktop.jpg' | relative_url }}" alt="Surface desktop snapshot" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
 These styles share the same provider, tool, session, policy, task, workflow, and execution-kernel layers. They should now be understood as coexisting modes inside one implemented Environment architecture rather than as separate products.
 

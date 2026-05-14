@@ -15,6 +15,114 @@
   created-at
   metadata)
 
+(defun plist-remove-keys (plist keys)
+  (loop for (key value) on plist by #'cddr
+        unless (member key keys :test #'eq)
+          append (list key value)))
+
+(defun condition-type-name (condition)
+  (when condition
+    (let ((class (class-of condition)))
+      (and class
+           (class-name class)
+           (string-upcase (string (class-name class)))))))
+
+(defun restart-display-string (restart)
+  (handler-case
+      (string-trim '(#\Space #\Tab #\Newline)
+                   (with-output-to-string (stream)
+                     (princ restart stream)))
+    (error ()
+      nil)))
+
+(defun restart-summary (restart)
+  (let ((name (restart-name restart))
+        (display (restart-display-string restart)))
+    (list :name (and name (string-upcase (string name)))
+          :label (or display
+                     (and name (string-capitalize (substitute #\Space #\- (string-downcase (string name)))))
+                     "Anonymous restart"))))
+
+(defun runtime-condition-summary (condition)
+  (when condition
+    (list :type (condition-type-name condition)
+          :message (condition->incident-string condition)
+          :restart-count (length (compute-restarts condition)))))
+
+(defun runtime-condition-slot-summaries (condition)
+  (let* ((class (ignore-errors (class-of condition)))
+         (slots (and class
+                     (ignore-errors (sb-mop:class-slots class)))))
+    (when slots
+      (let* ((limited-slots (subseq slots 0 (min (length slots) 12)))
+             (summaries
+               (remove nil
+                       (mapcar (lambda (slot)
+                                 (let* ((slot-name (ignore-errors (sb-mop:slot-definition-name slot)))
+                                        (boundp (and slot-name
+                                                     (ignore-errors (slot-boundp condition slot-name))))
+                                        (value (and boundp
+                                                    slot-name
+                                                    (ignore-errors (slot-value condition slot-name)))))
+                                   (and slot-name
+                                        (list :name (string-upcase (string slot-name))
+                                              :boundp (not (null boundp))
+                                              :printed (and boundp
+                                                            (ignore-errors
+                                                             (let ((text (princ-to-string value)))
+                                                               (if (> (length text) 160)
+                                                                   (concatenate 'string (subseq text 0 160) "...")
+                                                                   text))))
+                                              :type (and boundp value
+                                                         (ignore-errors
+                                                          (string-upcase
+                                                           (princ-to-string (type-of value)))))))))
+                               limited-slots))))
+        (list :slot-count (length slots)
+              :slots summaries)))))
+
+(defun runtime-condition-detail (condition)
+  (when condition
+    (append (list :type (condition-type-name condition)
+                  :message (condition->incident-string condition)
+                  :printed (ignore-errors (princ-to-string condition))
+                  :class (ignore-errors
+                           (let ((class (class-of condition)))
+                             (and class
+                                  (class-name class)
+                                  (string-upcase (string (class-name class))))))
+                  :restart-count (length (compute-restarts condition)))
+            (or (runtime-condition-slot-summaries condition) '()))))
+
+(defun runtime-condition-restart-summaries (condition)
+  (when condition
+    (remove-duplicates
+     (mapcar #'restart-summary (compute-restarts condition))
+     :test #'equal)))
+
+(defun incident-condition-summary (incident)
+  (or (getf (incident-metadata incident) :condition-summary)
+      (let ((condition-text (incident-condition-string incident)))
+        (and condition-text
+             (list :type nil
+                   :message condition-text
+                   :restart-count (length (or (getf (incident-metadata incident) :restart-suggestions) '())))))))
+
+(defun incident-condition-detail (incident)
+  (or (getf (incident-metadata incident) :condition-detail)
+      (let ((summary (incident-condition-summary incident))
+            (condition-text (incident-condition-string incident)))
+        (and (or summary condition-text)
+             (append (list :type (getf summary :type)
+                           :message (or (getf summary :message) condition-text)
+                           :printed condition-text
+                           :class (getf summary :type)
+                           :restart-count (or (getf summary :restart-count) 0))
+                     '())))))
+
+(defun incident-restart-suggestions (incident)
+  (or (getf (incident-metadata incident) :restart-suggestions) '()))
+
 (defun make-incident-id ()
   (format nil "incident-~D-~D" (get-universal-time) (random 1000000)))
 
@@ -94,6 +202,9 @@
           :operation-policy (and operation (operation-policy-decision operation))
           :operation-recovery-state (and operation
                                          (getf (operation-metadata operation) :recovery-state))
+          :condition-summary (incident-condition-summary incident)
+          :condition-detail (incident-condition-detail incident)
+          :restart-suggestions (incident-restart-suggestions incident)
           :work-item-checkpoint-count (if work-item
                                          (length (work-item-checkpoints work-item))
                                          0)
@@ -122,7 +233,14 @@
 (defun incident-recommended-actions (session incident)
   (let* ((recovery (incident-turn-recovery-summary session incident))
          (wait (incident-work-item-wait-summary session incident))
+         (restart-suggestions (incident-restart-suggestions incident))
          (actions '()))
+    (dolist (restart restart-suggestions)
+      (push (list :type :consider-restart
+                  :incident-id (incident-id incident)
+                  :restart-name (getf restart :name)
+                  :label (getf restart :label))
+            actions))
     (when (and recovery (getf recovery :resumable-p))
       (push (list :type :resume-turn
                   :turn-id (incident-turn-id incident)
@@ -155,6 +273,12 @@
           (append without-plan
                   (list :remediation-plan remediation-plan))))
   incident)
+
+(defun merge-runtime-incident-metadata (metadata condition)
+  (append (plist-remove-keys metadata '(:condition-summary :condition-detail :restart-suggestions))
+          (list :condition-summary (runtime-condition-summary condition)
+                :condition-detail (runtime-condition-detail condition)
+                :restart-suggestions (runtime-condition-restart-summaries condition))))
 
 (defun maybe-create-incident-recovery-plan-artifact (session incident)
   (let* ((thread-id (incident-thread-id incident))
@@ -358,5 +482,5 @@
                      :work-item bound-work-item
                      :workflow-record workflow-record
                      :condition condition
-                     :metadata metadata
+                     :metadata (merge-runtime-incident-metadata metadata condition)
                      :status :open)))

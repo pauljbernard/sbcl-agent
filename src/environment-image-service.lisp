@@ -505,6 +505,12 @@
 
 (defun command-environment-load-image-service (image-id-or-name &optional environment)
   (let ((loaded-environment (load-environment-image image-id-or-name environment)))
+    (when (fboundp 'notify-provider-request-snapshot-environment-change)
+      (notify-provider-request-snapshot-environment-change
+       loaded-environment
+       :reason :load-image
+       :family :environment
+       :domains '(:conversation :runtime :workspace :policy :environment)))
     (make-service-command-response :environment
                                    :load-image
                                    (list :image-id (environment-image-id loaded-environment)
@@ -520,6 +526,12 @@
 
 (defun command-environment-revert-image-service (&optional environment)
   (let ((loaded-environment (revert-environment-to-current-image environment)))
+    (when (fboundp 'notify-provider-request-snapshot-environment-change)
+      (notify-provider-request-snapshot-environment-change
+       loaded-environment
+       :reason :revert-image
+       :family :environment
+       :domains '(:conversation :runtime :workspace :policy :environment)))
     (make-service-command-response :environment
                                    :revert-image
                                    (list :image-id (environment-image-id loaded-environment)

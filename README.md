@@ -6,6 +6,15 @@ It began as a Codex-style shell, but the project has matured into something more
 
 The point of the project is not to recreate a conventional IDE in Lisp or to wrap an LLM with shell tools. The point is to let humans and agents inspect and mutate the same running system they are reasoning about while preserving approvals, evidence, incidents, reconciliation, and operator trust.
 
+The current architecture is layered:
+
+1. `SBCL / Common Lisp` as runtime, persistence, and introspection substrate
+2. a more traditional governed `Kernel` as the authority and policy boundary
+3. an address-based `Actor System` as the capability and workflow layer
+4. a React `Surface` desktop as the presentation tier
+
+The integrated agent runs in the same environment it is operating on. Context is not gathered from a separate external model of the system. It is gathered from the live environment itself, and native policy-based governance is part of the execution substrate rather than an afterthought.
+
 ## Licensing
 
 This repository is licensed under the [Apache License 2.0](LICENSES/APACHE-2.0.txt).
@@ -88,25 +97,98 @@ If you are new to Common Lisp, start with [Common Lisp as a Runtime](docs/common
 
 ## Architecture At A Glance
 
-These four diagrams summarize the current realtime-environment model, execution kernel, conversational-context loop, and governance loop that the architecture and runtime documentation describe in detail.
+The current architecture is best understood as a four-layer stack:
 
-### Realtime Introspective Environment Architecture
+```mermaid
+flowchart TB
+    React["React Surface Desktop"]
+    Actor["Actor System"]
+    Kernel["Governed Kernel"]
+    Runtime["SBCL / Common Lisp Runtime"]
 
-This diagram shows the defining architectural choice of `sbcl-agent`: the agent is not standing outside a target system and manipulating it through indirect interfaces. It shares the same live SBCL environment it observes, governs, remembers, and updates.
+    React --> Actor
+    Actor --> Kernel
+    Kernel --> Runtime
+```
 
-<img src="docs/assets/RealtimeIntrospectiveEnvironmentArchitecture.png" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+The actor system now sits between the presentation tier and the kernel:
 
-### Execution Kernel Architecture
+```mermaid
+flowchart TB
+    Root["ActorSystem"]
+    Chat["ContextChatActor(session)"]
+    Gov["GovernanceActor(session)"]
+    Run["RuntimeActor(session)"]
+    Edit["EditorActor(session)"]
+    Calc["CalculatorActor(session)"]
+    Env["EnvironmentActor(environment)"]
+    MCP["MCP Pool"]
+    Pool["SBCL Worker Pool"]
 
-<img src="docs/assets/KernelArchitecture.png" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+    Root --> Chat
+    Root --> Gov
+    Root --> Run
+    Root --> Edit
+    Root --> Calc
+    Root --> Env
+    Root --> MCP
 
-### Conversational Context Architecture
+    Pool --> Chat
+    Pool --> Gov
+    Pool --> Run
+    Pool --> Edit
+    Pool --> Calc
+    Pool --> Env
+```
 
-<img src="docs/assets/ConversationalContextArchitecture.png" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+Conversation-driven execution now follows an actor-routed governed path rather than a direct chat-to-runtime shortcut:
 
-### Governance Architecture
+```mermaid
+sequenceDiagram
+    participant UI as Surface UI
+    participant Chat as ContextChatActor
+    participant Gov as GovernanceActor
+    participant Runtime as RuntimeActor
+    participant Editor as EditorActor
+    participant Kernel as Governed Kernel
 
-<img src="docs/assets/GovernanceArchitecture.png" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+    UI->>Chat: submit user intent
+    Chat->>Gov: RequestExecution
+
+    alt runtime evaluation
+        Gov->>Runtime: AuthorizeRuntimeEvaluation
+        Runtime->>Kernel: invoke(runtime-eval)
+        Kernel-->>Runtime: result / evidence
+        Runtime-->>Chat: RuntimeReply
+    else mutation
+        Gov->>Editor: AuthorizePendingMutation
+        Editor->>Kernel: invoke(editor-mutation)
+        Kernel-->>Editor: result / evidence
+        Editor-->>Chat: MutationApplied
+    end
+
+    Chat-->>UI: project reply
+```
+
+The live Actor System surface exposes hierarchy, workflow, runtime pressure, and supervision directly from actor-system state:
+
+```mermaid
+flowchart LR
+    Panel["Actor System Surface"]
+    Overview["Overview"]
+    Hierarchy["Hierarchy Graph"]
+    Workflow["Workflow Graph"]
+    Supervision["Supervision"]
+    Detail["Node / Edge Detail"]
+
+    Panel --> Overview
+    Panel --> Hierarchy
+    Panel --> Workflow
+    Panel --> Supervision
+    Hierarchy --> Detail
+    Workflow --> Detail
+    Supervision --> Detail
+```
 
 ## Current Surface Desktop
 

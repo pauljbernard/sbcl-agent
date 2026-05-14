@@ -54,7 +54,32 @@ Today the model can receive:
 
 The retrieval dossier now sits inside a larger conversation-context assembly loop rather than acting as a standalone prompt-enrichment trick.
 
-<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart LR
+    UI["Surface UI"]
+    Chat["ContextChatActor"]
+    Thread["thread / turn / artifact state"]
+    Retrieval["retrieval dossier"]
+    Runtime["runtime and environment state"]
+    Policy["policy and operator posture"]
+    Provider["provider execution"]
+
+    UI --> Chat
+    Chat --> Thread
+    Chat --> Retrieval
+    Chat --> Runtime
+    Chat --> Policy
+    Thread --> Provider
+    Retrieval --> Provider
+    Runtime --> Provider
+    Policy --> Provider
+    Provider --> Thread
+```
+
+The canonical current diagrams for the broader architecture now live in:
+
+- [Conversation Runtime]({{ '/conversation-architecture.html' | relative_url }})
+- [Architecture and Design]({{ '/architecture.html' | relative_url }})
 
 The remaining gap is not “retrieval does not exist.” The remaining gap is hardening recall, ranking quality, mid-turn expansion policy, and eval-grade proof that the retrieval-and-cognition loop is consistently superior.
 

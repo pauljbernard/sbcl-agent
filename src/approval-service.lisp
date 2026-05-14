@@ -1,12 +1,18 @@
 (in-package #:sbcl-agent)
 
 (defun command-approve-policy-service (session policy)
+  (let* ((awaiting-records (desktop-task-records-awaiting-policy session policy))
+         (approved (approve-policy session policy)))
+    (dolist (record awaiting-records)
+      (mark-desktop-task-record-approved session record))
   (kernelize-service-command-response
    (make-service-command-response :approval
                                   :approve-policy
-                                  (list :approved (approve-policy session policy)
+                                  (list :approved approved
                                         :approved-policies (session-approved-policies session)
-                                        :capability-grants (session-capability-grants-summary session))
+                                        :capability-grants (session-capability-grants-summary session)
+                                        :desktop-task-records
+                                        (mapcar #'desktop-task-record-summary awaiting-records))
                                   :metadata (make-service-metadata :authority :environment
                                                                    :command-model :approval-command-v1
                                                                    :session session
@@ -14,7 +20,7 @@
    :session session
    :intention (format nil "Grant authority for policy ~A." policy)
    :capability :authority/grant
-   :authority :operator))
+   :authority :operator)))
 
 (defun command-request-work-item-approval-service (session work-item-id policy &key reason)
   (let ((work-item (find-work-item session work-item-id)))

@@ -5,7 +5,9 @@
   subscriptions
   memory
   plan
+  actor-mailboxes
   pending-actions
+  desktop-tasks
   incidents
   tasks
   workers

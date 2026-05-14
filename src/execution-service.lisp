@@ -52,6 +52,13 @@
     (and (listp calculator)
          (getf calculator :focused))))
 
+(defun editor-focused-surface-context-p (surface-context)
+  (let ((editor (and (listp surface-context)
+                     (getf surface-context :editor))))
+    (and (listp editor)
+         (or (getf editor :focused)
+             (getf editor :visible)))))
+
 (defun prompt-contains-any-p (prompt needles)
   (some (lambda (needle)
           (search needle prompt :test #'char-equal))
@@ -90,6 +97,70 @@
                  (progn
                    (write-string text out :start start)
                    (loop-finish))))))
+
+(defun extract-first-inline-code-snippet (prompt)
+  (let* ((text (or prompt ""))
+         (triple-start (search "```" text :test #'char=)))
+    (when triple-start
+      (let ((triple-end (search "```" text :start2 (+ triple-start 3) :test #'char=)))
+        (when triple-end
+          (return-from extract-first-inline-code-snippet
+            (string-trim '(#\Space #\Tab #\Newline)
+                         (subseq text (+ triple-start 3) triple-end))))))
+    (let ((single-start (position #\` text)))
+      (when single-start
+        (let ((single-end (position #\` text :start (1+ single-start))))
+          (when single-end
+            (string-trim '(#\Space #\Tab #\Newline)
+                         (subseq text (1+ single-start) single-end))))))))
+
+(defun extract-first-parenthesized-form (prompt)
+  (let* ((text (or prompt ""))
+         (start (position #\( text)))
+    (when start
+      (loop with depth = 0
+            for index from start below (length text)
+            for char = (char text index)
+            do (cond
+                 ((char= char #\()
+                  (incf depth))
+                 ((char= char #\))
+                  (decf depth)
+                  (when (<= depth 0)
+                    (return (subseq text start (1+ index))))))
+            finally (return nil)))))
+
+(defun editor-control-request-p (prompt)
+  (let ((text (string-downcase (or prompt ""))))
+    (and (or (search "editor" text :test #'char=)
+             (search "edit surface" text :test #'char=)
+             (search "editor surface" text :test #'char=))
+         (prompt-contains-any-p text '("add" "append" "insert" "put")))))
+
+(defun implied-editor-append-request-p (prompt)
+  (let ((text (string-downcase (or prompt ""))))
+    (and (prompt-contains-any-p text '("add" "append" "insert" "put"))
+         (or (extract-first-inline-code-snippet prompt)
+             (extract-first-parenthesized-form prompt)
+             (search "code:" text :test #'char=)))))
+
+(defun extract-editor-append-text (prompt)
+  (or (extract-first-inline-code-snippet prompt)
+      (extract-first-parenthesized-form prompt)
+      (let* ((text (or prompt ""))
+             (lower (string-downcase text))
+             (code-index (search "code:" lower :test #'char=)))
+        (when code-index
+          (let* ((start (+ code-index (length "code:")))
+                 (tail (string-trim '(#\Space #\Tab #\Newline) (subseq text start)))
+                 (tail-lower (string-downcase tail))
+                 (end (or (search " to the editor" tail-lower :test #'char=)
+                          (search " into the editor" tail-lower :test #'char=)
+                          (search " in the editor" tail-lower :test #'char=)
+                          (search " editor surface" tail-lower :test #'char=)
+                          (length tail))))
+            (string-trim '(#\Space #\Tab #\Newline #\" #\')
+                         (subseq tail 0 end)))))))
 
 (defun normalize-calculator-expression-text (prompt)
   (let ((text (string-downcase (or prompt ""))))
@@ -136,66 +207,130 @@
                       text)
              (prompt-contains-any-p text '("times" "plus" "minus" "divide" "multiplied"))))))
 
-(defun synthesize-calculator-actions-from-prompt (prompt surface-context)
+(defun plan-calculator-evaluate-expression-request (prompt surface-context surface-actions)
   (when (calculator-focused-surface-context-p surface-context)
-    (let ((token (extract-calculator-single-token prompt))
-          (expression (extract-calculator-expression prompt)))
-      (cond
-        ((and (calculator-expression-request-p prompt)
-              expression
-              (> (length expression) 0))
-         (list (make-assistant-action
-                :type :tool
-                :payload (list :tool-id :calculator/set-expression
-                               :arguments (list :expression expression)))
-               (make-assistant-action
-                :type :tool
-                :payload (list :tool-id :calculator/evaluate
-                               :arguments (list :expression expression)))))
-        ((and token
-              (= (length token) 1))
-         (list (make-assistant-action
-                :type :tool
-                :payload (list :tool-id :calculator/append-token
-                               :arguments (list :token token)))))
-        (t nil)))))
+    (let ((expression (extract-calculator-expression prompt)))
+      (when (and (calculator-expression-request-p prompt)
+                 expression
+                 (> (length expression) 0))
+        (list (make-governed-desktop-task-request
+               :requester :context-chat
+               :target :calculator
+               :operation :evaluate-expression
+               :capability :calculator-control
+               :payload (list :expression expression)
+               :surface-context surface-context
+               :surface-actions surface-actions
+               :metadata (list :prompt prompt
+                               :actor-slice :context-chat-calculator-v1)))))))
+
+(defun plan-calculator-append-token-request (prompt surface-context surface-actions)
+  (when (calculator-focused-surface-context-p surface-context)
+    (let ((token (extract-calculator-single-token prompt)))
+      (when (and token (= (length token) 1))
+        (list (make-governed-desktop-task-request
+               :requester :context-chat
+               :target :calculator
+               :operation :append-token
+               :capability :calculator-control
+               :payload (list :token token)
+               :surface-context surface-context
+               :surface-actions surface-actions
+               :metadata (list :prompt prompt
+                               :actor-slice :context-chat-calculator-v1)))))))
+
+(defun plan-editor-append-text-request (prompt surface-context surface-actions)
+  (when (and (editor-focused-surface-context-p surface-context)
+             (or (editor-control-request-p prompt)
+                 (implied-editor-append-request-p prompt)))
+    (let ((text (extract-editor-append-text prompt)))
+      (when (and text (> (length text) 0))
+        (let* ((editor-context (and (listp surface-context)
+                                    (getf surface-context :editor)))
+               (scope-id (and (listp editor-context)
+                              (or (getf editor-context :scope-id)
+                                  (getf editor-context :scopeId)
+                                  (getf editor-context :SCOPE-ID)
+                                  (getf editor-context :SCOPEID))))
+               (buffer-id (and (listp editor-context)
+                               (or (getf editor-context :buffer-id)
+                                   (getf editor-context :bufferId)
+                                   (getf editor-context :BUFFER-ID)
+                                   (getf editor-context :BUFFERID))))
+               (pending-action-id (make-pending-action-id :editor)))
+          (list (make-governed-desktop-task-request
+                 :requester :context-chat
+                 :target :editor
+                 :operation :append-text
+                 :capability :workspace-write
+                 :payload (list :text text)
+                 :surface-context surface-context
+                 :surface-actions surface-actions
+                 :metadata (append (list :prompt prompt
+                                         :actor-slice :context-chat-editor-v1
+                                         :pending-action-id pending-action-id)
+                                   (when scope-id
+                                     (list :receiver-scope scope-id
+                                           :scope-id scope-id))
+                                   (when buffer-id
+                                     (list :buffer-id buffer-id))))))))))
+
+(defun compatibility-assistant-actions-for-desktop-task-request (request)
+  (let ((target (desktop-task-request-target request))
+        (operation (desktop-task-request-operation request))
+        (payload (desktop-task-request-payload request)))
+    (cond
+      ((and (eq target :calculator)
+            (eq operation :evaluate-expression))
+       (let ((expression (getf payload :expression)))
+         (when expression
+           (list (make-assistant-action
+                  :type :tool
+                  :payload (list :tool-id :calculator/set-expression
+                                 :arguments (list :expression expression)))
+                 (make-assistant-action
+                  :type :tool
+                  :payload (list :tool-id :calculator/evaluate
+                                 :arguments (list :expression expression)))))))
+      ((and (eq target :calculator)
+            (eq operation :append-token))
+       (let ((token (getf payload :token)))
+         (when token
+           (list (make-assistant-action
+                  :type :tool
+                  :payload (list :tool-id :calculator/append-token
+                                 :arguments (list :token token)))))))
+      ((and (eq target :editor)
+            (eq operation :append-text))
+       (let ((text (getf payload :text)))
+         (when text
+           (list (make-assistant-action
+                  :type :tool
+                  :payload (list :tool-id :editor/append-text
+                                 :arguments (list :text text)))))))
+      (t nil))))
+
+(defun compatibility-response-actions-from-governed-desktop-task-requests (prompt surface-context)
+  (mapcan #'compatibility-assistant-actions-for-desktop-task-request
+          (plan-governed-desktop-task-requests prompt surface-context nil)))
 
 (defun effective-response-actions (response prompt surface-context session)
   (let ((actions (assistant-response-actions response)))
     (or actions
-        (let ((fallback (synthesize-calculator-actions-from-prompt prompt surface-context)))
+        (let ((fallback (compatibility-response-actions-from-governed-desktop-task-requests
+                         prompt
+                         surface-context)))
           (when fallback
             (append-session-event session
                                   :assistant-action-fallback-synthesized
                                   (list :prompt prompt
+                                        :source :desktop-task-protocol
                                         :action-count (length fallback)
                                         :actions fallback)
                                   :family :assistant
                                   :visibility :operator))
           fallback)
         '())))
-
-(defun direct-calculator-actions-for-prompt (prompt surface-context)
-  (let ((actions (synthesize-calculator-actions-from-prompt prompt surface-context)))
-    (and actions
-         (every (lambda (action)
-                  (and (eq (assistant-action-type action) :tool)
-                       (let* ((payload (assistant-action-payload action))
-                              (tool-id (or (getf payload :tool-id)
-                                           (getf payload :TOOL-ID))))
-                         (member tool-id
-                                 '(:calculator/append-token
-                                   :calculator/set-expression
-                                   :calculator/evaluate
-                                   :calculator/clear
-                                   :calculator/backspace
-                                   :calculator/set-mode
-                                   :calculator/set-base
-                                   :calculator/set-word-size
-                                   :calculator/set-angle-unit)
-                                 :test #'eq))))
-                actions)
-         actions)))
 
 (defun calculator-action-expression (action)
   (let* ((payload (assistant-action-payload action))
@@ -226,7 +361,7 @@
                "Set the calculator expression to ~S and evaluated it. Result: ~A."
                expression
                latest-display-value))
-      (latest-result-summary
+      ((and expression latest-result-summary)
        (format nil
                "Set the calculator expression to ~S and evaluated it. ~A"
                expression
@@ -242,10 +377,624 @@
       (t
        "Updated the focused calculator."))))
 
-(defun run-direct-conversation-calculator-actions (session prompt actions
-                                                    &key (source :say) (operator-mode :conversation)
-                                                      surface-context surface-actions)
-  (declare (ignore operator-mode))
+(defun direct-editor-assistant-message (actions)
+  (let* ((first-action (first actions))
+         (payload (and first-action (assistant-action-payload first-action)))
+         (arguments (and payload
+                         (or (getf payload :arguments)
+                             (getf payload :ARGUMENTS))))
+         (text (and (listp arguments)
+                    (or (getf arguments :text)
+                        (getf arguments :TEXT)))))
+    (if text
+        (format nil "Appended ~A to the active editor buffer."
+                (if (> (length text) 120)
+                    (format nil "~S..." (subseq text 0 120))
+                    (format nil "~S" text)))
+        "Updated the active editor buffer.")))
+
+(defun direct-runtime-assistant-message (results fallback-summary)
+  (or (some (lambda (entry)
+              (let ((native-result (getf entry :native-result)))
+                (and (listp native-result)
+                     (or (getf native-result :summary)
+                         (getf native-result :SUMMARY)))))
+            results)
+      fallback-summary))
+
+(defun runtime-outbox-entry-for-records (session records)
+  (let ((request-ids (remove nil
+                             (mapcar #'desktop-task-record-request-id records))))
+    (find-if (lambda (entry)
+               (let ((request-id (actor-mailbox-entry-request-id entry)))
+                 (and request-id
+                      (member request-id request-ids :test #'string=))))
+             (actor-mailbox-entries session :runtime-outbox))))
+
+(defun runtime-outbox-payload-for-records (session records)
+  (let ((entry (runtime-outbox-entry-for-records session records)))
+    (and entry (actor-mailbox-entry-payload entry))))
+
+(defun runtime-outbox-reply-summary-for-records (session records)
+  (let ((entry (runtime-outbox-entry-for-records session records)))
+    (and entry (actor-mailbox-entry-summary entry))))
+
+(defun runtime-outbox-assistant-message (session records fallback-summary)
+  (let ((payload (runtime-outbox-payload-for-records session records)))
+    (or (and (listp payload)
+             (or (getf payload :summary)
+                 (getf payload :SUMMARY)))
+        fallback-summary)))
+
+(defun runtime-actor-flow-for-records (session records)
+  (let* ((session-id (or (some #'desktop-task-record-session-id records)
+                         (agent-session-id session)))
+         (actor-message-id
+           (some (lambda (record)
+                   (let ((message (desktop-task-record-actor-message record)))
+                     (and message (actor-message-id message))))
+                 records)))
+    (service-response-data
+     (query-desktop-task-actor-flow-service session
+                                            :session-id session-id
+                                            :actor-message-id actor-message-id
+                                            :latest-only-p t))))
+
+(defun runtime-result-output-metadata (runtime-result-payload)
+  (when (listp runtime-result-payload)
+    (let ((values (or (getf runtime-result-payload :values)
+                      (getf runtime-result-payload :VALUES))))
+      (append (when (member :result runtime-result-payload)
+                (list :result (getf runtime-result-payload :result)))
+              (when values
+                (list :values values))
+              (when (member :package runtime-result-payload)
+                (list :package (getf runtime-result-payload :package)))
+              (when (member :form runtime-result-payload)
+                (list :form (getf runtime-result-payload :form)))))))
+
+(defun native-desktop-task-result-summary (native-result fallback-summary)
+  (or (and (listp native-result)
+           (or (getf native-result :summary)
+               (getf native-result :SUMMARY)))
+      fallback-summary))
+
+(defun action-result-summary-message (results fallback-summary)
+  (or (some (lambda (entry)
+              (let ((payload (getf entry :result)))
+                (and (listp payload)
+                     (or (getf payload :summary)
+                         (getf payload :SUMMARY)
+                         (getf payload :message)
+                         (getf payload :MESSAGE)))))
+            results)
+      fallback-summary))
+
+(defun desktop-task-mcp-request-envelope (manifest request resolution)
+  (json-safe-value
+   (list :protocol-version +desktop-task-protocol-version+
+         :task (list :request-id (desktop-task-request-id request)
+                     :requester (desktop-task-request-requester request)
+                     :target (desktop-task-request-target request)
+                     :operation (desktop-task-request-operation request)
+                     :capability (or (desktop-task-request-capability request)
+                                     (desktop-task-manifest-capability manifest))
+                     :idempotency-key (desktop-task-request-idempotency-key request)
+                     :created-at (desktop-task-request-created-at request))
+         :manifest (desktop-task-manifest-summary manifest)
+         :resolution (desktop-task-resolution-summary-data resolution)
+         :payload (desktop-task-request-payload request)
+         :surface-context (desktop-task-request-surface-context request)
+         :surface-actions (desktop-task-request-surface-actions request)
+         :metadata (desktop-task-request-metadata request))))
+
+(defun desktop-task-mcp-environment (config)
+  (let ((path (ignore-errors (getenv "PATH")))
+        (home (ignore-errors (getenv "HOME"))))
+    (append
+     (remove nil (list (and path (format nil "PATH=~A" path))
+                       (and home (format nil "HOME=~A" home))))
+     (loop for entry in (or (mcp-server-config-environment-variables config) '())
+           for key = (cond
+                       ((consp entry) (car entry))
+                       ((and (listp entry) (>= (length entry) 2)) (first entry))
+                       (t nil))
+           for value = (cond
+                         ((consp entry) (cdr entry))
+                         ((and (listp entry) (>= (length entry) 2)) (second entry))
+                         (t nil))
+           when key
+             collect (format nil "~A=~A" key (or value ""))))))
+
+(defun desktop-task-mcp-body-pathname ()
+  (merge-pathnames
+   (format nil "sbcl-agent-mcp-body-~D-~A.json"
+           (get-universal-time)
+           (gensym "MCP-BODY-"))
+   (uiop:temporary-directory)))
+
+(defun write-desktop-task-mcp-body-file (body)
+  (let ((body-path (desktop-task-mcp-body-pathname)))
+    (ensure-directories-exist body-path)
+    (with-open-file (stream body-path
+                            :direction :output
+                            :if-exists :supersede
+                            :if-does-not-exist :create)
+      (write-string body stream))
+    body-path))
+
+(defun normalize-mcp-desktop-task-response (response fallback-summary)
+  (let* ((decoded (cond
+                    ((stringp response)
+                     (ignore-errors (parse-json response)))
+                    (t response)))
+         (normalized (cond
+                       ((json-object-p decoded)
+                        (json-object->keyword-plist decoded))
+                       ((listp decoded) decoded)
+                       (t '())))
+         (result (let ((payload (or (getf normalized :result)
+                                    (getf normalized :RESULT))))
+                   (cond
+                     ((json-object-p payload)
+                      (json-object->keyword-plist payload))
+                     (t payload))))
+         (metadata (let ((payload (or (getf normalized :metadata)
+                                      (getf normalized :METADATA))))
+                     (cond
+                       ((json-object-p payload)
+                        (json-object->keyword-plist payload))
+                       ((listp payload) payload)
+                       (t '()))))
+         (action-results (copy-list
+                          (or (getf normalized :action-results)
+                              (getf normalized :ACTION-RESULTS)
+                              '())))
+         (status (or (getf normalized :status)
+                     (getf normalized :STATUS)
+                     :completed))
+         (summary (or (getf normalized :summary)
+                      (getf normalized :SUMMARY)
+                      (and (listp result)
+                           (or (getf result :summary)
+                               (getf result :SUMMARY)
+                               (getf result :message)
+                               (getf result :MESSAGE)))
+                      fallback-summary)))
+    (list :status status
+          :summary summary
+          :result result
+          :metadata metadata
+          :action-results action-results)))
+
+(defun invoke-stdio-mcp-server-config (config body)
+  (unless (mcp-server-config-command config)
+    (error "MCP stdio server ~A is missing :command."
+           (mcp-server-config-id config)))
+  (let ((stdout (make-string-output-stream))
+        (stderr (make-string-output-stream))
+        (body-path (write-desktop-task-mcp-body-file body)))
+    (unwind-protect
+         (with-open-file (input body-path :direction :input)
+           (let ((process (sb-ext:run-program
+                           (mcp-server-config-command config)
+                           (copy-list (or (mcp-server-config-arguments config) '()))
+                           :search t
+                           :input input
+                           :output stdout
+                           :error stderr
+                           :wait t
+                           :directory (mcp-server-config-working-directory config)
+                           :environment (desktop-task-mcp-environment config))))
+             (let ((exit-code (sb-ext:process-exit-code process))
+                   (stdout-string (get-output-stream-string stdout))
+                   (stderr-string (get-output-stream-string stderr)))
+               (unless (zerop exit-code)
+                 (error "MCP stdio server ~A exited with code ~D: ~A"
+                        (mcp-server-config-id config)
+                        exit-code
+                        stderr-string))
+               stdout-string)))
+      (when (probe-file body-path)
+        (delete-file body-path)))))
+
+(defun invoke-http-mcp-server-config (config body)
+  (unless (mcp-server-config-endpoint config)
+    (error "MCP HTTP server ~A is missing :endpoint."
+           (mcp-server-config-id config)))
+  (curl-json-request-with-headers
+   (mcp-server-config-endpoint config)
+   (list "Content-Type: application/json")
+   body
+   :label (format nil "MCP HTTP request (~A)" (mcp-server-config-id config))))
+
+(defun invoke-internal-desktop-task-backend (manifest request resolution session)
+  (declare (ignore manifest request))
+  (let ((actions (copy-list (desktop-task-resolution-actions resolution))))
+    (cond
+      ((null actions)
+       (list :summary (desktop-task-resolution-summary resolution)
+             :action-results '()))
+      ((some #'assistant-action-requires-approval-p actions)
+       (error "Internal desktop task backend invocation requires approval before execution for ~S/~S."
+              (desktop-task-resolution-target resolution)
+              (desktop-task-resolution-operation resolution)))
+      (t
+       (let ((results (execute-assistant-action-list actions session)))
+         (list :summary (action-result-summary-message results
+                                                      (desktop-task-resolution-summary resolution))
+               :action-results results))))))
+
+(defun invoke-mcp-desktop-task-backend (manifest request resolution session)
+  (let* ((server-id (desktop-task-manifest-backend-ref manifest))
+         (environment (and session (session-bound-environment session)))
+         (config (and (stringp server-id)
+                      (find-desktop-task-mcp-server-config server-id environment))))
+    (unless config
+      (error "Unknown MCP server config ~S for desktop task ~S/~S."
+             server-id
+             (desktop-task-request-target request)
+             (desktop-task-request-operation request)))
+    (unless (mcp-server-config-enabled-p config)
+      (error "MCP server ~A is disabled."
+             (mcp-server-config-id config)))
+    (let* ((body (emit-json
+                  (desktop-task-mcp-request-envelope manifest request resolution)))
+           (raw-response
+             (case (mcp-server-config-transport config)
+               (:stdio
+                (invoke-stdio-mcp-server-config config body))
+               (:http
+                (invoke-http-mcp-server-config config body))
+               (otherwise
+                (error "Unsupported MCP transport ~S for server ~A."
+                       (mcp-server-config-transport config)
+                       (mcp-server-config-id config))))))
+      (normalize-mcp-desktop-task-response raw-response
+                                           (desktop-task-resolution-summary resolution)))))
+
+(register-desktop-task-backend-invoker :internal
+                                       #'invoke-internal-desktop-task-backend)
+
+(register-desktop-task-backend-invoker :mcp
+                                       #'invoke-mcp-desktop-task-backend)
+
+(defun resolve-calculator-desktop-task-request (request session)
+  (declare (ignore session))
+  (let* ((operation (desktop-task-request-operation request))
+         (payload (desktop-task-request-payload request)))
+    (case operation
+      (:evaluate-expression
+       (let ((expression (getf payload :expression)))
+         (make-desktop-task-resolution-native
+          request
+          (format nil "Evaluate ~A in the calculator." expression)
+          (lambda (active-session)
+            (service-response-data
+             (command-calculator-evaluate-service active-session expression)))
+          :metadata (list :expression expression
+                          :receiver-actor :calculator
+                          :receiver-mode :actor-server
+                          :actor-slice :context-chat-calculator-v1))))
+      (:append-token
+       (let ((token (getf payload :token)))
+         (make-desktop-task-resolution-native
+          request
+          (format nil "Append token ~A in the calculator." token)
+          (lambda (active-session)
+            (service-response-data
+             (command-calculator-append-token-service active-session token)))
+          :metadata (list :token token
+                          :receiver-actor :calculator
+                          :receiver-mode :actor-server
+                          :actor-slice :context-chat-calculator-v1))))
+      (otherwise
+       (error "Unsupported calculator desktop task operation ~S" operation)))))
+
+(defun resolve-editor-desktop-task-request (request session)
+  (declare (ignore session))
+  (let* ((operation (desktop-task-request-operation request))
+         (payload (desktop-task-request-payload request))
+         (surface-context (desktop-task-request-surface-context request))
+         (editor-context (and (listp surface-context)
+                              (getf surface-context :editor))))
+    (case operation
+      (:append-text
+       (let ((text (getf payload :text))
+             (pending-action-id (or (getf (desktop-task-request-metadata request) :pending-action-id)
+                                    (getf (desktop-task-request-metadata request) :PENDING-ACTION-ID)))
+             (scope-id (or (and (listp editor-context)
+                                (or (getf editor-context :scope-id)
+                                    (getf editor-context :scopeId)
+                                    (getf editor-context :SCOPE-ID)
+                                    (getf editor-context :SCOPEID)))
+                           nil))
+             (buffer-id (or (and (listp editor-context)
+                                 (or (getf editor-context :buffer-id)
+                                     (getf editor-context :bufferId)
+                                     (getf editor-context :BUFFER-ID)
+                                     (getf editor-context :BUFFERID)))
+                            nil))
+             (package-name (or (and (listp editor-context)
+                                    (or (getf editor-context :package-name)
+                                        (getf editor-context :packageName)
+                                        (getf editor-context :PACKAGE-NAME)
+                                        (getf editor-context :PACKAGENAME)))
+                               nil)))
+         (make-desktop-task-resolution-native
+          request
+          "Append text to the active editor buffer."
+          (lambda (active-session)
+            (tool-editor-append-text active-session
+                                     :text text
+                                     :scope-id scope-id
+                                     :buffer-id buffer-id
+                                     :package-name package-name
+                                     :pending-action-id pending-action-id))
+          :metadata (append (list :text text)
+                            '(:receiver-actor :editor
+                              :receiver-mode :actor-server
+                              :actor-slice :context-chat-editor-v1)
+                            (when pending-action-id (list :pending-action-id pending-action-id))
+                            (when scope-id (list :scope-id scope-id))
+                            (when buffer-id (list :buffer-id buffer-id))
+                            (when package-name (list :package-name package-name))))))
+      (otherwise
+       (error "Unsupported editor desktop task operation ~S" operation)))))
+
+(defun resolve-runtime-desktop-task-request (request session)
+  (declare (ignore session))
+  (let* ((operation (desktop-task-request-operation request))
+         (payload (desktop-task-request-payload request)))
+    (case operation
+      (:evaluate-form
+       (let ((form (getf payload :form))
+             (package-name (or (getf payload :package)
+                               (getf payload :PACKAGE)
+                               (getf payload :package-name)
+                               (getf payload :PACKAGE-NAME)))
+             (reason (or (getf payload :reason)
+                         (getf payload :REASON)
+                         :direct-form)))
+         (make-desktop-task-resolution-native
+          request
+          (format nil "Evaluate ~A in the active runtime." form)
+          (lambda (active-session)
+            (let* ((tool-result (tool-runtime-eval active-session
+                                                   :form form
+                                                   :package package-name))
+                   (summary (runtime-eval-assistant-message tool-result reason)))
+              (append tool-result
+                      (list :summary summary))))
+          :metadata (append (list :form form
+                                  :reason reason
+                                  :receiver-actor :runtime
+                                  :receiver-mode :actor-server
+                                  :actor-slice :context-chat-runtime-v1)
+                            (when package-name
+                              (list :package-name package-name))
+                            (when (fboundp 'default-runtime-id)
+                              (list :runtime-id (default-runtime-id)))))))
+      (otherwise
+       (error "Unsupported runtime desktop task operation ~S" operation)))))
+
+(register-desktop-task-operation
+ :calculator
+ :evaluate-expression
+ #'resolve-calculator-desktop-task-request
+ :capability :calculator-control
+ :description "Evaluate a calculator expression in the active calculator surface."
+ :request-schema '(:expression string)
+ :result-schema '(:display-value string :summary string)
+ :approval-policy :implicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :calculator-surface
+ :tags '(:surface :calculator :expression))
+
+(register-desktop-task-planner
+ :calculator
+ :evaluate-expression
+ #'plan-calculator-evaluate-expression-request)
+
+(register-desktop-task-operation
+ :calculator
+ :append-token
+ #'resolve-calculator-desktop-task-request
+ :capability :calculator-control
+ :description "Append a token into the active calculator expression."
+ :request-schema '(:token string)
+ :result-schema '(:summary string)
+ :approval-policy :implicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :calculator-surface
+ :tags '(:surface :calculator :token))
+
+(register-desktop-task-planner
+ :calculator
+ :append-token
+ #'plan-calculator-append-token-request)
+
+(register-desktop-task-operation
+ :editor
+ :append-text
+ #'resolve-editor-desktop-task-request
+ :capability :workspace-write
+ :description "Append text to the active editor buffer."
+ :request-schema '(:text string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :editor-surface
+ :tags '(:surface :editor :write))
+
+(register-desktop-task-planner
+ :editor
+ :append-text
+ #'plan-editor-append-text-request)
+
+(register-desktop-task-operation
+ :runtime
+ :evaluate-form
+ #'resolve-runtime-desktop-task-request
+ :capability :runtime-eval-safe
+ :description "Evaluate a Common Lisp form in the active runtime package."
+ :request-schema '(:form string :package-name string :reason keyword)
+ :result-schema '(:summary string :result t :values list)
+ :approval-policy :implicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :runtime-primary
+ :tags '(:runtime :eval :actor))
+
+(defun desktop-task-executor-kind (requests)
+  (let ((targets (remove-duplicates (mapcar #'desktop-task-request-target requests) :test #'eq)))
+    (cond
+      ((and (= (length targets) 1) (eq (first targets) :calculator)) :calculator)
+      ((and (= (length targets) 1) (eq (first targets) :runtime)) :runtime)
+      ((and (= (length targets) 1) (eq (first targets) :editor)) :workspace)
+      (t :desktop-task))))
+
+(defun desktop-task-executor-name (requests)
+  (let ((targets (remove-duplicates (mapcar #'desktop-task-request-target requests) :test #'eq)))
+    (cond
+      ((and (= (length targets) 1) (eq (first targets) :calculator))
+       "conversation-desktop-task-calculator")
+      ((and (= (length targets) 1) (eq (first targets) :runtime))
+       "conversation-runtime-eval")
+      ((and (= (length targets) 1) (eq (first targets) :editor))
+       "conversation-desktop-task-editor")
+      (t
+       "conversation-desktop-task"))))
+
+(defun desktop-task-executor-policy-decision (requests)
+  (let ((capability (or (some #'desktop-task-request-capability requests) :safe-read)))
+    (mutation-policy-decision-summary
+     capability
+     :decision :allowed
+     :reason "Conversation prompt was recognized as a governed desktop task request.")))
+
+(defun direct-desktop-task-assistant-message (requests actions results)
+  (let ((targets (remove-duplicates (mapcar #'desktop-task-request-target requests) :test #'eq)))
+    (cond
+      ((and results
+            (getf (first results) :invocation-error))
+       (or (getf (getf (first results) :invocation-error) :summary)
+           (getf (getf (first results) :invocation-error) :error)
+           "The requested desktop task failed."))
+      ((and (= (length targets) 1) (eq (first targets) :calculator))
+       (or (and results
+                (native-desktop-task-result-summary
+                 (getf (first results) :native-result)
+                 nil))
+           (and results
+                (desktop-task-invocation-result-summary
+                 (getf (first results) :invocation-result)
+                 nil))
+           (direct-calculator-assistant-message actions results)))
+      ((and (= (length targets) 1) (eq (first targets) :editor))
+       (or (and results
+                (native-desktop-task-result-summary
+                 (getf (first results) :native-result)
+                 nil))
+           (and results
+                (desktop-task-invocation-result-summary
+                 (getf (first results) :invocation-result)
+                 nil))
+           (direct-editor-assistant-message actions)))
+      ((and (= (length targets) 1) (eq (first targets) :runtime))
+       (or (and results
+                (native-desktop-task-result-summary
+                 (getf (first results) :native-result)
+                 nil))
+           (and results
+                (desktop-task-invocation-result-summary
+                 (getf (first results) :invocation-result)
+                 nil))
+           (direct-runtime-assistant-message results
+                                            "Evaluated the requested runtime form.")))
+      (t
+       "Completed the requested desktop task."))))
+
+(defun direct-desktop-task-assistant-message-from-records (requests records actions results)
+  (let ((targets (remove-duplicates (mapcar #'desktop-task-request-target requests) :test #'eq)))
+    (cond
+      ((some (lambda (record)
+               (member (desktop-task-record-status record)
+                       '(:failed :retryable-failure)
+                       :test #'eq))
+             records)
+       (or (some #'desktop-task-record-result-summary-text records)
+           "The requested desktop task failed."))
+      ((some (lambda (record)
+               (eq (desktop-task-record-status record) :awaiting-approval))
+             records)
+       (or (some #'desktop-task-record-result-summary-text records)
+           "Awaiting approval before execution."))
+      ((and (= (length records) 1)
+            (= (length targets) 1)
+            (member (first targets) '(:calculator :editor) :test #'eq))
+       (or (desktop-task-record-result-summary-text (first records))
+           (direct-desktop-task-assistant-message requests actions results)))
+      ((= (length records) 1)
+       (or (desktop-task-record-result-summary-text (first records))
+           "Completed the requested desktop task."))
+      (t
+       (format nil "Completed ~D desktop tasks." (length records))))))
+
+(defun desktop-task-record-policy-ids (records)
+  (remove-duplicates
+   (remove nil (mapcar #'desktop-task-record-policy-id records))
+   :test #'eq))
+
+(defun calculator-control-actions-p (actions)
+  (and actions
+       (every (lambda (action)
+                (and (eq (assistant-action-type action) :tool)
+                     (let* ((payload (assistant-action-payload action))
+                            (tool-id (or (getf payload :tool-id)
+                                         (getf payload :TOOL-ID))))
+                       (member tool-id
+                               '(:calculator/append-token
+                                 :calculator/set-expression
+                                 :calculator/evaluate
+                                 :calculator/clear
+                                 :calculator/backspace
+                                 :calculator/set-mode
+                                 :calculator/set-base
+                                 :calculator/set-word-size
+                                 :calculator/set-angle-unit)
+                               :test #'eq))))
+              actions)))
+
+(defun append-conversation-calculator-control-event (session thread turn prompt actions results
+                                                     &key source auto-routed-p direct-calculator-p)
+  (append-session-event session
+                        :conversation-calculator-control
+                        (list :prompt prompt
+                              :action-count (length actions)
+                              :actions actions
+                              :result-count (length results))
+                        :family :calculator
+                        :thread-id (thread-id thread)
+                        :turn-id (turn-id turn)
+                        :visibility :operator
+                        :metadata (append (when direct-calculator-p
+                                            (list :direct-calculator-p t))
+                                          (when auto-routed-p
+                                            (list :auto-routed-p t))
+                                          (when source
+                                            (list :source source)))))
+
+(defun run-direct-conversation-desktop-task-requests (session prompt requests
+                                                       &key (source :say) (operator-mode :conversation)
+                                                         surface-context surface-actions)
   (let* ((thread (current-thread session)))
     (append-transcript-entry session :user prompt)
     (emit-conversation-progress (conversation-progress-phase source :started)
@@ -253,76 +1002,447 @@
                                       :stream-p nil
                                       :thread-id (thread-id thread)
                                       :auto-routed-p t
-                                      :direct-calculator-p t))
-    (let* ((user-message (create-message session thread :user prompt
+                                      :desktop-task-p t
+                                      :request-count (length requests)))
+    (let* ((request-manifests
+             (mapcar (lambda (desktop-task-request)
+                       (or (find-desktop-task-manifest (desktop-task-request-target desktop-task-request)
+                                                      (desktop-task-request-operation desktop-task-request))
+                           (error "No desktop task manifest is registered for ~S/~S"
+                                  (desktop-task-request-target desktop-task-request)
+                                  (desktop-task-request-operation desktop-task-request))))
+                     requests))
+           (requests
+             (loop for desktop-task-request in requests
+                   for manifest in request-manifests
+                   collect (ensure-governed-desktop-task-request-state
+                            desktop-task-request
+                            :session-id (agent-session-id session)
+                            :manifest manifest)))
+           (request-summaries (mapcar #'desktop-task-request-summary requests))
+           (user-message (create-message session thread :user prompt
                                          :metadata (list :source source
                                                          :auto-routed-p t
-                                                         :direct-calculator-p t
+                                                         :desktop-task-p t
                                                          :surface-context surface-context
-                                                         :surface-actions surface-actions)))
+                                                         :surface-actions surface-actions
+                                                         :desktop-task-requests request-summaries)))
            (turn (start-turn session thread user-message
                              :metadata (list :source source
                                              :streamed-p nil
                                              :auto-routed-p t
-                                             :direct-calculator-p t
+                                             :desktop-task-p t
                                              :surface-context surface-context
-                                             :surface-actions surface-actions)))
-           (immediate-results (execute-assistant-action-list actions session :thread thread :turn turn))
-           (action-report (list :immediate-actions actions
+                                             :surface-actions surface-actions
+                                             :desktop-task-requests request-summaries)))
+           (request (prepare-direct-conversation-request session
+                                                        prompt
+                                                        thread
+                                                        turn
+                                                        source
+                                                        operator-mode
+                                                        :surface-context surface-context
+                                                        :surface-actions surface-actions))
+           (manifest-summaries (mapcar #'desktop-task-manifest-summary request-manifests))
+           (desktop-task-records
+             (loop for desktop-task-request in requests
+                   for manifest in request-manifests
+                   collect (register-desktop-task-record
+                           session
+                           (make-desktop-task-record-for-request
+                            desktop-task-request
+                            manifest
+                            :session-id (agent-session-id session)
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id turn)
+                            :metadata (list :source source
+                                            :auto-routed-p t
+                                             :surface-context surface-context
+                                             :surface-actions surface-actions)))))
+           (resolved-requests (mapcar (lambda (desktop-task-request)
+                                        (resolve-governed-desktop-task-request desktop-task-request session))
+                                      requests))
+           (resolution-summaries (mapcar #'desktop-task-resolution-summary-data resolved-requests))
+           (desktop-task-bindings
+             (loop for resolution in resolved-requests
+                   for task-record in desktop-task-records
+                   collect (list :record-id (desktop-task-record-id task-record)
+                                 :request-id (desktop-task-resolution-request-id resolution)
+                                 :target (desktop-task-resolution-target resolution)
+                                 :operation (desktop-task-resolution-operation resolution)
+                                 :actions (copy-list (desktop-task-resolution-actions resolution)))))
+           (actions (mapcan (lambda (entry)
+                              (copy-list (desktop-task-resolution-actions entry)))
+                            resolved-requests))
+           (operation (start-operation session
+                                       thread
+                                       turn
+                                       (desktop-task-executor-kind requests)
+                                       (desktop-task-executor-name requests)
+                                       (list :prompt prompt
+                                             :request-count (length requests)
+                                             :requests request-summaries
+                                             :manifests manifest-summaries
+                                             :resolutions resolution-summaries
+                                             :actions actions)
+                                       :policy-decision
+                                 (desktop-task-executor-policy-decision requests)
+                                       :metadata (list :source source
+                                                       :auto-routed-p t
+                                                       :desktop-task-p t
+                                                       :desktop-task-requests request-summaries
+                                                       :desktop-task-manifests manifest-summaries
+                                                       :desktop-task-resolutions resolution-summaries
+                                                       :retrieval-summary
+                                                       (provider-request-retrieval-summary request)
+                                                       :cognition-summary
+                                                       (provider-request-cognition-summary request)
+                                                       :reasoning-summary
+                                                       (provider-request-reasoning-summary request)
+                                                       :planning-summary
+                                                       (provider-request-planning-summary request))))
+           (approval-required-p
+             (some #'identity
+                   (mapcar #'desktop-task-request-approval-required-p
+                           requests
+                           request-manifests
+                           resolved-requests)))
+           (staged-actions (if approval-required-p actions '()))
+           (immediate-actions (if approval-required-p '() actions))
+           (invocation-results
+             (if approval-required-p
+                 (loop repeat (length resolved-requests) collect nil)
+                 (loop for desktop-task-request in requests
+                       for manifest in request-manifests
+                       for resolution in resolved-requests
+                       collect (handler-case
+                                   (let ((result (getf (invoke-governed-desktop-task-request
+                                                        desktop-task-request
+                                                        session
+                                                        :resolution resolution
+                                                        :manifest manifest)
+                                                       :result)))
+                                     (list :request-id (desktop-task-resolution-request-id resolution)
+                                           :invocation-result result
+                                           :native-result (and (desktop-task-resolution-executor resolution)
+                                                               result)))
+                                 (error (condition)
+                                   (list :request-id (desktop-task-resolution-request-id resolution)
+                                         :invocation-error
+                                         (list :summary "Desktop task invocation failed."
+                                               :error (princ-to-string condition)
+                                               :failure-classification :execution)))))))
+           (immediate-results
+             (if approval-required-p
+                 '()
+                 (mapcan (lambda (entry)
+                           (if (getf entry :invocation-error)
+                               '()
+                               (desktop-task-invocation-action-results
+                                (getf entry :invocation-result))))
+                         invocation-results)))
+           (desktop-task-results
+             (loop for resolution in resolved-requests
+                   for task-record in desktop-task-records
+                   for invocation in invocation-results
+                   collect
+                       (make-desktop-task-result
+                        :request-id (desktop-task-resolution-request-id resolution)
+                        :target (desktop-task-resolution-target resolution)
+                        :operation (desktop-task-resolution-operation resolution)
+                        :status (if approval-required-p
+                                    :awaiting-approval
+                                    (if (and invocation
+                                             (getf invocation :invocation-error))
+                                        :failed
+                                        :completed))
+                        :summary (if approval-required-p
+                                     "Awaiting approval before execution."
+                                     (or (and invocation
+                                              (getf invocation :invocation-error)
+                                              (or (getf (getf invocation :invocation-error) :summary)
+                                                  (getf (getf invocation :invocation-error) :error)))
+                                         (and invocation
+                                              (desktop-task-invocation-result-summary
+                                               (getf invocation :invocation-result)
+                                               nil))
+                                         (native-desktop-task-result-summary
+                                          (and invocation (getf invocation :native-result))
+                                          (desktop-task-resolution-summary resolution))))
+                        :action-results (if approval-required-p
+                                            '()
+                                            (append (if (and invocation
+                                                             (getf invocation :invocation-error))
+                                                        (list (list :request-id (getf invocation :request-id)
+                                                                    :error (getf invocation :invocation-error)))
+                                                        (copy-list (or (and invocation
+                                                                            (desktop-task-invocation-action-results
+                                                                             (getf invocation :invocation-result)))
+                                                                       '())))
+                                                    (if (and invocation
+                                                             (not (getf invocation :invocation-error))
+                                                             (getf invocation :native-result))
+                                                        (list (list :request-id (getf invocation :request-id)
+                                                                    :native-result (getf invocation :native-result)))
+                                                        '())))
+                        :metadata (append (desktop-task-resolution-metadata resolution)
+                                          (list :approval-required-p approval-required-p
+                                                :invocation-failed-p (not (null (and invocation
+                                                                                    (getf invocation :invocation-error))))
+                                                :task-record-id (desktop-task-record-id task-record))))))
+           (action-report (list :immediate-actions immediate-actions
                                 :immediate-results immediate-results
-                                :staged-actions '()
+                                :staged-actions staged-actions
                                 :deferred-actions '()
                                 :action-assessments '()))
-           (action-operations (record-assistant-action-operations session thread turn action-report))
-           (assistant-content (direct-calculator-assistant-message actions immediate-results))
+           (approval-policy-ids (if approval-required-p
+                                    (or (assistant-action-policy-ids staged-actions)
+                                        (desktop-task-record-policy-ids desktop-task-records))
+                                    '()))
+           (_staged (if staged-actions
+                        (stage-pending-actions session staged-actions)
+                        (clear-pending-actions session)))
+           (_records-updated
+             (loop for task-record in desktop-task-records
+                   for resolution in resolved-requests
+                   for result in desktop-task-results
+                   for invocation in invocation-results
+                   do (progn
+                        (update-desktop-task-record
+                         session
+                         task-record
+                         :resolution resolution
+                         :metadata (append (when approval-required-p
+                                           (list :policy-id (first approval-policy-ids)))
+                                          (list :request-summary (desktop-task-request-summary
+                                                                  (find (desktop-task-record-request-id task-record)
+                                                                        requests
+                                                                        :key #'desktop-task-request-id
+                                                                        :test #'string=)))))
+                        (if approval-required-p
+                            (mark-desktop-task-record-awaiting-approval session
+                                                                       task-record
+                                                                       :policy-id (first approval-policy-ids))
+                            (if (eq (desktop-task-result-status result) :failed)
+                                (mark-desktop-task-record-failed
+                                 session
+                                 task-record
+                                 (append (list :summary (desktop-task-result-summary result))
+                                         (copy-list (or (first (desktop-task-result-action-results result))
+                                                        '())))
+                                 :retryable-p (desktop-task-retryable-p task-record))
+                                (progn
+                                  (mark-desktop-task-record-executing session task-record)
+                                  (mark-desktop-task-record-completed session
+                                                                     task-record
+                                                                     (make-desktop-task-record-completed-result
+                                                                      (find (desktop-task-record-request-id task-record)
+                                                                            requests
+                                                                            :key #'desktop-task-request-id
+                                                                            :test #'string=)
+                                                                      resolution
+                                                                      (and invocation
+                                                                           (getf invocation :invocation-result))))))))))
+           (primary-native-result (and (= (length invocation-results) 1)
+                                       (getf (first invocation-results) :native-result)))
+           (runtime-outbox-payload
+             (and (eq (desktop-task-executor-kind requests) :runtime)
+                  (runtime-outbox-payload-for-records session
+                                                     desktop-task-records)))
+           (runtime-reply
+             (and (eq (desktop-task-executor-kind requests) :runtime)
+                  (runtime-outbox-reply-summary-for-records session
+                                                           desktop-task-records)))
+           (runtime-actor-flow
+             (and (eq (desktop-task-executor-kind requests) :runtime)
+                  (runtime-actor-flow-for-records session
+                                                 desktop-task-records)))
+           (assistant-content
+             (if approval-required-p
+                 (approval-required-assistant-message approval-policy-ids)
+                 (or (and runtime-outbox-payload
+                          (or (getf runtime-outbox-payload :summary)
+                              (getf runtime-outbox-payload :SUMMARY)))
+                     (direct-desktop-task-assistant-message-from-records
+                      requests
+                      desktop-task-records
+                      (append immediate-actions staged-actions)
+                      invocation-results))))
+           (completed-operation (complete-operation session
+                                                   thread
+                                                   turn
+                                                   operation
+                                                   (append (list :message assistant-content
+                                                                 :stream-event-count 0
+                                                                 :staged-action-count (length staged-actions)
+                                                                 :deferred-action-count 0
+                                                                 :immediate-action-count (length immediate-actions))
+                                                           (when runtime-actor-flow
+                                                             (list :actor-flow runtime-actor-flow))
+                                                           (when (eq (desktop-task-executor-kind requests) :runtime)
+                                                             (runtime-result-output-metadata
+                                                              (or runtime-outbox-payload
+                                                                  primary-native-result))))
+                                                   :status :completed
+                                                   :metadata (list :auto-routed-p t
+                                                                   :desktop-task-p t
+                                                                   :model-response-p nil)))
+           (action-operations (record-assistant-action-operations session
+                                                                 thread
+                                                                 turn
+                                                                 action-report
+                                                                 :desktop-task-records desktop-task-records
+                                                                 :desktop-task-bindings desktop-task-bindings))
            (assistant-message (create-message session thread :assistant assistant-content
                                               :content-type :text
                                               :metadata (list :source source
                                                               :streamed-p nil
                                                               :auto-routed-p t
-                                                              :direct-calculator-p t)))
+                                                              :desktop-task-p t
+                                                              :desktop-task-record-ids (mapcar #'desktop-task-record-id desktop-task-records)
+                                                              :operation-id (operation-id completed-operation))))
+           (_records-linked
+             (dolist (task-record desktop-task-records)
+               (update-desktop-task-record
+                session
+                task-record
+                :metadata (list :conversation-operation-id (operation-id completed-operation)
+                                :assistant-message-id (message-id assistant-message)))))
+           (task-record-summaries (mapcar #'desktop-task-record-summary desktop-task-records))
+           (canonical-task-results (mapcar #'desktop-task-record-canonical-result-summary
+                                           desktop-task-records))
+           (response (make-assistant-response
+                      :message assistant-content
+                      :actions actions
+                      :metadata (list :source source
+                                      :desktop-task-p t
+                                      :auto-routed-p t
+                                      :desktop-task-records task-record-summaries
+                                      :desktop-task-results canonical-task-results
+                                      :runtime-reply runtime-reply
+                                      :actor-flow runtime-actor-flow)))
            (completed-turn (complete-turn session
                                           thread
                                           turn
                                           assistant-message
-                                          :status (turn-status-from-action-operations action-operations)
+                                          :status (if approval-required-p
+                                                      :awaiting-approval
+                                                      (turn-status-from-action-operations action-operations))
                                           :metadata (list :stream-event-count 0
-                                                          :action-operation-ids (mapcar #'operation-id action-operations)
-                                                          :auto-routed-p t
-                                                          :direct-calculator-p t))))
+                                                         :operation-id (operation-id completed-operation)
+                                                         :action-operation-ids (mapcar #'operation-id action-operations)
+                                                         :auto-routed-p t
+                                                         :desktop-task-p t
+                                                         :desktop-task-requests request-summaries
+                                                         :desktop-task-manifests manifest-summaries
+                                                         :desktop-task-resolutions resolution-summaries
+                                                         :desktop-task-records task-record-summaries
+                                                         :desktop-task-results canonical-task-results
+                                                         :runtime-reply runtime-reply
+                                                         :actor-flow runtime-actor-flow))))
+      (dolist (desktop-task-request requests)
+        (append-session-event session
+                              :desktop-task-request
+                              (desktop-task-request-summary desktop-task-request)
+                              :family :assistant
+                              :thread-id (thread-id thread)
+                              :turn-id (turn-id completed-turn)
+                              :visibility :operator))
+      (dolist (task-record desktop-task-records)
+        (append-session-event session
+                              :desktop-task-record
+                              (desktop-task-record-summary task-record)
+                              :family :assistant
+                              :entity-id (desktop-task-record-id task-record)
+                              :thread-id (thread-id thread)
+                              :turn-id (turn-id completed-turn)
+                              :visibility :operator))
+      (dolist (desktop-task-result desktop-task-results)
+        (append-session-event session
+                              :desktop-task-result
+                              (desktop-task-record-canonical-result-summary
+                               (find (desktop-task-result-request-id desktop-task-result)
+                                     desktop-task-records
+                                     :key #'desktop-task-record-request-id
+                                     :test #'string=))
+                              :family :assistant
+                              :thread-id (thread-id thread)
+                              :turn-id (turn-id completed-turn)
+                              :visibility :operator))
       (append-transcript-entry session :assistant assistant-content)
       (append-session-event session
-                            :conversation-calculator-control
-                            (list :prompt prompt
-                                  :action-count (length actions)
-                                  :actions actions
-                                  :result-count (length immediate-results))
-                            :family :calculator
+                            :assistant-response
+                            response
+                            :family :assistant
                             :thread-id (thread-id thread)
                             :turn-id (turn-id completed-turn)
-                            :visibility :operator
-                            :metadata (list :source source
-                                            :auto-routed-p t
-                                            :direct-calculator-p t))
+                            :visibility :operator)
+      (when (eq (desktop-task-executor-kind requests) :calculator)
+        (append-conversation-calculator-control-event session
+                                                      thread
+                                                      completed-turn
+                                                      prompt
+                                                      actions
+                                                      immediate-results
+                                                      :source source
+                                                      :auto-routed-p t
+                                                      :direct-calculator-p t))
+      (record-turn-memory-entry session
+                                thread
+                                completed-turn
+                                request
+                                prompt
+                                assistant-content
+                                :defer-inference-p t)
       (emit-conversation-progress (conversation-progress-phase source :response)
                                   (list :message assistant-content
-                                        :staged-action-count 0
+                                        :staged-action-count (length staged-actions)
                                         :deferred-action-count 0
-                                        :immediate-action-count (length actions)
+                                        :retrieval-summary (provider-request-retrieval-summary request)
+                                        :cognition-summary (provider-request-cognition-summary request)
+                                        :action-agenda-summary (provider-request-action-agenda-summary request)
+                                        :reasoning-summary (provider-request-reasoning-summary request)
+                                        :planning-summary (provider-request-planning-summary request)
+                                        :immediate-action-count (length immediate-actions)
                                         :stream-event-count 0
                                         :thread-id (thread-id thread)
                                         :turn-id (turn-id completed-turn)
                                         :auto-routed-p t
-                                        :direct-calculator-p t))
+                                        :desktop-task-p t
+                                        :desktop-task-records task-record-summaries
+                                        :desktop-task-results canonical-task-results
+                                        :actor-flow runtime-actor-flow
+                                        :request-count (length requests)))
       (make-say-turn-result thread
                             user-message
                             assistant-message
                             completed-turn
-                            nil
+                            response
                             action-report
                             :streamed-p nil
                             :stream-event-count 0
-                            :action-results immediate-results))))
+                            :action-results immediate-results
+                            :retrieval-summary (provider-request-retrieval-summary request)
+                            :cognition-summary (provider-request-cognition-summary request)
+                            :action-agenda-summary (provider-request-action-agenda-summary request)
+                            :reasoning-summary (provider-request-reasoning-summary request)
+                            :planning-summary (provider-request-planning-summary request)))))
+
+(defun prepare-direct-conversation-request (session prompt thread turn source operator-mode
+                                            &key surface-context surface-actions)
+  (let ((request (build-turn-provider-request session
+                                              prompt
+                                              thread
+                                              turn
+                                              operator-mode
+                                              nil
+                                              :surface-context surface-context
+                                              :surface-actions surface-actions)))
+    (record-turn-retrieval-dossier session thread turn request source)
+    (record-turn-reasoning-brief session thread turn request source)
+    (record-turn-planning-brief session thread turn request source)
+    (record-turn-cognition-bundle session thread turn request source)
+    request))
 
 (defun governed-mutation-blocked-p (session reasoning-brief)
   (or (find-if (lambda (entry)
@@ -598,6 +1718,24 @@
                (ignore-errors (parse-runtime-forms trimmed)))
       trimmed)))
 
+(defun implied-runtime-eval-form-prompt (prompt)
+  (let* ((text (or prompt ""))
+         (lower (string-downcase text))
+         (form (extract-first-parenthesized-form text)))
+    (when (and form
+               (ignore-errors (parse-runtime-forms form))
+               (prompt-contains-any-p
+                lower
+                '("evaluate"
+                  "eval"
+                  "execute"
+                  "run"
+                  "define"
+                  "defun"
+                  "provide me the result"
+                  "show me the result")))
+      form)))
+
 (defun affirmative-runtime-eval-confirmation-p (prompt)
   (member (string-downcase (trim-conversation-prompt prompt))
           '("y"
@@ -613,6 +1751,9 @@
             "execute it"
             "execute that")
           :test #'string=))
+
+(defun affirmative-approval-confirmation-p (prompt)
+  (affirmative-runtime-eval-confirmation-p prompt))
 
 (defun assistant-runtime-eval-offer-p (content)
   (let ((text (string-downcase (or content ""))))
@@ -640,11 +1781,96 @@
         (and form
              (list :form form
                    :reason :direct-form)))
+      (let ((form (implied-runtime-eval-form-prompt prompt)))
+        (and form
+             (list :form form
+                   :reason :implied-form)))
       (let ((form (and (affirmative-runtime-eval-confirmation-p prompt)
                        (pending-thread-runtime-eval-confirmation-form session))))
         (and form
              (list :form form
                    :reason :confirmed-prior-form)))))
+
+(defun pending-thread-approval-turn (session &optional thread)
+  (let* ((active-thread (or thread (current-thread session)))
+         (last-turn (and active-thread
+                         (most-recent-thread-turn session (thread-id active-thread)))))
+    (when (and last-turn
+               (eq (turn-status last-turn) :awaiting-approval)
+               (or (turn-pending-action-operations session last-turn)
+                   (desktop-task-records-awaiting-approval-for-turn session
+                                                                    (turn-id last-turn))))
+      last-turn)))
+
+(defun pending-session-approval-turn (session)
+  (loop for turn in (reverse (agent-session-turns session))
+        when (and (eq (turn-status turn) :awaiting-approval)
+                  (or (turn-pending-action-operations session turn)
+                      (desktop-task-records-awaiting-approval-for-turn session
+                                                                       (turn-id turn))))
+          do (return turn)))
+
+(defun resolve-conversation-pending-approval-context (session prompt)
+  (and (affirmative-approval-confirmation-p prompt)
+       (let* ((pending-approval
+                (service-response-data
+                 (query-desktop-task-pending-approval-service session)))
+              (records (getf pending-approval :records))
+              (turn-id (getf pending-approval :turn-id))
+              (turn (and turn-id
+                         (find-turn session turn-id))))
+         (when (or records turn
+                   (getf pending-approval :approval-ids)
+                   (getf pending-approval :actor-message-ids))
+           (append (copy-list pending-approval)
+                   (list :turn turn
+                         :records records))))))
+
+(defun pending-approval-policy-ids (operations)
+  (remove-duplicates
+   (remove nil
+           (mapcar (lambda (operation)
+                     (let* ((decision (operation-policy-decision operation))
+                            (policy-id (and (listp decision)
+                                            (getf decision :policy-id))))
+                       policy-id))
+                   operations))
+   :test #'eq))
+
+(defun pending-approval-policy-ids-for-turn (session turn)
+  (remove-duplicates
+   (append (pending-approval-policy-ids (turn-pending-action-operations session turn))
+           (desktop-task-record-policy-ids
+            (desktop-task-records-awaiting-approval-for-turn session (turn-id turn))))
+   :test #'eq))
+
+(defun assistant-action-policy-ids (actions)
+  (remove-duplicates
+   (remove nil (mapcar #'assistant-action-policy-id actions))
+   :test #'eq))
+
+(defun approval-required-assistant-message (policy-ids)
+  (if policy-ids
+      (format nil
+              "This action requires approval before I can change the editor. Reply \"yes\" to approve ~{~S~^, ~} and I will continue."
+              policy-ids)
+      "This action requires approval before I can continue. Reply \"yes\" to approve and continue."))
+
+(defun resumed-action-result-summary (result)
+  (let ((action-results (getf result :action-results)))
+    (or
+     (some (lambda (entry)
+             (let ((payload (getf entry :result)))
+               (and (listp payload)
+                    (or (getf payload :summary)
+                        (getf payload :message)))))
+           action-results)
+     (let ((followup (getf result :followup)))
+       (or (and (listp followup)
+                (let ((response (getf followup :response)))
+                  (and (listp response)
+                       (getf response :message))))
+           "Approved and completed the requested action.")))))
 
 (defun runtime-eval-assistant-message (tool-result reason)
   (let* ((form (getf tool-result :form))
@@ -658,9 +1884,29 @@
             (first values)
             (and (rest values) values))))
 
+(defun make-runtime-evaluate-desktop-task-request (session prompt form reason
+                                                   surface-context surface-actions)
+  (make-governed-desktop-task-request
+   :requester :context-chat
+   :target :runtime
+   :operation :evaluate-form
+   :capability :runtime-eval-safe
+   :payload (list :form form
+                  :package-name (agent-session-package session)
+                  :reason reason)
+   :surface-context surface-context
+   :surface-actions surface-actions
+   :metadata (append (list :prompt prompt
+                           :actor-slice :context-chat-runtime-v1
+                           :reason reason)
+                     (when (agent-session-package session)
+                       (list :package-name (agent-session-package session)))
+                     (when (fboundp 'default-runtime-id)
+                       (list :runtime-id (default-runtime-id))))))
+
 (defun run-direct-conversation-runtime-eval (session prompt form reason
-                                              &key (source :say) (operator-mode :conversation))
-  (declare (ignore operator-mode))
+                                              &key (source :say) (operator-mode :conversation)
+                                                surface-context surface-actions)
   (let* ((thread (current-thread session)))
     (append-transcript-entry session :user prompt)
     (emit-conversation-progress (conversation-progress-phase source :started)
@@ -679,7 +1925,17 @@
                                              :streamed-p nil
                                              :auto-routed-p t
                                              :direct-runtime-eval-p t
-                                             :direct-runtime-eval-reason reason)))
+                                             :direct-runtime-eval-reason reason
+                                             :surface-context surface-context
+                                             :surface-actions surface-actions)))
+           (request (prepare-direct-conversation-request session
+                                                        prompt
+                                                        thread
+                                                        turn
+                                                        source
+                                                        operator-mode
+                                                        :surface-context surface-context
+                                                        :surface-actions surface-actions))
            (operation (start-operation session
                                        thread
                                        turn
@@ -711,6 +1967,13 @@
                                                                    :direct-runtime-eval-p t
                                                                    :direct-runtime-eval-reason reason)))
            (assistant-content (runtime-eval-assistant-message tool-result reason))
+           (response (make-assistant-response
+                      :message assistant-content
+                      :actions '()
+                      :metadata (list :source source
+                                      :direct-runtime-eval-p t
+                                      :direct-runtime-eval-reason reason
+                                      :auto-routed-p t)))
            (assistant-message (create-message session thread :assistant assistant-content
                                               :content-type :text
                                               :metadata (list :source source
@@ -731,6 +1994,13 @@
                                                           :direct-runtime-eval-reason reason))))
       (append-transcript-entry session :assistant assistant-content)
       (append-session-event session
+                            :assistant-response
+                            response
+                            :family :assistant
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id completed-turn)
+                            :visibility :operator)
+      (append-session-event session
                             :conversation-runtime-eval
                             (list :form form
                                   :reason reason
@@ -744,17 +2014,29 @@
                             :metadata (list :source source
                                             :direct-runtime-eval-p t
                                             :direct-runtime-eval-reason reason))
+      (record-turn-memory-entry session
+                                thread
+                                completed-turn
+                                request
+                                prompt
+                                assistant-content)
       (emit-conversation-progress (conversation-progress-phase source :response)
                                   (list :message assistant-content
                                         :staged-action-count 0
                                         :deferred-action-count 0
+                                        :retrieval-summary (provider-request-retrieval-summary request)
+                                        :cognition-summary (provider-request-cognition-summary request)
+                                        :action-agenda-summary (provider-request-action-agenda-summary request)
+                                        :reasoning-summary (provider-request-reasoning-summary request)
+                                        :planning-summary (provider-request-planning-summary request)
+                                        :outcome-summary (provider-request-outcome-summary request)
                                         :immediate-action-count 1
                                         :stream-event-count 0
                                         :thread-id (thread-id thread)
                                         :turn-id (turn-id completed-turn)
                                         :auto-routed-p t
                                         :direct-runtime-eval-p t))
-      (append (list :response nil
+      (append (list :response response
                     :staged-action-count 0
                     :deferred-action-count 0
                     :immediate-action-count 1
@@ -763,7 +2045,13 @@
                     :stream-event-count 0
                     :direct-runtime-eval-p t
                     :direct-runtime-eval-reason reason
-                    :runtime-result tool-result)
+                    :runtime-result tool-result
+                    :retrieval-summary (provider-request-retrieval-summary request)
+                    :cognition-summary (provider-request-cognition-summary request)
+                    :action-agenda-summary (provider-request-action-agenda-summary request)
+                    :reasoning-summary (provider-request-reasoning-summary request)
+                    :planning-summary (provider-request-planning-summary request)
+                    :outcome-summary (provider-request-outcome-summary request))
               (conversation-turn-summary thread
                                          user-message
                                          assistant-message
@@ -913,7 +2201,11 @@
 
 (defun command-conversation-execution-service (session provider prompt options
                                                 &key (source :say) (operator-mode :conversation))
-  (let ((enqueue-p (plist-value options :enqueue nil)))
+  (let* ((active-environment (or (session-bound-environment session)
+                                 (ensure-environment)))
+         (enqueue-p (plist-value options :enqueue nil)))
+    (unless (eq (environment-compatibility-session active-environment) session)
+      (bind-session-to-environment session active-environment))
     (if enqueue-p
         (let* ((task-form (execution-task-form source prompt options))
                (command (normalize-form-command task-form))
@@ -933,77 +2225,246 @@
                          (:say :conversation/say))
            :authority operator-mode
            :context (list :enqueue-p t :operator-mode operator-mode)))
-        (let ((direct-runtime-eval (resolve-conversation-runtime-eval-form session prompt)))
-          (if direct-runtime-eval
-              (let ((result (run-direct-conversation-runtime-eval session
-                                                                  prompt
-                                                                  (getf direct-runtime-eval :form)
-                                                                  (getf direct-runtime-eval :reason)
-                                                                  :source source
-                                                                  :operator-mode operator-mode)))
-                (kernelize-service-command-response
-                 (make-service-command-response :execution
-                                                source
-                                                result
-                                                :metadata (make-service-metadata :authority :environment
-                                                                                 :command-model :conversation-execution-v1
-                                                                                 :session session
-                                                                                 :thread-id (getf (getf result :thread) :id)
-                                                                                 :turn-id (getf (getf result :turn) :id)
-                                                                                 :runtime-id (default-runtime-id)
-                                                                                 :policy-id :runtime-eval-safe))
-                 :session session
-                 :intention prompt
-                 :capability :runtime/eval
-                 :authority operator-mode
-                 :constraints (list :direct-runtime-eval-p t :policy-id :runtime-eval-safe)))
-              (let* ((stream-p (or (and (option-present-p options :stream)
-                                        (plist-value options :stream nil))
-                                   *default-ask-streaming*
-                                   (not (null *task-progress-callback*))))
-                     (attachments (plist-value options :attachments nil))
-                     (surface-context (plist-value options :surface-context nil))
-                     (surface-actions (plist-value options :surface-actions nil))
-                     (direct-calculator-actions
-                       (direct-calculator-actions-for-prompt prompt surface-context))
-                     (result
-                       (if direct-calculator-actions
-                           (run-direct-conversation-calculator-actions session
-                                                                      prompt
-                                                                      direct-calculator-actions
-                                                                      :source source
-                                                                      :operator-mode operator-mode
-                                                                      :surface-context surface-context
-                                                                      :surface-actions surface-actions)
-                           (run-conversation-turn provider
-                                                  session
-                                                  prompt
-                                                  :stream-p stream-p
-                                                  :attachments attachments
-                                                  :surface-context surface-context
-                                                  :surface-actions surface-actions
-                                                  :source source
-                                                  :operator-mode operator-mode))))
-                (kernelize-service-command-response
-                 (make-service-command-response :execution
-                                                source
-                                                result
-                                                :metadata (make-service-metadata :authority :environment
-                                                                                 :command-model :conversation-execution-v1
-                                                                                 :session session
-                                                                                 :thread-id (getf (getf result :thread) :id)
-                                                                                 :turn-id (getf (getf result :turn) :id)))
-                 :session session
-                 :intention prompt
-                 :capability (ecase source
-                               (:ask :conversation/ask)
-                               (:say :conversation/say))
-                 :authority operator-mode
-                 :context (append (list :stream-p stream-p
-                                        :operator-mode operator-mode)
-                                  (when direct-calculator-actions
-                                    (list :direct-calculator-p t
-                                          :action-count (length direct-calculator-actions)))))))))))
+        (let* ((surface-context (plist-value options :surface-context nil))
+               (surface-actions (plist-value options :surface-actions nil))
+               (pending-approval-context (resolve-conversation-pending-approval-context session prompt))
+               (direct-runtime-eval (resolve-conversation-runtime-eval-form session prompt)))
+          (cond
+            (pending-approval-context
+             (let* ((session-id (or (getf pending-approval-context :session-id)
+                                    (agent-session-id session)))
+                    (pending-thread-id (getf pending-approval-context :thread-id))
+                    (approval-id (first (or (getf pending-approval-context :approval-ids)
+                                            '())))
+                    (actor-message-ids (getf pending-approval-context :actor-message-ids))
+                    (receiver-roles (getf pending-approval-context :receiver-roles))
+                    (thread (or (and pending-thread-id
+                                     (find-thread session pending-thread-id))
+                                (and (getf pending-approval-context :turn)
+                                     (find-thread session
+                                                  (turn-thread-id
+                                                   (getf pending-approval-context :turn))))
+                                (current-thread session)
+                                (error "Approval confirmation requires an active presentation thread.")))
+                    (_approval-required
+                      (unless approval-id
+                        (error "No governed approval is currently pending. The approval prompt likely expired from local UI state before confirmation completed.")))
+                    (confirmation-message (create-message session
+                                                          thread
+                                                          :user
+                                                          prompt
+                                                          :metadata (list :source source
+                                                                          :approval-confirmation-p t
+                                                                          :session-id session-id
+                                                                          :approval-id approval-id
+                                                                          :actor-message-ids actor-message-ids
+                                                                          :receiver-roles receiver-roles)))
+                    (turn (start-turn session
+                                      thread
+                                      confirmation-message
+                                      :metadata (list :source source
+                                                      :streamed-p nil
+                                                      :approval-confirmation-p t
+                                                      :session-id session-id
+                                                      :approval-id approval-id
+                                                      :actor-message-ids actor-message-ids
+                                                      :receiver-roles receiver-roles)))
+                    (approval-response
+                      (command-desktop-task-approve-approval-service
+                       session
+                       provider
+                       approval-id
+                       :session-id session-id
+                       :source source
+                       :operator-mode operator-mode))
+                    (approval-result (service-response-data approval-response))
+                    (canonical-task-results
+                      (or (getf approval-result :desktop-task-results)
+                          '()))
+                    (task-record-summaries
+                      (or (getf approval-result :task-record-summaries)
+                          '()))
+                    (assistant-content
+                      (or (getf approval-result :assistant-message)
+                          (getf approval-result :summary)
+                          "Approved and completed the requested action."))
+                    (response (make-assistant-response
+                               :message assistant-content
+                               :actions '()
+                               :metadata (append (list :source source
+                                                       :approval-confirmation-p t
+                                                       :session-id session-id
+                                                       :approval-id approval-id
+                                                       :actor-message-ids actor-message-ids
+                                                       :receiver-roles receiver-roles)
+                                                 (when canonical-task-results
+                                                   (list :desktop-task-results canonical-task-results))
+                                                 (when task-record-summaries
+                                                   (list :task-record-summaries task-record-summaries)))))
+                    (assistant-message (create-message session
+                                                       thread
+                                                       :assistant
+                                                       assistant-content
+                                                       :content-type :text
+                                                       :metadata (list :source source
+                                                                       :streamed-p nil
+                                                                       :approval-confirmation-p t
+                                                                       :session-id session-id
+                                                                       :approval-id approval-id
+                                                                       :actor-message-ids actor-message-ids
+                                                                       :receiver-roles receiver-roles
+                                                                       :desktop-task-results canonical-task-results
+                                                                       :task-record-summaries task-record-summaries)))
+                    (completed-turn (complete-turn session
+                                                  thread
+                                                  turn
+                                                  assistant-message
+                                                  :status :completed
+                                                  :metadata (list :stream-event-count 0
+                                                                  :approval-confirmation-p t
+                                                                  :session-id session-id
+                                                                  :approval-id approval-id
+                                                                  :actor-message-ids actor-message-ids
+                                                                  :receiver-roles receiver-roles)))
+                    (empty-action-report
+                      (list :staged-actions '()
+                            :deferred-actions '()
+                            :immediate-actions '()))
+                    (response-payload
+                      (append (make-say-turn-result thread
+                                                    confirmation-message
+                                                    assistant-message
+                                                    completed-turn
+                                                    response
+                                                    empty-action-report
+                                                    :streamed-p nil
+                                                    :stream-event-count 0)
+                              (list :session-id session-id
+                                    :approval-id approval-id)
+                              (when canonical-task-results
+                                (list :desktop-task-results canonical-task-results))
+                              (when task-record-summaries
+                                (list :task-record-summaries task-record-summaries)))))
+               (append-transcript-entry session :user prompt)
+               (append-transcript-entry session :assistant assistant-content)
+               (append-session-event session
+                                     :assistant-response
+                                     response
+                                     :family :assistant
+                                     :thread-id (thread-id thread)
+                                     :turn-id (turn-id completed-turn)
+                                     :visibility :operator)
+               (kernelize-service-command-response
+                (make-service-command-response :execution
+                                               source
+                                               response-payload
+                                               :metadata (make-service-metadata :authority :environment
+                                                                                :command-model :conversation-execution-v1
+                                                                                :session session
+                                                                                :thread-id (thread-id thread)
+                                                                                :turn-id (turn-id completed-turn)))
+                :session session
+                :intention prompt
+                :capability (ecase source
+                              (:ask :conversation/ask)
+                              (:say :conversation/say))
+                :authority operator-mode
+                :constraints (list :approval-confirmation-p t))))
+            (direct-runtime-eval
+             (let* ((runtime-request
+                      (make-runtime-evaluate-desktop-task-request
+                       session
+                       prompt
+                       (getf direct-runtime-eval :form)
+                       (getf direct-runtime-eval :reason)
+                       surface-context
+                       surface-actions))
+                    (base-result
+                      (run-direct-conversation-desktop-task-requests session
+                                                                     prompt
+                                                                     (list runtime-request)
+                                                                     :source source
+                                                                     :operator-mode operator-mode
+                                                                     :surface-context surface-context
+                                                                     :surface-actions surface-actions))
+                    (result (append
+                             base-result
+                             (list :direct-runtime-eval-p t
+                                   :direct-runtime-eval-reason
+                                   (getf direct-runtime-eval :reason)
+                                   :runtime-result
+                                   (let ((results (getf base-result :desktop-task-results)))
+                                     (and (listp results)
+                                          (first results)))))))
+               (kernelize-service-command-response
+                (make-service-command-response :execution
+                                               source
+                                               result
+                                               :metadata (make-service-metadata :authority :environment
+                                                                                :command-model :conversation-execution-v1
+                                                                                :session session
+                                                                                :thread-id (getf (getf result :thread) :id)
+                                                                                :turn-id (getf (getf result :turn) :id)
+                                                                                :runtime-id (default-runtime-id)
+                                                                                :policy-id :runtime-eval-safe))
+                :session session
+                :intention prompt
+                :capability :runtime/eval
+                :authority operator-mode
+                :constraints (list :direct-runtime-eval-p t :policy-id :runtime-eval-safe))))
+            (t
+             (let* ((stream-p (or (and (option-present-p options :stream)
+                                       (plist-value options :stream nil))
+                                  *default-ask-streaming*
+                                  (not (null *task-progress-callback*))))
+                    (attachments (plist-value options :attachments nil))
+                    (direct-desktop-task-requests
+                      (plan-governed-desktop-task-requests
+                       prompt
+                       surface-context
+                       surface-actions))
+                    (result
+                      (if direct-desktop-task-requests
+                          (run-direct-conversation-desktop-task-requests session
+                                                                         prompt
+                                                                         direct-desktop-task-requests
+                                                                         :source source
+                                                                         :operator-mode operator-mode
+                                                                         :surface-context surface-context
+                                                                         :surface-actions surface-actions)
+                          (run-conversation-turn provider
+                                                 session
+                                                 prompt
+                                                 :stream-p stream-p
+                                                 :attachments attachments
+                                                 :surface-context surface-context
+                                                 :surface-actions surface-actions
+                                                 :source source
+                                                 :operator-mode operator-mode))))
+               (kernelize-service-command-response
+                (make-service-command-response :execution
+                                               source
+                                               result
+                                               :metadata (make-service-metadata :authority :environment
+                                                                                :command-model :conversation-execution-v1
+                                                                                :session session
+                                                                                :thread-id (getf (getf result :thread) :id)
+                                                                                :turn-id (getf (getf result :turn) :id)))
+                :session session
+                :intention prompt
+                :capability (ecase source
+                              (:ask :conversation/ask)
+                              (:say :conversation/say))
+                :authority operator-mode
+                :context (append (list :stream-p stream-p
+                                       :operator-mode operator-mode)
+                                 (when direct-desktop-task-requests
+                                   (list :desktop-task-p t
+                                         :task-count (length direct-desktop-task-requests)
+                                         :task-targets (remove-duplicates
+                                                        (mapcar #'desktop-task-request-target
+                                                                direct-desktop-task-requests)
+                                                        :test #'eq))))))))))))
 
 (defun command-execute-assistant-action-service (session action &key thread turn operation)
   (kernelize-service-command-response

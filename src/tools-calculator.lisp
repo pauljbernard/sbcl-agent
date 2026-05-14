@@ -13,8 +13,10 @@
 (defun tool-calculator-append-token (session &key token)
   (unless token
     (error "CALCULATOR/APPEND-TOKEN requires :token"))
-  (service-response-data
-   (command-calculator-append-token-service session token)))
+  (append (service-response-data
+           (command-calculator-append-token-service session token))
+          (list :receiver-actor :calculator
+                :receiver-state :completed)))
 
 (defun tool-calculator-backspace (session &key)
   (service-response-data
@@ -58,13 +60,15 @@
        (angle-unit :radians))
   (unless expression
     (error "CALCULATOR/EVALUATE requires :expression"))
-  (service-response-data
-   (command-calculator-evaluate-service session
-                                        expression
-                                        :mode mode
-                                        :base base
-                                        :word-size word-size
-                                        :angle-unit angle-unit)))
+  (append (service-response-data
+           (command-calculator-evaluate-service session
+                                                expression
+                                                :mode mode
+                                                :base base
+                                                :word-size word-size
+                                                :angle-unit angle-unit))
+          (list :receiver-actor :calculator
+                :receiver-state :completed)))
 
 (register-tool :calculator/summary
                "Return the current calculator modes, bases, word sizes, and angle units."

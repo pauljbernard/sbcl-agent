@@ -30,6 +30,19 @@
 (defmethod provider-capabilities ((provider anthropic-provider))
   '(:chat :structured-response :action-proposals :network))
 
+(defun lightweight-openai-conversation-request-p (request)
+  (let ((prompt (provider-request-prompt request)))
+    (lightweight-conversation-request-p prompt
+                                        :operator-mode (provider-request-operator-mode request)
+                                        :attachments (provider-request-attachments request)
+                                        :surface-actions (provider-request-surface-actions request))))
+
+(defun cached-openai-conversation-request-p (request)
+  (let ((dossier (provider-request-retrieval-dossier request)))
+    (and (eq (provider-request-operator-mode request) :conversation)
+         (listp dossier)
+         (eq (getf dossier :phase) :cached-conversation))))
+
 (defun governance-blocker-kind-p (entry)
   (member (getf entry :kind)
           '(:blocked :quarantined :awaiting-cold-validation)
@@ -107,27 +120,194 @@
    "If no actions are needed, emit an empty actions array. "
    "Never omit the markers in streaming mode."))
 
-(defun build-openai-user-prompt-text (request)
+(defun build-openai-lightweight-stream-system-prompt ()
+  (concatenate
+   'string
+   "You are an SBCL-based coding assistant. "
+   "Stream the operator-facing answer as plain text immediately. "
+   "After the visible text is complete, append a newline, then the exact marker "
+   +stream-actions-marker+
+   ", then a JSON object with keys actions and metadata, then the exact marker "
+   +stream-actions-end-marker+
+   ". "
+   "Use the hidden JSON only for structured actions or attachments. "
+   "If no actions are needed, emit an empty actions array and empty metadata object. "
+   "Never omit the markers in streaming mode."))
+
+(defun compact-openai-text (value &key (limit 240))
+  (labels ((trimmed (text)
+             (let ((normalized (string-trim '(#\Space #\Tab #\Newline #\Return) text)))
+               (if (> (length normalized) limit)
+                   (concatenate 'string (subseq normalized 0 limit) "...")
+                   normalized)))
+           (joined-values (values)
+             (trimmed (format nil "~{~A~^, ~}" values))))
+    (cond
+      ((null value) nil)
+      ((stringp value) (trimmed value))
+      ((keywordp value) (string-downcase (symbol-name value)))
+      ((symbolp value) (string-downcase (symbol-name value)))
+      ((numberp value) (princ-to-string value))
+      ((and (listp value) (every #'keywordp value))
+       (joined-values (mapcar (lambda (entry) (string-downcase (symbol-name entry))) value)))
+      ((listp value)
+       (trimmed (prin1-to-string value)))
+      (t
+       (trimmed (princ-to-string value))))))
+
+(defun compact-openai-transcript-entry (entry)
+  (let ((role (or (getf entry :role) :unknown))
+        (content (compact-openai-text (getf entry :content) :limit 140)))
+    (when content
+      (format nil "~(~A~): ~A" role content))))
+
+(defun compact-openai-recent-transcript (entries &key (limit 3))
+  (let ((lines (remove nil
+                       (mapcar #'compact-openai-transcript-entry
+                               (subseq entries 0 (min limit (length entries)))))))
+    (if lines
+        (format nil "~{~A~%~}" lines)
+        "none")))
+
+(defun compact-openai-ranking-entry (entry)
+  (let ((label (or (getf entry :label) "Context"))
+        (domain (or (getf entry :domain) "unknown"))
+        (summary (or (compact-openai-text (getf entry :summary) :limit 120)
+                     (compact-openai-text (getf entry :text) :limit 120)
+                     (compact-openai-text (getf entry :id) :limit 80)))
+        (score (getf entry :score)))
+    (format nil "~A [~A~@[ score ~A~]]~@[ - ~A~]"
+            label domain score summary)))
+
+(defun compact-openai-ranked-context-hits (entries &key (limit 4))
+  (let ((lines (loop for entry in entries
+                     for index from 0
+                     while (< index limit)
+                     collect (compact-openai-ranking-entry entry))))
+    (if lines
+        (format nil "~{~A~%~}" lines)
+        "none")))
+
+(defun compact-openai-thread-context (context)
+  (if context
+      (format nil "thread ~A~@[ (~A)~]~@[ - ~A~]"
+              (or (getf context :id) "unknown")
+              (compact-openai-text (or (getf context :title) (getf context :name)) :limit 80)
+              (compact-openai-text (getf context :summary) :limit 120))
+      "none"))
+
+(defun compact-openai-turn-context (context)
+  (if context
+      (format nil "turn ~A~@[ status ~A~]~@[ - ~A~]"
+              (or (getf context :id) "unknown")
+              (compact-openai-text (getf context :status) :limit 40)
+              (or (compact-openai-text (getf (getf context :assistant-message) :content) :limit 120)
+                  (compact-openai-text (getf (getf context :user-message) :content) :limit 120)
+                  (compact-openai-text (getf context :detail-summary) :limit 120)))
+      "none"))
+
+(defun compact-openai-runtime-summary (summary)
+  (format nil "cwd=~A; package=~A; open incidents=~D"
+          (or (compact-openai-text (getf summary :cwd) :limit 80) "unknown")
+          (or (compact-openai-text (getf summary :package) :limit 80) "unknown")
+          (or (getf summary :open-incident-count) 0)))
+
+(defun compact-openai-workspace-summary (summary)
+  (format nil "cwd=~A; work items=~D; incidents=~D; artifacts=~D"
+          (or (compact-openai-text (getf summary :cwd) :limit 80) "unknown")
+          (or (getf summary :work-item-count) 0)
+          (or (getf summary :incident-count) 0)
+          (or (getf summary :artifact-count) 0)))
+
+(defun compact-openai-policy-summary (summary)
+  (let ((policies (compact-openai-text (getf summary :approved-policies) :limit 120)))
+    (format nil "approved policies=~A; open incidents=~D"
+            (or policies "none")
+            (or (getf summary :open-incident-count) 0))))
+
+(defun compact-openai-surface-context (context)
+  (if context
+      (compact-openai-text context :limit 240)
+      "none"))
+
+(defun compact-openai-surface-action (action)
+  (let ((tool-id (or (getf action :tool-id)
+                     (getf action :id)
+                     (getf action :action-id)
+                     "action"))
+        (label (or (getf action :label)
+                   (getf action :title)
+                   (getf action :summary))))
+    (format nil "~A~@[ - ~A~]"
+            (compact-openai-text tool-id :limit 80)
+            (compact-openai-text label :limit 80))))
+
+(defun compact-openai-surface-actions (actions &key (limit 10))
+  (let ((lines (loop for action in actions
+                     for index from 0
+                     while (< index limit)
+                     collect (compact-openai-surface-action action))))
+    (if lines
+        (format nil "~{~A~%~}" lines)
+        "none")))
+
+(defun build-openai-cached-conversation-user-prompt (request)
   (format nil
-          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Surface context: ~S~%~%Available Surface actions: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
+          "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~A~%Turn: ~A~%~%Recent transcript:~%~A~%Cached context hits:~%~A~%Runtime summary: ~A~%Workspace summary: ~A~%Policy summary: ~A~%~@[Surface context: ~A~%~]~@[Available Surface actions:~%~A~]~%~A~%~%Respond naturally, use the cached warm context as background memory, and keep the reply focused on what is most relevant to the user prompt. Prefer the cached context hits over reconstructing the whole environment. Do not invent missing evidence, and do not propose structured actions unless the user actually asks you to execute or inspect something."
           (provider-request-prompt request)
           (provider-request-operator-mode request)
           (provider-request-stream-p request)
-          (provider-request-thread-context request)
-          (provider-request-turn-context request)
-          (provider-request-environment-context request)
-          (provider-request-surface-context request)
-          (provider-request-surface-actions request)
-          (provider-request-runtime-summary request)
-          (provider-request-workspace-summary request)
-          (provider-request-policy-summary request)
-          (provider-request-retrieval-dossier request)
-          (provider-request-cognition-bundle request)
-          (provider-request-reasoning-brief request)
-          (provider-request-planning-brief request)
-          (provider-request-outcome-brief request)
-          (provider-request-session-summary request)
+          (compact-openai-thread-context (provider-request-thread-context request))
+          (compact-openai-turn-context (provider-request-turn-context request))
+          (compact-openai-recent-transcript (or (getf (provider-request-session-summary request) :recent-transcript) '()))
+          (compact-openai-ranked-context-hits (or (getf (provider-request-retrieval-dossier request) :ranking) '()))
+          (compact-openai-runtime-summary (provider-request-runtime-summary request))
+          (compact-openai-workspace-summary (provider-request-workspace-summary request))
+          (compact-openai-policy-summary (provider-request-policy-summary request))
+          (and (provider-request-surface-context request)
+               (compact-openai-surface-context (provider-request-surface-context request)))
+          (and (provider-request-surface-actions request)
+               (compact-openai-surface-actions (provider-request-surface-actions request)))
           (build-openai-governance-directives request)))
+
+(defun build-openai-user-prompt-text (request)
+  (cond
+    ((cached-openai-conversation-request-p request)
+     (build-openai-cached-conversation-user-prompt request))
+    ((lightweight-openai-conversation-request-p request)
+     (format nil
+             "User prompt: ~A~%~%Operator mode: ~S~%Conversation context: Thread: ~A Turn: ~A~%Recent transcript:~%~A~%Runtime summary: ~A~%~@[Surface context: ~A~%~]~@[Available Surface actions:~%~A~]~%Respond naturally and concisely unless the user asks for depth. Resolve short follow-up replies against the recent transcript when possible."
+             (provider-request-prompt request)
+             (provider-request-operator-mode request)
+             (compact-openai-thread-context (provider-request-thread-context request))
+             (compact-openai-turn-context (provider-request-turn-context request))
+             (compact-openai-recent-transcript (or (getf (provider-request-session-summary request) :recent-transcript) '()) :limit 4)
+             (compact-openai-runtime-summary (provider-request-runtime-summary request))
+             (and (provider-request-surface-context request)
+                  (compact-openai-surface-context (provider-request-surface-context request)))
+             (and (provider-request-surface-actions request)
+                  (compact-openai-surface-actions (provider-request-surface-actions request)))))
+    (t
+     (format nil
+             "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Surface context: ~S~%~%Available Surface actions: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
+             (provider-request-prompt request)
+             (provider-request-operator-mode request)
+             (provider-request-stream-p request)
+             (provider-request-thread-context request)
+             (provider-request-turn-context request)
+             (provider-request-environment-context request)
+             (provider-request-surface-context request)
+             (provider-request-surface-actions request)
+             (provider-request-runtime-summary request)
+             (provider-request-workspace-summary request)
+             (provider-request-policy-summary request)
+             (provider-request-retrieval-dossier request)
+             (provider-request-cognition-bundle request)
+             (provider-request-reasoning-brief request)
+             (provider-request-planning-brief request)
+             (provider-request-outcome-brief request)
+             (provider-request-session-summary request)
+             (build-openai-governance-directives request)))))
 
 (defun build-openai-user-prompt (request)
   "Compatibility wrapper for tests and callers that still use the older helper name."
@@ -232,13 +412,17 @@
           "plan" "roadmap" "refactor" "multi-agent" "gap")))
 
 (defun openai-request-model (provider request)
-  (if (deep-request-p (provider-request-prompt request))
+  (if (and (not (lightweight-openai-conversation-request-p request))
+           (not (cached-openai-conversation-request-p request))
+           (deep-request-p (provider-request-prompt request)))
       (openai-provider-model provider)
       (or (openai-provider-fast-model provider)
           (openai-provider-model provider))))
 
 (defun anthropic-request-model (provider request)
-  (if (deep-request-p (provider-request-prompt request))
+  (if (and (not (lightweight-openai-conversation-request-p request))
+           (not (cached-openai-conversation-request-p request))
+           (deep-request-p (provider-request-prompt request)))
       (anthropic-provider-model provider)
       (or (anthropic-provider-fast-model provider)
           (anthropic-provider-model provider))))
@@ -249,7 +433,13 @@
          :messages (list
                     (list :role "system"
                           :content (if stream-protocol
-                                       (build-openai-stream-system-prompt)
+                                       (if (or (lightweight-openai-conversation-request-p request)
+                                               (cached-openai-conversation-request-p request))
+                                           (if (or (provider-request-surface-actions request)
+                                                   (provider-request-surface-context request))
+                                               (build-openai-stream-system-prompt)
+                                               (build-openai-lightweight-stream-system-prompt))
+                                           (build-openai-stream-system-prompt))
                                        (build-openai-system-prompt)))
                     (list :role "user"
                           :content (build-openai-user-message-content request)))

@@ -2,7 +2,7 @@
 layout: default
 title: Architecture and Design
 hero_title: Architecture and Design
-hero_text: The goal is not a literal Codex clone or a conventional IDE. The goal is an SBCL-native symbolic environment where runtime, conversation, artifacts, agents, and workflow governance are explicit, inspectable layers.
+hero_text: The goal is not a literal Codex clone or a conventional IDE. The goal is an SBCL-native symbolic environment where Common Lisp runtime, kernel, actor system, integrated agent context, and workflow governance are explicit, inspectable layers.
 eyebrow: Architecture
 permalink: /architecture.html
 description: Detailed architecture for sbcl-agent.
@@ -60,25 +60,169 @@ The current implementation is environment-oriented now. Remaining transitional s
 
 ## Architecture Diagrams
 
-The following diagrams capture the current architectural loop more directly than prose alone.
+The following diagrams capture the current architecture more accurately than the older static kernel/chat/governance image set. The system is now best understood as a layered stack with an explicit actor runtime above a more traditional kernel.
 
-### Realtime Introspective Environment Architecture
+### Current Layered Stack
 
-Before looking at the kernel and service loops, it is important to understand the primary architectural choice: `sbcl-agent` is not an external agent wrapped around a target system. The agent executes inside the same live SBCL environment it inspects and controls.
+```mermaid
+flowchart TB
+    React["React Surface Desktop<br/>projection / operator workflows / live surfaces"]
+    Actor["Actor System<br/>address registry / mailboxes / supervision / worker pool"]
+    Kernel["Governed Kernel<br/>invoke / inspect / control / authority / policy"]
+    Runtime["SBCL / Common Lisp<br/>image / persistence / introspection / concurrency substrate"]
 
-<img src="{{ '/assets/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+    React --> Actor
+    Actor --> Kernel
+    Kernel --> Runtime
+```
 
-### Execution Kernel Architecture
+The architectural reading order is therefore:
 
-<img src="{{ '/assets/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+1. `SBCL / Common Lisp`
+   - foundational runtime
+   - foundational persistence and introspection substrate
+2. `Kernel`
+   - more traditional authority boundary
+   - execution mediation
+   - native policy-based governance
+3. `Actor System`
+   - address-based capability and workflow execution
+   - supervision
+   - worker-pool-backed concurrency
+4. `Presentation Tier`
+   - projection of the lower layers, not the owner of continuity
 
-### Conversational Context Architecture
+### Actor Runtime Over The Kernel
 
-<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart TB
+    subgraph UX["Projection Layer"]
+        ChatUI["Context Chat UI"]
+        EditorUI["Editor Surface UI"]
+        BrowserUI["Actor System Surface"]
+    end
 
-### Governance Architecture
+    subgraph Actors["Actor System"]
+        Root["ActorSystem"]
+        Chat["ContextChatActor(session)"]
+        Gov["GovernanceActor(session)"]
+        Run["RuntimeActor(session)"]
+        Edit["EditorActor(session)"]
+        Calc["CalculatorActor(session)"]
+        Env["EnvironmentActor(environment)"]
+        MCP["MCP Actor Pool"]
+        Pool["SBCL Worker Pool"]
+    end
 
-<img src="{{ '/assets/GovernanceArchitecture.png' | relative_url }}" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+    subgraph Kernel["Governed Kernel"]
+        Invoke["invoke"]
+        Inspect["inspect"]
+        Control["control"]
+        Records["execution records / policy / approvals"]
+    end
+
+    ChatUI --> Chat
+    EditorUI --> Edit
+    BrowserUI --> Root
+
+    Root --> Chat
+    Root --> Gov
+    Root --> Run
+    Root --> Edit
+    Root --> Calc
+    Root --> Env
+    Root --> MCP
+
+    Pool --> Chat
+    Pool --> Gov
+    Pool --> Run
+    Pool --> Edit
+    Pool --> Calc
+    Pool --> Env
+
+    Chat --> Invoke
+    Chat --> Inspect
+    Gov --> Control
+    Run --> Invoke
+    Edit --> Invoke
+    Calc --> Invoke
+    Env --> Inspect
+    MCP --> Invoke
+
+    Invoke --> Records
+    Inspect --> Records
+    Control --> Records
+```
+
+### Integrated Agent And Shared Environment
+
+```mermaid
+flowchart LR
+    Agent["Integrated Agent<br/>same environment / same runtime context"]
+    Runtime["SBCL Environment"]
+    Source["Source Truth"]
+    Image["Image Truth"]
+    Workflow["Workflow Truth"]
+    Policy["Native Policy Governance"]
+
+    Agent <--> Runtime
+    Runtime --> Source
+    Runtime --> Image
+    Runtime --> Workflow
+    Policy --> Workflow
+    Policy --> Runtime
+```
+
+### Canonical Runtime / Governance Flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Surface UI
+    participant Chat as ContextChatActor
+    participant Gov as GovernanceActor
+    participant Runtime as RuntimeActor
+    participant Editor as EditorActor
+    participant Kernel as Governed Kernel
+
+    UI->>Chat: submit user intent
+    Chat->>Gov: RequestExecution(actor-message)
+
+    alt approval required
+        Gov-->>Chat: ApprovalRequested
+        Chat-->>UI: project approval prompt
+        UI->>Chat: approval decision
+        Chat->>Gov: ApprovalDecision
+    end
+
+    alt runtime evaluation
+        Gov->>Runtime: AuthorizeRuntimeEvaluation
+        Runtime->>Kernel: invoke(runtime-eval)
+        Kernel-->>Runtime: result / evidence
+        Runtime-->>Chat: RuntimeReply
+    else editor mutation
+        Gov->>Editor: AuthorizePendingMutation
+        Editor->>Kernel: invoke(editor-mutation)
+        Kernel-->>Editor: result / evidence
+        Editor-->>Chat: MutationApplied
+    end
+
+    Chat-->>UI: render reply / failure / continuation
+```
+
+### Actor System Observability
+
+```mermaid
+flowchart LR
+    Root["ActorSystem Root"] --> Hierarchy["Hierarchy Graph"]
+    Root --> Workflow["Workflow Graph"]
+    Root --> RuntimeState["Runtime Execution Summary"]
+    Root --> Supervision["Supervision Incidents"]
+
+    RuntimeState --> Workers["worker count / busy / idle / queue depth"]
+    Hierarchy --> Detail["node detail"]
+    Workflow --> Detail
+    Supervision --> Detail
+```
 
 ## Preserve Capabilities, Discard Metaphors
 
@@ -166,6 +310,29 @@ The current refactor is organized around one rule:
 - workflow owns engineering governance
 
 This prevents conversation history from becoming a second runtime database, and it prevents runtime activity from bypassing workflow evidence. In the newer vision, these domains should all become explicit subdomains of the Environment rather than peer concepts loosely held together by the shell.
+
+## Environment Invariant
+
+The agent is not operating against an external target environment. The environment from which the agent draws context is the same environment in which it performs its work.
+
+That means:
+
+- context gathering is environment introspection
+- action is environment mutation or governed observation
+- governance is native to that environment
+- policy is part of the execution substrate, not an after-the-fact review layer
+
+## Actor-System Ownership Rule
+
+The current implementation adds a stronger operational rule above the kernel:
+
+- actors communicate by address, not by UI thread identity
+- inboxes and outboxes are the primary execution surfaces
+- singleton actors must resolve to one canonical session-scoped identity
+- pooled work uses leased SBCL worker threads and returns them when idle
+- the React tier projects actor-system state; it does not own routing or continuity
+
+This matters because the earlier hybrid model let continuity leak across transcript state, bridge state, and renderer state. The actor-system refactor is explicitly trying to collapse that ambiguity.
 
 ## Current Runtime Shape
 

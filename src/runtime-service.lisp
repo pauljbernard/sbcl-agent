@@ -35,6 +35,68 @@
                                                                 :session session
                                                                 :runtime-id (default-runtime-id))))
 
+(defun query-runtime-inspect-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :inspect
+                               (tool-runtime-inspect-symbol session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-inspect-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-object-service (session symbol-name &key package)
+  (make-service-query-response :runtime
+                               :object
+                               (tool-runtime-object-symbol session :symbol symbol-name :package package)
+                               :metadata (make-service-metadata :authority :environment
+                                                                :read-model :runtime-object-v1
+                                                                :session session
+                                                                :runtime-id (default-runtime-id))))
+
+(defun query-runtime-condition-service (session incident-id)
+  (let ((incident (find-incident session incident-id)))
+    (unless incident
+      (error "Unknown incident ~A" incident-id))
+    (make-service-query-response :runtime
+                                 :condition
+                                 (list :tool :runtime/condition
+                                       :incident-id (incident-id incident)
+                                       :kind (incident-kind incident)
+                                       :status (incident-status incident)
+                                       :condition (incident-condition-string incident)
+                                       :condition-summary (incident-condition-summary incident)
+                                       :condition-detail (incident-condition-detail incident)
+                                       :runtime-context (incident-runtime-context session incident))
+                                 :metadata (make-service-metadata :authority :environment
+                                                                  :read-model :runtime-condition-v1
+                                                                  :session session
+                                                                  :runtime-id (default-runtime-id)
+                                                                  :incident-id incident-id))))
+
+(defun query-runtime-restarts-service (session incident-id)
+  (let ((incident (find-incident session incident-id)))
+    (unless incident
+      (error "Unknown incident ~A" incident-id))
+    (let ((restart-suggestions (incident-restart-suggestions incident)))
+      (make-service-query-response :runtime
+                                   :restarts
+                                   (list :tool :runtime/restarts
+                                         :incident-id (incident-id incident)
+                                         :kind (incident-kind incident)
+                                         :status (incident-status incident)
+                                         :restart-count (length restart-suggestions)
+                                         :restart-suggestions restart-suggestions
+                                         :recommended-actions
+                                         (remove-if-not (lambda (action)
+                                                          (eq (getf action :type) :consider-restart))
+                                                        (incident-recommended-actions session incident))
+                                         :runtime-context (incident-runtime-context session incident))
+                                   :metadata (make-service-metadata :authority :environment
+                                                                    :read-model :runtime-restarts-v1
+                                                                    :session session
+                                                                    :runtime-id (default-runtime-id)
+                                                                    :incident-id incident-id)))))
+
 (defun query-runtime-find-definition-service (session symbol-name &key package)
   (make-service-query-response :runtime
                                :find-definition
@@ -95,14 +157,15 @@
    :capability :runtime/set-package
    :authority :runtime))
 
-(defun command-runtime-eval-service (session form-or-source &key package mutating)
+(defun command-runtime-eval-service (session form-or-source &key package mutating recovery-launch)
   (kernelize-service-command-response
    (make-service-command-response :runtime
                                   :eval
                                   (tool-runtime-eval session
                                                      :form form-or-source
                                                      :package package
-                                                     :mutating mutating)
+                                                     :mutating mutating
+                                                     :recovery-launch recovery-launch)
                                   :metadata (make-service-metadata :authority :environment
                                                                    :command-model :runtime-command-v1
                                                                    :session session

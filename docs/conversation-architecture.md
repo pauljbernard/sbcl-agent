@@ -23,9 +23,31 @@ The newer roadmap narrows the role of this document: conversation is now one nat
 
 ## Conversational Context Architecture
 
-This diagram shows the current turn-assembly loop: Surface context, environment state, transcript history, and deliberate operator memory are assembled before provider execution and then fed back into thread, transcript, and memory state after the turn completes.
+The conversation subsystem is no longer best described as “chat plus transcript.” It is now routed through the actor system and governed kernel.
 
-<img src="{{ '/assets/ConversationalContextArchitecture.png' | relative_url }}" alt="Conversational context architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart LR
+    UI["Surface Context Chat"]
+    Chat["ContextChatActor(session)"]
+    Threads["threads / messages / turns / artifacts"]
+    Gov["GovernanceActor(session)"]
+    Runtime["RuntimeActor(session)"]
+    Editor["EditorActor(session)"]
+    Kernel["invoke / inspect / control"]
+    State["environment state / runtime state / workflow state"]
+
+    UI --> Chat
+    Chat --> Threads
+    Chat --> Gov
+    Gov --> Runtime
+    Gov --> Editor
+    Runtime --> Kernel
+    Editor --> Kernel
+    Kernel --> State
+    Runtime --> Threads
+    Editor --> Threads
+    Threads --> UI
+```
 
 ## Ownership Rule
 
@@ -36,6 +58,10 @@ The architectural rule is:
 - workflow owns engineering governance
 
 That rule is the cleanest way to align the conversation runtime with the project's source truth, image truth, and workflow truth model.
+
+The actor-system refactor adds one more practical rule:
+
+- conversation owns interaction continuity through `ContextChatActor`, not through whichever renderer thread happens to be selected
 
 ## What Exists Today
 
@@ -195,6 +221,13 @@ Its responsibilities are:
 8. Finalize turn, operation, and artifact state.
 
 This keeps behavior in Lisp rather than encoding it in prompt tricks.
+
+In the current architecture, the orchestrator also has to preserve actor-native continuity:
+
+1. resolve the canonical session-scoped actor identities
+2. stamp actor messages with sender, receiver, reply-to, and originator addresses
+3. attach runtime or editor actor-flow state to the resulting turn payload
+4. project actor replies back into conversation records without making the transcript the routing backbone
 
 ## `ask` and `say`
 

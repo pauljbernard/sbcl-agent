@@ -90,6 +90,44 @@
                                                                    :session session
                                                                    :incident-id incident-id))))
 
+(defun query-incident-condition-service (session incident-id)
+  (let ((incident (find-incident session incident-id)))
+    (unless incident
+      (error "Unknown incident ~A" incident-id))
+    (make-service-query-response :incident
+                                 :condition
+                                 (list :incident-id (incident-id incident)
+                                       :kind (incident-kind incident)
+                                       :status (incident-status incident)
+                                       :condition (incident-condition-string incident)
+                                       :condition-summary (incident-condition-summary incident)
+                                       :condition-detail (incident-condition-detail incident))
+                                 :metadata (make-service-metadata :authority :environment
+                                                                  :read-model :incident-condition-v1
+                                                                  :session session
+                                                                  :incident-id incident-id))))
+
+(defun query-incident-restarts-service (session incident-id)
+  (let ((incident (find-incident session incident-id)))
+    (unless incident
+      (error "Unknown incident ~A" incident-id))
+    (let ((restart-suggestions (incident-restart-suggestions incident)))
+      (make-service-query-response :incident
+                                   :restarts
+                                   (list :incident-id (incident-id incident)
+                                         :kind (incident-kind incident)
+                                         :status (incident-status incident)
+                                         :restart-count (length restart-suggestions)
+                                         :restart-suggestions restart-suggestions
+                                         :recommended-actions
+                                         (remove-if-not (lambda (action)
+                                                          (eq (getf action :type) :consider-restart))
+                                                        (incident-recommended-actions session incident)))
+                                   :metadata (make-service-metadata :authority :environment
+                                                                    :read-model :incident-restarts-v1
+                                                                    :session session
+                                                                    :incident-id incident-id)))))
+
 (defun command-incident-remediation-plan-service (session incident-id remediation-plan)
   (let ((incident (find-incident session incident-id)))
     (unless incident

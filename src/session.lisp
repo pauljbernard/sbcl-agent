@@ -26,7 +26,10 @@
   events-tail
   capability-grants
   capability-grants-tail
+  actor-mailboxes
   pending-actions
+  desktop-tasks
+  desktop-tasks-tail
   tasks
   tasks-tail
   projects
@@ -40,6 +43,7 @@
   workflow-records-tail
   incidents
   incidents-tail
+  actor-runtime-state
   workers
   workers-tail)
 
@@ -71,7 +75,10 @@
    :events-tail nil
    :capability-grants '()
    :capability-grants-tail nil
+   :actor-mailboxes nil
    :pending-actions '()
+   :desktop-tasks '()
+   :desktop-tasks-tail nil
    :tasks '()
    :tasks-tail nil
    :projects '()
@@ -85,6 +92,7 @@
    :workflow-records-tail nil
    :incidents '()
    :incidents-tail nil
+   :actor-runtime-state nil
    :workers '()
    :workers-tail nil))
 
@@ -105,6 +113,7 @@
         (agent-session-transcript-tail session) (last (agent-session-transcript session))
         (agent-session-events-tail session) (last (agent-session-events session))
         (agent-session-capability-grants-tail session) (last (agent-session-capability-grants session))
+        (agent-session-desktop-tasks-tail session) (last (agent-session-desktop-tasks session))
         (agent-session-tasks-tail session) (last (agent-session-tasks session))
         (agent-session-projects-tail session) (last (agent-session-projects session))
         (agent-session-trace-links-tail session) (last (agent-session-trace-links session))
@@ -158,7 +167,17 @@
                *current-environment*
                (eq (environment-compatibility-session *current-environment*) session))
       (refresh-environment-root-state-from-session *current-environment* session)
-      (append-environment-session-event *current-environment* session event))
+      (append-environment-session-event *current-environment* session event)
+      (refresh-bound-environment-agent-state session))
+    (when (fboundp 'mark-provider-request-snapshot-dirty)
+      (mark-provider-request-snapshot-dirty session :reason kind :family family))
+    (when (fboundp 'schedule-provider-request-snapshot-refresh)
+      (schedule-provider-request-snapshot-refresh
+       session
+       :domains (and (fboundp 'provider-request-snapshot-dirty-domains-for-event)
+                     (provider-request-snapshot-dirty-domains-for-event
+                      :reason kind
+                      :family family))))
     (when (fboundp 'maybe-run-continuous-alignment-loop-for-event)
       (maybe-run-continuous-alignment-loop-for-event session event))
     event))
@@ -178,8 +197,14 @@
   (let ((environment (session-bound-environment session)))
     (when environment
       (refresh-environment-root-state-from-session environment session)
+      (refresh-environment-conversation-domain environment session)
+      (setf (environment-thread-set environment)
+            (mapcar #'thread-record-summary (agent-session-threads session))
+            (environment-active-thread-id environment)
+            (agent-session-current-thread-id session))
       (refresh-environment-agent-domain environment session)
-      (refresh-environment-workflow-domain environment session)))
+      (refresh-environment-workflow-domain environment session)
+      (refresh-environment-artifact-index environment)))
   session)
 
 (defun update-session-plan (session goal)
@@ -666,7 +691,9 @@
    :shell-active-panel-id (agent-session-shell-active-panel-id session)
    :events (serializable-session-events session)
    :capability-grants (agent-session-capability-grants session)
+   :actor-mailboxes (agent-session-actor-mailboxes session)
    :pending-actions (agent-session-pending-actions session)
+   :desktop-tasks (agent-session-desktop-tasks session)
    :tasks (agent-session-tasks session)
    :projects (agent-session-projects session)
    :current-project-id (agent-session-current-project-id session)

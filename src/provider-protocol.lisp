@@ -387,11 +387,14 @@
   (execute-assistant-action-list (assistant-response-actions response) session))
 
 (defmethod stream-request ((provider provider) request event-handler)
+  (emit-provider-timing :request-built)
   (let ((response (send-request provider request)))
     (emit-provider-event event-handler :message-start nil)
+    (emit-provider-timing :first-delta)
     (emit-provider-event event-handler :message-delta (assistant-response-message response))
     (when (assistant-response-actions response)
       (emit-provider-event event-handler :action-proposal (assistant-response-actions response)))
+    (emit-provider-timing :response-finalized)
     (emit-provider-event event-handler
                          :message-complete
                          (list :response response

@@ -49,13 +49,38 @@ This is the main reason `sbcl-agent` can justify an environment-first architectu
 
 The following diagram makes that claim concrete. Traditional agents stand outside the target environment and manipulate it through APIs, shells, filesystems, browsers, and logs. `sbcl-agent` instead runs the agent inside the same live SBCL environment, where runtime state, memory, governance, evidence, and the Surface UI are all part of one introspective and persistent world.
 
-<img src="{{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart LR
+    Agent["Integrated Agent"]
+    Runtime["SBCL Environment"]
+    Source["Source Truth"]
+    Image["Image Truth"]
+    Workflow["Workflow Truth"]
+    Policy["Native Policy Governance"]
+
+    Agent <--> Runtime
+    Runtime --> Source
+    Runtime --> Image
+    Runtime --> Workflow
+    Policy --> Workflow
+    Policy --> Runtime
+```
 
 ## Execution Kernel Architecture
 
 The kernel architecture below shows how that environment is operationalized: one environment contains the execution kernel, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.
 
-<img src="{{ '/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart TB
+    React["React Surface Desktop"]
+    Actor["Actor System"]
+    Kernel["Governed Kernel<br/>invoke / inspect / control"]
+    Runtime["SBCL / Common Lisp"]
+
+    React --> Actor
+    Actor --> Kernel
+    Kernel --> Runtime
+```
 
 ## The Three Truths
 
@@ -112,7 +137,28 @@ That is why workflow records, incidents, approvals, and artifacts exist as nativ
 
 The governance model is architectural, not merely procedural. Policy evaluation, approvals, work-items, incidents, evidence, validation, and recovery all live inside the same environment loop.
 
-<img src="{{ '/assets/GovernanceArchitecture.png' | relative_url }}" alt="Governance architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+sequenceDiagram
+    participant UI as Surface UI
+    participant Chat as ContextChatActor
+    participant Gov as GovernanceActor
+    participant Runtime as RuntimeActor
+    participant Kernel as Governed Kernel
+
+    UI->>Chat: submit intent
+    Chat->>Gov: RequestExecution
+    Gov->>Runtime: AuthorizeRuntimeEvaluation
+    Runtime->>Kernel: invoke
+    Kernel-->>Runtime: result / evidence
+    Runtime-->>Chat: reply
+    Chat-->>UI: project governed outcome
+```
+
+The older static PNG diagrams have been retired from the primary docs in favor of the Mermaid-backed architecture pages:
+
+- [Architecture and Design]({{ '/architecture.html' | relative_url }})
+- [Actor Runtime And Governed Kernel]({{ '/robust-actor-kernel-architecture.html' | relative_url }})
+- [Actor System Surface]({{ '/actor-system-panel.html' | relative_url }})
 
 ## Current Maturity
 

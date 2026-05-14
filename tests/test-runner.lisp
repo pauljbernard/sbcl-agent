@@ -98,6 +98,15 @@
 
 (defun core-and-cli-tests ()
   (list (list "runtime-smoke-test" #'runtime-smoke-test)
+        (list "actor-registry-foundation-test" #'actor-registry-foundation-test)
+        (list "actor-thread-pool-runtime-execution-test" #'actor-thread-pool-runtime-execution-test)
+        (list "actor-thread-pool-serializes-per-actor-test" #'actor-thread-pool-serializes-per-actor-test)
+        (list "actor-system-panel-query-test" #'actor-system-panel-query-test)
+        (list "actor-system-panel-persists-through-environment-save-load-test"
+              #'actor-system-panel-persists-through-environment-save-load-test)
+        (list "actor-supervision-incident-flow-test" #'actor-supervision-incident-flow-test)
+        (list "actor-supervision-action-application-test" #'actor-supervision-action-application-test)
+        (list "actor-supervision-restart-child-test" #'actor-supervision-restart-child-test)
         (list "common-lisp-package-bootstrap-test" #'common-lisp-package-bootstrap-test)
         (list "direct-sandbox-tool-wrapper-test" #'direct-sandbox-tool-wrapper-test)
         (list "repl-alias-test" #'repl-alias-test)
@@ -173,6 +182,17 @@
         (list "assistant-eval-action-execution-test" #'assistant-eval-action-execution-test)
         (list "direct-conversation-runtime-eval-routing-test" #'direct-conversation-runtime-eval-routing-test)
         (list "conversation-runtime-eval-confirmation-routing-test" #'conversation-runtime-eval-confirmation-routing-test)
+        (list "direct-conversation-runtime-eval-canonical-context-test" #'direct-conversation-runtime-eval-canonical-context-test)
+        (list "direct-conversation-runtime-eval-actor-flow-test" #'direct-conversation-runtime-eval-actor-flow-test)
+        (list "direct-conversation-runtime-definition-actor-state-test" #'direct-conversation-runtime-definition-actor-state-test)
+        (list "runtime-actor-state-persists-through-environment-save-load-test"
+              #'runtime-actor-state-persists-through-environment-save-load-test)
+        (list "direct-conversation-calculator-canonical-context-test" #'direct-conversation-calculator-canonical-context-test)
+        (list "direct-vs-provider-conversation-lifecycle-equivalence-test" #'direct-vs-provider-conversation-lifecycle-equivalence-test)
+        (list "direct-vs-provider-calculator-lifecycle-equivalence-test" #'direct-vs-provider-calculator-lifecycle-equivalence-test)
+        (list "direct-vs-provider-transcript-and-memory-side-effects-test" #'direct-vs-provider-transcript-and-memory-side-effects-test)
+        (list "direct-vs-provider-runtime-result-contract-test" #'direct-vs-provider-runtime-result-contract-test)
+        (list "direct-vs-provider-assistant-response-event-envelope-test" #'direct-vs-provider-assistant-response-event-envelope-test)
         (list "pasted-assistant-action-command-test" #'pasted-assistant-action-command-test)
         (list "journal-date-time-followup-execution-test" #'journal-date-time-followup-execution-test)
         (list "session-summary-recent-transcript-test" #'session-summary-recent-transcript-test)
@@ -181,15 +201,75 @@
         (list "provider-request-context-test" #'provider-request-context-test)
         (list "provider-request-transcript-memory-context-test" #'provider-request-transcript-memory-context-test)
         (list "provider-request-operator-memory-context-test" #'provider-request-operator-memory-context-test)
+        (list "provider-request-cached-conversation-context-test" #'provider-request-cached-conversation-context-test)
         (list "provider-rendering-context-test" #'provider-rendering-context-test)
+        (list "provider-rendering-cached-conversation-prompt-test" #'provider-rendering-cached-conversation-prompt-test)
         (list "provider-rendering-governance-ready-test" #'provider-rendering-governance-ready-test)
         (list "provider-request-single-environment-snapshot-test" #'provider-request-single-environment-snapshot-test)
         (list "provider-context-bundle-consistency-test" #'provider-context-bundle-consistency-test)
         (list "provider-request-snapshot-conversion-test" #'provider-request-snapshot-conversion-test)
+        (list "provider-request-snapshot-precomputes-cached-context-entries-test"
+              #'provider-request-snapshot-precomputes-cached-context-entries-test)
+        (list "provider-request-snapshot-freshness-test"
+              #'provider-request-snapshot-freshness-test)
+        (list "provider-request-snapshot-domain-freshness-test"
+              #'provider-request-snapshot-domain-freshness-test)
+        (list "provider-request-snapshot-partial-refresh-test"
+              #'provider-request-snapshot-partial-refresh-test)
+        (list "provider-request-snapshot-partial-entry-refresh-test"
+              #'provider-request-snapshot-partial-entry-refresh-test)
+        (list "provider-request-snapshot-partial-index-refresh-test"
+              #'provider-request-snapshot-partial-index-refresh-test)
+        (list "provider-request-snapshot-environment-notify-refresh-test"
+              #'provider-request-snapshot-environment-notify-refresh-test)
+        (list "provider-request-snapshot-dirty-invalidation-test"
+              #'provider-request-snapshot-dirty-invalidation-test)
+        (list "provider-request-snapshot-relevant-domain-normalization-test"
+              #'provider-request-snapshot-relevant-domain-normalization-test)
+        (list "provider-request-snapshot-event-family-dirty-domains-test"
+              #'provider-request-snapshot-event-family-dirty-domains-test)
         (list "provider-summaries-prefer-environment-snapshot-domains-test" #'provider-summaries-prefer-environment-snapshot-domains-test)
         (list "provider-context-defaults-prefer-environment-conversation-state-test" #'provider-context-defaults-prefer-environment-conversation-state-test)
         (list "provider-policy-and-operator-summary-prefer-snapshot-test" #'provider-policy-and-operator-summary-prefer-snapshot-test)
         (list "provider-summary-does-not-require-session-resync-test" #'provider-summary-does-not-require-session-resync-test)
+        (list "governed-desktop-task-internal-governance-audit-test"
+              #'governed-desktop-task-internal-governance-audit-test)
+        (list "governed-desktop-task-mcp-governance-audit-test"
+              #'governed-desktop-task-mcp-governance-audit-test)
+        (list "governed-desktop-task-governance-inbox-test"
+              #'governed-desktop-task-governance-inbox-test)
+        (list "governed-desktop-task-context-chat-mailbox-test"
+              #'governed-desktop-task-context-chat-mailbox-test)
+        (list "governed-desktop-task-context-chat-approval-inbox-test"
+              #'governed-desktop-task-context-chat-approval-inbox-test)
+        (list "governed-desktop-task-context-chat-approval-inbox-consumed-test"
+              #'governed-desktop-task-context-chat-approval-inbox-consumed-test)
+        (list "governed-desktop-task-context-chat-approval-acknowledge-test"
+              #'governed-desktop-task-context-chat-approval-acknowledge-test)
+        (list "governed-desktop-task-pending-approval-mailbox-state-test"
+              #'governed-desktop-task-pending-approval-mailbox-state-test)
+        (list "governed-desktop-task-context-chat-mailbox-entry-id-stable-test"
+              #'governed-desktop-task-context-chat-mailbox-entry-id-stable-test)
+        (list "governed-desktop-task-editor-pending-mutation-mailbox-test"
+              #'governed-desktop-task-editor-pending-mutation-mailbox-test)
+        (list "governed-desktop-task-editor-pending-mutation-mailbox-authorized-test"
+              #'governed-desktop-task-editor-pending-mutation-mailbox-authorized-test)
+        (list "governed-desktop-task-governance-decision-outbox-test"
+              #'governed-desktop-task-governance-decision-outbox-test)
+        (list "governed-desktop-task-editor-authorization-mailbox-test"
+              #'governed-desktop-task-editor-authorization-mailbox-test)
+        (list "governed-desktop-task-consume-editor-authorization-test"
+              #'governed-desktop-task-consume-editor-authorization-test)
+        (list "governed-desktop-task-apply-editor-authorization-test"
+              #'governed-desktop-task-apply-editor-authorization-test)
+        (list "governed-desktop-task-actor-approve-message-test"
+              #'governed-desktop-task-actor-approve-message-test)
+  (list "governed-desktop-task-governance-approve-approval-id-test"
+        #'governed-desktop-task-governance-approve-approval-id-test)
+  (list "governed-desktop-task-approval-survives-environment-save-load-test"
+        #'governed-desktop-task-approval-survives-environment-save-load-test)
+  (list "governed-desktop-task-actor-flow-query-test"
+        #'governed-desktop-task-actor-flow-query-test)
         (list "thread-shell-commands-test" #'thread-shell-commands-test)
         (list "thread-show-and-turn-status-test" #'thread-show-and-turn-status-test)
         (list "turn-status-approval-summary-test" #'turn-status-approval-summary-test)
@@ -425,6 +505,7 @@
    (list "runtime-shell-commands-test" #'runtime-shell-commands-test)
    (list "runtime-package-switch-approval-test" #'runtime-package-switch-approval-test)
    (list "runtime-mutating-eval-approval-test" #'runtime-mutating-eval-approval-test)
+   (list "runtime-eval-recovery-launch-provenance-test" #'runtime-eval-recovery-launch-provenance-test)
    (list "runtime-reload-file-approval-and-workflow-test" #'runtime-reload-file-approval-and-workflow-test)
    (list "runtime-cold-validation-finalization-test" #'runtime-cold-validation-finalization-test)
    (list "runtime-eval-incident-recording-test" #'runtime-eval-incident-recording-test)
@@ -436,6 +517,8 @@
    (list "turn-resume-runtime-incident-quarantine-test" #'turn-resume-runtime-incident-quarantine-test)
    (list "incident-workspace-runtime-context-test" #'incident-workspace-runtime-context-test)
    (list "incident-recommended-recovery-test" #'incident-recommended-recovery-test)
+   (list "incident-condition-restart-summary-test" #'incident-condition-restart-summary-test)
+   (list "incident-condition-and-restarts-command-test" #'incident-condition-and-restarts-command-test)
    (list "incident-recovery-artifact-test" #'incident-recovery-artifact-test)
    (list "incident-aware-session-and-environment-summary-test" #'incident-aware-session-and-environment-summary-test)
    (list "non-thread-validation-artifact-test" #'non-thread-validation-artifact-test)

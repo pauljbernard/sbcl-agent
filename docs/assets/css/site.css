@@ -285,6 +285,25 @@ pre code { background: transparent; padding: 0; color: inherit; }
   margin-bottom: 0.2rem;
 }
 
+.doc-content pre.mermaid,
+.doc-content .mermaid {
+  display: block;
+  overflow-x: auto;
+  margin: 1.2rem 0 1.6rem;
+  padding: 1rem;
+  border-radius: 16px;
+  border: 1px solid rgba(15, 91, 120, 0.14);
+  background: linear-gradient(180deg, rgba(15, 91, 120, 0.04), rgba(255,255,255,0.92));
+  box-shadow: 0 10px 24px rgba(28, 36, 48, 0.06);
+}
+
+.doc-content .mermaid svg {
+  max-width: 100%;
+  height: auto;
+  display: block;
+  margin: 0 auto;
+}
+
 .site-footer {
   padding: 20px 0 0;
   color: var(--muted);

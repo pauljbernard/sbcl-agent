@@ -380,7 +380,8 @@
                                        (or (getf payload :form)
                                            intention)
                                        :package (getf payload :package)
-                                       :mutating (getf payload :mutating))))
+                                       :mutating (getf payload :mutating)
+                                       :recovery-launch (getf payload :recovery-launch))))
       ((string= normalized "runtime/reload-file")
        (let ((*runtime-governance-thread* thread)
              (*runtime-governance-turn* turn)
@@ -442,6 +443,317 @@
        (command-environment-load-service
         (or (getf payload :path)
             (error "Kernel invoke for environment/load requires :path"))))
+      ((string= normalized "desktop-task/manifests")
+       (query-desktop-task-manifest-list-service session))
+      ((string= normalized "desktop-task/manifest")
+       (query-desktop-task-manifest-detail-service
+        session
+        (or (getf payload :target)
+            (error "Kernel invoke for desktop-task/manifest requires :target"))
+        (or (getf payload :operation)
+            (error "Kernel invoke for desktop-task/manifest requires :operation"))))
+      ((string= normalized "desktop-task/records")
+       (query-desktop-task-record-list-service
+        session
+        :thread-id (getf payload :thread-id)
+        :status (getf payload :status)
+        :approval-status (getf payload :approval-status)))
+      ((string= normalized "desktop-task/actors")
+       (query-desktop-task-actor-list-service session))
+      ((string= normalized "desktop-task/actor")
+       (query-desktop-task-actor-detail-service
+        session
+        (or (getf payload :actor-role)
+            (getf payload :role)
+            (error "Kernel invoke for desktop-task/actor requires :actor-role"))))
+      ((string= normalized "desktop-task/actor-system-panel")
+       (query-desktop-task-actor-system-panel-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))))
+      ((string= normalized "desktop-task/supervision-incidents")
+       (query-desktop-task-supervision-incidents-service
+        session
+        :actor-id (getf payload :actor-id)
+        :parent-actor-id (getf payload :parent-actor-id)
+        :mailbox (getf payload :mailbox)
+        :mailbox-entry-id (getf payload :mailbox-entry-id)
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))))
+      ((string= normalized "desktop-task/fail-mailbox-entry")
+       (command-desktop-task-fail-mailbox-entry-service
+        session
+        (or (getf payload :mailbox)
+            (error "Kernel invoke for desktop-task/fail-mailbox-entry requires :mailbox"))
+        (or (getf payload :mailbox-entry-id)
+            (error "Kernel invoke for desktop-task/fail-mailbox-entry requires :mailbox-entry-id"))
+        :actor-message-id (getf payload :actor-message-id)
+        :approval-id (getf payload :approval-id)
+        :pending-action-id (getf payload :pending-action-id)
+        :summary (or (getf payload :summary)
+                     "Mailbox entry failed.")
+        :condition-string (getf payload :condition-string)
+        :supervision-action (or (getf payload :supervision-action)
+                                :escalate)))
+      ((string= normalized "desktop-task/apply-supervision-action")
+       (command-desktop-task-apply-supervision-action-service
+        session
+        (or (getf payload :incident-id)
+            (error "Kernel invoke for desktop-task/apply-supervision-action requires :incident-id"))
+        :action (or (getf payload :action)
+                    :dead-letter)
+        :note (getf payload :note)))
+      ((string= normalized "desktop-task/inbox")
+       (query-desktop-task-actor-inbox-service
+        session
+        (or (getf payload :actor-role)
+            (getf payload :role)
+            (error "Kernel invoke for desktop-task/inbox requires :actor-role"))
+        :status (getf payload :status)))
+      ((string= normalized "desktop-task/outbox")
+       (query-desktop-task-actor-outbox-service
+        session
+        (or (getf payload :actor-role)
+            (getf payload :role)
+            (error "Kernel invoke for desktop-task/outbox requires :actor-role"))
+        :status (getf payload :status)))
+      ((string= normalized "desktop-task/message")
+       (query-desktop-task-actor-message-detail-service
+        session
+        (or (getf payload :actor-message-id)
+            (getf payload :message-id)
+            (error "Kernel invoke for desktop-task/message requires :actor-message-id"))))
+      ((string= normalized "desktop-task/editor-mailbox")
+       (query-desktop-task-editor-mailbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :pending-action-id (or (getf payload :pending-action-id)
+                               (getf payload :mutation-id))
+        :status (getf payload :status)
+        :approval-status (getf payload :approval-status)
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/editor-pending-mutations")
+       (query-desktop-task-editor-mailbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :pending-action-id (or (getf payload :pending-action-id)
+                               (getf payload :mutation-id))
+        :status (getf payload :status)
+        :approval-status (getf payload :approval-status)
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/context-chat-mailbox")
+       (query-desktop-task-context-chat-mailbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :status (getf payload :status)
+        :approval-status (getf payload :approval-status)
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/context-chat-approval-inbox")
+       (query-desktop-task-context-chat-approval-inbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/ack-context-chat-approval")
+       (command-desktop-task-ack-context-chat-approval-service
+        session
+        (or (getf payload :approval-id)
+            (error "Kernel invoke for desktop-task/ack-context-chat-approval requires :approval-id"))
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :mailbox-entry-id (or (getf payload :mailbox-entry-id)
+                              (getf payload :entry-id))
+        :actor-message-id (or (getf payload :actor-message-id)
+                              (getf payload :message-id))))
+      ((string= normalized "desktop-task/editor-authorizations")
+       (query-desktop-task-editor-authorization-mailbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :pending-action-id (or (getf payload :pending-action-id)
+                               (getf payload :mutation-id))
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/consume-editor-authorization")
+       (command-desktop-task-consume-editor-authorization-service
+        session
+        (or (getf payload :pending-action-id)
+            (getf payload :mutation-id)
+            (error "Kernel invoke for desktop-task/consume-editor-authorization requires :pending-action-id"))
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :mailbox-entry-id (or (getf payload :mailbox-entry-id)
+                              (getf payload :entry-id))
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))))
+      ((string= normalized "desktop-task/apply-editor-authorization")
+       (command-desktop-task-apply-editor-authorization-service
+        session
+        (or (getf payload :pending-action-id)
+            (getf payload :mutation-id)
+            (error "Kernel invoke for desktop-task/apply-editor-authorization requires :pending-action-id"))
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))))
+      ((string= normalized "desktop-task/actor-trace")
+       (query-desktop-task-actor-trace-service
+        session
+        :actor-message-id (or (getf payload :actor-message-id)
+                              (getf payload :message-id))
+        :actor-role (or (getf payload :actor-role)
+                        (getf payload :role))
+        :phase (getf payload :phase)
+        :latest-only-p (getf payload :latest-only-p)
+        :dead-letters-only-p (getf payload :dead-letters-only-p)))
+      ((string= normalized "desktop-task/dlq")
+       (query-desktop-task-dead-letter-queue-service
+        session
+        :actor-role (or (getf payload :actor-role)
+                        (getf payload :role))))
+      ((string= normalized "desktop-task/replies")
+       (query-desktop-task-actor-replies-service
+        session
+        (or (getf payload :actor-role)
+            (getf payload :role)
+            (error "Kernel invoke for desktop-task/replies requires :actor-role"))))
+      ((string= normalized "desktop-task/latest-reply")
+       (query-desktop-task-actor-replies-service
+        session
+        (or (getf payload :actor-role)
+            (getf payload :role)
+            (error "Kernel invoke for desktop-task/latest-reply requires :actor-role"))
+        :latest-only-p t))
+      ((string= normalized "desktop-task/approve-message")
+       (unless provider
+         (error "Kernel invoke for desktop-task/approve-message requires a provider"))
+       (command-desktop-task-approve-actor-message-service
+        session
+        provider
+        (or (getf payload :actor-message-id)
+            (getf payload :message-id)
+            (error "Kernel invoke for desktop-task/approve-message requires :actor-message-id"))
+        :source :say
+        :operator-mode :conversation))
+      ((string= normalized "desktop-task/approve-approval")
+       (unless provider
+         (error "Kernel invoke for desktop-task/approve-approval requires a provider"))
+       (command-desktop-task-approve-approval-service
+        session
+        provider
+        (or (getf payload :approval-id)
+            (error "Kernel invoke for desktop-task/approve-approval requires :approval-id"))
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :source :say
+        :operator-mode :conversation))
+      ((string= normalized "desktop-task/pending-approval")
+       (query-desktop-task-pending-approval-service session))
+      ((string= normalized "desktop-task/governance-state")
+       (query-desktop-task-governance-state-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :approval-id (getf payload :approval-id)
+        :actor-message-id (or (getf payload :actor-message-id)
+                              (getf payload :message-id))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/governance-inbox")
+       (query-desktop-task-governance-inbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :approval-status (getf payload :approval-status)
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/governance-decisions")
+       (query-desktop-task-governance-decision-outbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :approval-id (getf payload :approval-id)
+        :pending-action-id (or (getf payload :pending-action-id)
+                               (getf payload :mutation-id))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/runtime-outbox")
+       (query-desktop-task-runtime-outbox-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/runtime-state")
+       (query-desktop-task-runtime-state-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :package-name (or (getf payload :package-name)
+                          (getf payload :package))
+        :symbol-name (or (getf payload :symbol-name)
+                         (getf payload :symbol))))
+      ((string= normalized "desktop-task/actor-flow")
+       (query-desktop-task-actor-flow-service
+        session
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :approval-id (getf payload :approval-id)
+        :pending-action-id (or (getf payload :pending-action-id)
+                               (getf payload :mutation-id))
+        :actor-message-id (or (getf payload :actor-message-id)
+                              (getf payload :message-id))
+        :scope-id (or (getf payload :scope-id)
+                      (getf payload :receiver-scope))
+        :latest-only-p (not (null (or (getf payload :latest-only-p)
+                                      (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/record")
+       (query-desktop-task-record-detail-service
+        session
+        (or (getf payload :record-id)
+            (error "Kernel invoke for desktop-task/record requires :record-id"))))
+      ((string= normalized "desktop-task/mcp-servers")
+       (query-desktop-task-mcp-server-list-service session))
+      ((string= normalized "desktop-task/mcp-server")
+       (query-desktop-task-mcp-server-detail-service
+        session
+        (or (getf payload :server-id)
+            (error "Kernel invoke for desktop-task/mcp-server requires :server-id"))))
+      ((string= normalized "desktop-task/configure-mcp-server")
+       (command-desktop-task-configure-mcp-server-service
+        session
+        :server-id (getf payload :server-id)
+        :name (getf payload :name)
+        :transport (getf payload :transport)
+        :command (getf payload :command)
+        :arguments (getf payload :arguments)
+        :environment-variables (getf payload :environment-variables)
+        :working-directory (getf payload :working-directory)
+        :endpoint (getf payload :endpoint)
+        :capabilities (getf payload :capabilities)
+        :retry-policy (getf payload :retry-policy)
+        :health-status (getf payload :health-status)
+        :enabled-p (getf payload :enabled-p)
+        :discoverable-p (getf payload :discoverable-p)
+        :metadata (getf payload :metadata)))
+      ((string= normalized "desktop-task/remove-mcp-server")
+       (command-desktop-task-remove-mcp-server-service
+        session
+        (or (getf payload :server-id)
+            (error "Kernel invoke for desktop-task/remove-mcp-server requires :server-id"))))
       ((string= normalized "conversation/create-thread")
        (command-conversation-create-thread-service session
                                                   :title (getf payload :title)

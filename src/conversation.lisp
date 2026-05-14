@@ -309,6 +309,8 @@
         :status (turn-status turn)
         :started-at (turn-started-at turn)
         :completed-at (turn-completed-at turn)
+        :operation-id (or (getf (turn-metadata turn) :operation-id)
+                          (first (turn-operation-ids turn)))
         :operation-count (length (turn-operation-ids turn))
         :artifact-count (length (turn-artifact-ids turn))
         :error-state (turn-error-state turn)

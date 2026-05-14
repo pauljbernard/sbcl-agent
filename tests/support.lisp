@@ -76,14 +76,19 @@
     session))
 
 (defun make-temporary-directory (template)
-  (multiple-value-bind (exit-code stdout stderr)
-      (run-command "mktemp" (list "-d" template))
+  (let ((normalized-template
+          (string-right-trim '(#\/) template)))
+    (multiple-value-bind (exit-code stdout stderr)
+        (run-command "mktemp" (list "-d" normalized-template))
     (assert-equal 0 exit-code
-                  (format nil "mktemp should succeed for template ~A~@[ (~A)~]" template stderr))
-    (let ((path (string-right-trim '(#\Newline #\Return #\Space #\Tab) stdout)))
-      (assert-true (> (length path) 0)
-                   (format nil "mktemp should return a path for template ~A" template))
-      (uiop:ensure-directory-pathname path))))
+                  (format nil "mktemp should succeed for template ~A~@[ (~A)~]"
+                          normalized-template
+                          stderr))
+      (let ((path (string-right-trim '(#\Newline #\Return #\Space #\Tab) stdout)))
+        (assert-true (> (length path) 0)
+                     (format nil "mktemp should return a path for template ~A"
+                             normalized-template))
+        (uiop:ensure-directory-pathname path)))))
 
 (defun with-fake-command-line-arguments (arguments thunk)
   (let ((original (symbol-function 'uiop:command-line-arguments)))

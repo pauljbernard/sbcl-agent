@@ -748,6 +748,12 @@
       (set-environment-metadata-value active-environment
                                       :active-provider-profile
                                       (getf sanitized :name)))
+    (when (fboundp 'notify-provider-request-snapshot-environment-change)
+      (notify-provider-request-snapshot-environment-change
+       active-environment
+       :reason :provider-configure
+       :family :environment
+       :domains '(:policy :environment)))
     (make-service-command-response :environment
                                    :provider-configure
                                    (environment-provider-profile-summary active-environment)
@@ -763,6 +769,12 @@
     (set-environment-metadata-value active-environment
                                     :active-provider-profile
                                     (getf profile :name))
+    (when (fboundp 'notify-provider-request-snapshot-environment-change)
+      (notify-provider-request-snapshot-environment-change
+       active-environment
+       :reason :provider-use
+       :family :environment
+       :domains '(:policy :environment)))
     (make-service-command-response :environment
                                    :provider-use
                                    (environment-provider-profile-summary active-environment)
@@ -775,7 +787,13 @@
     (when mode
       (set-environment-metadata-value active-environment
                                       :provider-routing-mode
-                                      (normalize-provider-routing-mode mode)))
+                                      (normalize-provider-routing-mode mode))
+      (when (fboundp 'notify-provider-request-snapshot-environment-change)
+        (notify-provider-request-snapshot-environment-change
+         active-environment
+         :reason :provider-routing
+         :family :environment
+         :domains '(:policy :environment))))
     (make-service-command-response :environment
                                    :provider-routing
                                    (environment-provider-profile-summary active-environment)

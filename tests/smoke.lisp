@@ -20,6 +20,144 @@
                            (sbcl-agent::assistant-response-message response))
                    "mock provider should return the scaffold smoke-test marker"))))
 
+(defun actor-registry-foundation-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (actors (sbcl-agent::service-response-data
+                  (sbcl-agent::query-desktop-task-actor-list-service session)))
+         (actor-system
+           (find :actor-system actors
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq))
+         (runtime-actor
+           (find :runtime actors
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq)))
+    (declare (ignore ignore))
+    (assert-true actor-system
+                 "actor registry should expose the actor-system root actor")
+    (assert-equal :singleton
+                  (getf (getf actor-system :allocation-strategy) :type)
+                  "actor-system should be registered as a singleton")
+    (assert-true runtime-actor
+                 "actor registry should expose the runtime actor")
+    (assert-equal "actor/actor-system"
+                  (getf runtime-actor :parent-actor-id)
+                  "runtime actor should report the actor-system as parent")
+    (assert-equal :serial
+                  (getf runtime-actor :handler-mode)
+                  "runtime actor should advertise serial mailbox processing")
+    (assert-equal :one-for-one
+                  (getf (getf runtime-actor :supervision-policy) :strategy)
+                  "runtime actor should advertise one-for-one supervision")
+    (assert-equal :restart
+                  (getf (getf runtime-actor :supervision-policy) :on-failure)
+                  "runtime actor should delegate recovery to its parent policy")
+    (assert-equal :singleton
+                  (getf (getf runtime-actor :allocation-strategy) :type)
+                  "runtime actor should currently be registered as a singleton")
+    (assert-equal :thread-pool-worker
+                  (getf (getf runtime-actor :execution-policy) :model)
+                  "runtime actor should advertise pooled thread execution")
+    (assert-equal :serial-per-actor
+                  (getf (getf runtime-actor :execution-policy) :mailbox-mode)
+                  "runtime actor should preserve one-message-at-a-time mailbox handling")
+    (assert-equal 1
+                  (getf (getf runtime-actor :execution-policy) :max-concurrency)
+                  "runtime actor should process one mailbox item at a time")))
+
+(defun actor-thread-pool-runtime-execution-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (request (sbcl-agent::make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :runtime
+                   :operation :evaluate-form
+                   :payload '(:form "(+ 2 3)" :package-name "SBCL-AGENT-USER")))
+         (manifest (sbcl-agent::find-desktop-task-manifest :runtime :evaluate-form))
+         (prepared-request (sbcl-agent::ensure-governed-desktop-task-request-state
+                            request
+                            :session-id (sbcl-agent::agent-session-id session)
+                            :manifest manifest)))
+    (declare (ignore ignore))
+    (unwind-protect
+         (let* ((result-envelope (sbcl-agent::invoke-governed-desktop-task-request
+                                  prepared-request
+                                  session
+                                  :manifest manifest))
+                (result (getf result-envelope :result))
+                (summary (sbcl-agent::actor-runtime-state-summary session)))
+           (assert-equal 5
+                         (or (getf result :result)
+                             (first (or (getf result :values) '())))
+                         "runtime request should execute successfully through the actor thread pool")
+           (assert-true (getf summary :running-p)
+                        "actor thread pool should be running after actor-backed execution")
+           (assert-true (> (getf summary :worker-count) 0)
+                        "actor thread pool should retain at least one worker")
+           (assert-equal 1
+                         (getf summary :submitted-job-count)
+                         "actor thread pool should record the submitted actor job")
+           (assert-equal 1
+                         (getf summary :completed-job-count)
+                         "actor thread pool should record the completed actor job")
+           (assert-equal 0
+                         (getf summary :busy-worker-count)
+                         "actor worker should be returned to the pool once processing completes")
+           (assert-true
+            (every (lambda (worker)
+                     (null (getf worker :leased-actor-id)))
+                   (or (getf summary :workers) '()))
+            "idle actor workers should not retain leased actor assignments after completion"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun actor-thread-pool-serializes-per-actor-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (runtime-actor (sbcl-agent::make-standard-actor-address
+                         :runtime
+                         :scope (sbcl-agent::agent-session-id session)))
+         (request (sbcl-agent::make-desktop-task-request
+                   :id "actor-thread-pool-serialization-request"
+                   :protocol-version 1
+                   :requester :context-chat
+                   :actor-message (sbcl-agent::make-actor-message
+                                   :id "actor-thread-pool-serialization-message"
+                                   :receiver runtime-actor)
+                   :target :runtime
+                   :operation :evaluate-form
+                   :payload '(:form "(+ 1 1)")
+                   :capability :runtime-eval-safe
+                   :metadata '()))
+         (current-active 0)
+         (max-active 0)
+         (lock (sb-thread:make-mutex :name "actor-thread-pool-test-lock")))
+    (declare (ignore ignore))
+    (unwind-protect
+         (flet ((exercise-worker ()
+                  (sbcl-agent::call-with-actor-worker-for-request
+                   session
+                   request
+                   (lambda ()
+                     (sb-thread:with-mutex (lock)
+                       (incf current-active)
+                       (setf max-active (max max-active current-active)))
+                     (unwind-protect
+                          (sleep 0.15)
+                       (sb-thread:with-mutex (lock)
+                         (decf current-active)))))))
+           (let ((thread-a (sb-thread:make-thread #'exercise-worker))
+                 (thread-b (sb-thread:make-thread #'exercise-worker)))
+           (sb-thread:join-thread thread-a)
+           (sb-thread:join-thread thread-b)
+           (assert-equal 1
+                         max-active
+                         "same-actor jobs should never execute concurrently even on the shared thread pool")))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
 (defun common-lisp-package-bootstrap-test ()
   (let* ((root (make-temporary-directory "/tmp/sbcl-agent-package-bootstrap-XXXXXX"))
          (project-root (ensure-directories-exist (merge-pathnames "project/" root)))
@@ -2436,7 +2574,45 @@ fi
     (assert-true (find :provider-stream
                        (sbcl-agent::agent-session-events session)
                        :key #'sbcl-agent::event-kind)
-                 "run-say-turn-streaming should log provider stream events"))
+                 "run-say-turn-streaming should log provider stream events")
+    (let ((request-built-event
+            (find :request-built
+                  (sbcl-agent::agent-session-events session)
+                  :test #'eq
+                  :key (lambda (event)
+                         (and (eq (sbcl-agent::event-kind event) :conversation-latency)
+                              (getf (sbcl-agent::event-metadata event) :kind)))))
+          (first-stream-event
+            (find :first-stream
+                  (sbcl-agent::agent-session-events session)
+                  :test #'eq
+                  :key (lambda (event)
+                         (and (eq (sbcl-agent::event-kind event) :conversation-latency)
+                              (getf (sbcl-agent::event-metadata event) :kind))))))
+      (assert-true request-built-event
+                   "run-say-turn-streaming should record request build latency")
+      (assert-true first-stream-event
+                   "run-say-turn-streaming should record first-stream latency")
+      (assert-true (numberp (getf (sbcl-agent::event-payload request-built-event)
+                                  :request-build-seconds))
+                   "request build latency should include numeric request-build-seconds")
+      (assert-true (numberp (getf (sbcl-agent::event-payload first-stream-event)
+                                  :pre-stream-seconds))
+                   "first-stream latency should include numeric pre-stream-seconds")
+      (let ((latency-summary
+              (sbcl-agent::service-response-data
+               (sbcl-agent::query-conversation-latency-service
+                session
+                (sbcl-agent::event-turn-id first-stream-event)))))
+        (assert-true (equal (sbcl-agent::event-turn-id first-stream-event)
+                            (getf latency-summary :turn-id))
+                     "conversation latency query should summarize the selected turn")
+        (assert-true (getf latency-summary :request-built)
+                     "conversation latency query should expose request-built timing")
+        (assert-true (getf latency-summary :first-stream)
+                     "conversation latency query should expose first-stream timing")
+        (assert-true (consp (getf latency-summary :provider-phases))
+                     "conversation latency query should expose provider phase timing samples"))))
   (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
          (result (sbcl-agent::run-say-turn
                   (make-instance 'mixed-action-provider)
@@ -6691,6 +6867,989 @@ fi
                   (getf (getf eval-operation :output) :result)
                   "confirmation routing should evaluate the prior Lisp form in the runtime")))
 
+(defun direct-conversation-runtime-eval-canonical-context-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service session
+                                                                      provider
+                                                                      "(+ 2 3)"
+                                                                      '()
+                                                                      :source :say
+                                                                      :operator-mode :conversation)))
+         (turn-id (getf (getf result :turn) :id)))
+    (assert-true (listp (getf result :retrieval-summary))
+                 "direct runtime eval should expose a retrieval summary like canonical conversation turns")
+    (assert-true (listp (getf result :cognition-summary))
+                 "direct runtime eval should expose a cognition summary like canonical conversation turns")
+    (assert-true (listp (getf result :reasoning-summary))
+                 "direct runtime eval should expose a reasoning summary like canonical conversation turns")
+    (assert-true (listp (getf result :planning-summary))
+                 "direct runtime eval should expose a planning summary like canonical conversation turns")
+    (assert-true (typep (getf result :response) 'sbcl-agent::assistant-response)
+                 "direct runtime eval should still return a structured assistant response object")
+    (assert-true (find :retrieval-dossier
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct runtime eval should still emit a retrieval dossier event")
+    (assert-true (find :reasoning-brief
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct runtime eval should still emit a reasoning brief event")
+    (assert-true (find :planning-brief
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct runtime eval should still emit a planning brief event")
+    (assert-true (find :cognition-bundle
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct runtime eval should still emit a cognition bundle event")
+    (assert-true (find :assistant-response
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct runtime eval should still emit an assistant-response event")
+    (assert-true (every (lambda (event)
+                          (or (not (member (sbcl-agent::event-kind event)
+                                           '(:retrieval-dossier :reasoning-brief :planning-brief :cognition-bundle)
+                                           :test #'eq))
+                              (string= (sbcl-agent::event-turn-id event) turn-id)))
+                        (sbcl-agent::agent-session-events session))
+                 "direct runtime eval context events should be correlated to the same turn")))
+
+(defun direct-conversation-runtime-eval-actor-flow-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service session
+                                                                      provider
+                                                                      "(+ 5 6)"
+                                                                      '()
+                                                                      :source :say
+                                                                      :operator-mode :conversation)))
+         (inline-actor-flow (getf result :actor-flow))
+         (runtime-reply (getf result :runtime-reply))
+         (actor-flow (sbcl-agent::service-response-data
+                      (sbcl-agent::query-desktop-task-actor-flow-service
+                       session
+                       :latest-only-p t)))
+         (runtime-inbox (getf actor-flow :runtime-inbox))
+         (runtime-outbox (getf actor-flow :runtime-outbox))
+         (messages (getf runtime-inbox :messages))
+         (entry (first messages))
+         (actor-message (getf entry :actor-message))
+         (replies (getf runtime-outbox :replies))
+         (reply (first replies)))
+    (assert-true inline-actor-flow
+                 "direct runtime eval should return runtime actor flow inline in the conversation result")
+    (assert-true runtime-reply
+                 "direct runtime eval should return the runtime actor reply inline in the conversation result")
+    (assert-equal 11
+                  (getf runtime-reply :result)
+                  "the inline runtime actor reply should retain the evaluated result")
+    (assert-true (getf inline-actor-flow :runtime-inbox)
+                 "inline actor flow should include the runtime inbox")
+    (assert-true (getf inline-actor-flow :runtime-outbox)
+                 "inline actor flow should include the runtime outbox")
+    (assert-true runtime-inbox
+                 "direct runtime eval should populate runtime actor flow state")
+    (assert-equal 1
+                  (getf runtime-inbox :message-count)
+                  "direct runtime eval should create one runtime inbox message")
+    (assert-true entry
+                 "runtime actor flow should expose the runtime inbox entry")
+    (assert-equal :runtime
+                  (getf actor-message :target)
+                  "runtime actor flow entry should target the runtime actor")
+    (assert-equal :evaluate-form
+                  (getf actor-message :operation)
+                  "runtime actor flow entry should record the evaluate-form operation")
+    (assert-equal :completed
+                  (getf entry :status)
+                  "runtime actor flow entry should complete successfully")
+    (assert-equal 11
+                  (getf entry :result)
+                  "runtime actor flow entry should retain the runtime evaluation result")
+    (assert-true (getf entry :actor-message-id)
+                 "runtime actor flow entry should retain the actor message id")
+    (assert-true (string= "SBCL-AGENT-USER" (getf entry :package-name))
+                 "runtime actor flow entry should retain the runtime package name")
+    (assert-true runtime-outbox
+                 "direct runtime eval should populate runtime reply outbox state")
+    (assert-equal 1
+                  (getf runtime-outbox :reply-count)
+                  "direct runtime eval should create one runtime outbox reply")
+    (assert-true reply
+                 "runtime actor flow should expose the runtime outbox reply")
+    (assert-equal 11
+                  (getf reply :result)
+                  "runtime outbox reply should retain the runtime evaluation result")
+    (assert-true (equal (getf reply :receiver) (getf entry :reply-to))
+                 "runtime outbox reply should be addressed back to the original reply-to actor")))
+
+(defun actor-system-panel-query-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (session-id (sbcl-agent::agent-session-id session))
+         (ignore
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(+ 2 3)"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation)))
+         (panel
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
+         (actors (getf panel :actors))
+         (hierarchy-edges (getf panel :hierarchy-edges))
+         (workflow-edges (getf panel :workflow-edges))
+         (runtime-execution (getf panel :runtime-execution))
+         (root-actor
+           (find "actor/actor-system"
+                 actors
+                 :key (lambda (entry) (getf entry :id))
+                 :test #'string=))
+         (runtime-actor
+           (find :runtime actors
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq))
+         (context-chat-actors
+           (remove-if-not (lambda (entry) (eq :context-chat (getf entry :role))) actors))
+         (runtime-actors
+           (remove-if-not (lambda (entry) (eq :runtime (getf entry :role))) actors))
+         (editor-actors
+           (remove-if-not (lambda (entry) (eq :editor (getf entry :role))) actors))
+         (calculator-actors
+           (remove-if-not (lambda (entry) (eq :calculator (getf entry :role))) actors))
+         (runtime-hierarchy-edge
+           (and runtime-actor
+                (find-if (lambda (entry)
+                           (and (string= "actor/actor-system"
+                                         (or (getf entry :parent-actor-id) ""))
+                                (string= (getf runtime-actor :id)
+                                         (or (getf entry :child-actor-id) ""))))
+                         hierarchy-edges)))
+         (runtime-workflow-edge
+           (find :runtime workflow-edges
+                 :key (lambda (entry) (getf entry :to-role))
+                 :test #'eq))
+         (runtime-execution-summary
+           (and runtime-actor
+                (getf runtime-actor :runtime-execution))))
+    (declare (ignore ignore))
+    (assert-equal "actor/actor-system"
+                  (getf panel :root-actor-id)
+                  "actor-system panel should identify the actor-system root actor")
+    (assert-true root-actor
+                 "actor-system panel should include the actor-system actor")
+    (assert-true runtime-actor
+                 "actor-system panel should include the runtime actor")
+    (assert-equal 1 (length context-chat-actors)
+                  "actor-system panel should expose one canonical context-chat actor")
+    (assert-equal 1 (length runtime-actors)
+                  "actor-system panel should expose one canonical runtime actor")
+    (assert-equal 1 (length editor-actors)
+                  "actor-system panel should expose one canonical editor actor")
+    (assert-equal 1 (length calculator-actors)
+                  "actor-system panel should expose one canonical calculator actor")
+    (assert-equal (format nil "actor/runtime/~A" session-id)
+                  (getf runtime-actor :id)
+                  "runtime actor should use the canonical session-scoped actor id")
+    (assert-true (> (or (getf panel :actor-count) 0) 0)
+                 "actor-system panel should report actors")
+    (assert-true runtime-hierarchy-edge
+                 "actor-system panel should include a hierarchy edge for the runtime actor")
+    (assert-true runtime-workflow-edge
+                 "actor-system panel should include a workflow edge targeting the runtime actor")
+    (assert-true (> (or (getf panel :workflow-edge-count) 0) 0)
+                 "actor-system panel should report workflow edges")
+    (assert-true runtime-execution
+                 "actor-system panel should expose runtime thread-pool execution summary")
+    (assert-true runtime-execution-summary
+                 "runtime actor should expose runtime execution detail in its actor summary")
+    (assert-true (> (or (getf runtime-execution :worker-count) 0) 0)
+                 "runtime execution summary should report pooled workers")
+    (assert-true (> (or (getf runtime-execution-summary :submitted-job-count) 0) 0)
+                 "runtime actor summary should report submitted actor jobs")))
+
+(defun actor-system-panel-persists-through-environment-save-load-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (path #P"/private/tmp/sbcl-agent-actor-system-panel.sexp"))
+    (sbcl-agent::service-response-data
+     (sbcl-agent::command-conversation-execution-service session
+                                                         provider
+                                                         "(+ 2 3)"
+                                                         '()
+                                                         :source :say
+                                                         :operator-mode :conversation))
+    (sbcl-agent::save-environment environment path)
+    (let* ((loaded-environment (sbcl-agent::load-environment path))
+           (loaded-session (sbcl-agent::environment-session loaded-environment))
+           (panel (sbcl-agent::service-response-data
+                   (sbcl-agent::query-desktop-task-actor-system-panel-service
+                    loaded-session)))
+           (actors (getf panel :actors))
+           (runtime-actor
+             (find :runtime actors
+                   :key (lambda (entry) (getf entry :role))
+                   :test #'eq)))
+      (assert-true (> (or (getf panel :actor-count) 0) 0)
+                   "actor-system panel should retain registered actors after environment save/load")
+      (assert-true runtime-actor
+                   "actor-system panel should retain the runtime actor after environment save/load"))))
+
+(defun actor-supervision-incident-flow-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (ignore
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(+ 9 4)"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation)))
+         (actor-flow
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-flow-service session :latest-only-p t)))
+         (runtime-entry
+           (first (getf (getf actor-flow :runtime-inbox) :messages)))
+         (mailbox-entry-id (getf runtime-entry :mailbox-entry-id))
+         (failure-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-desktop-task-fail-mailbox-entry-service
+             session
+             :runtime-inbox
+             mailbox-entry-id
+             :summary "Runtime mailbox entry failed during supervision test."
+             :condition-string "simulated runtime failure"
+             :supervision-action :restart-child)))
+         (incidents
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-supervision-incidents-service
+             session
+             :mailbox :runtime-inbox
+             :mailbox-entry-id mailbox-entry-id)))
+         (incident (first (getf incidents :incidents)))
+         (panel
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
+         (runtime-actor
+           (find :runtime
+                 (getf panel :actors)
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq)))
+    (declare (ignore ignore))
+    (assert-true mailbox-entry-id
+                 "the runtime inbox entry should expose a mailbox entry id before supervision failure handling")
+    (assert-equal :failed
+                  (getf (getf failure-result :mailbox-entry) :delivery-status)
+                  "failing a mailbox entry should mark it failed")
+    (assert-true incident
+                 "failing a mailbox entry should record a supervision incident")
+    (assert-equal :restart-child
+                  (getf incident :supervision-action)
+                  "the supervision incident should preserve the requested parent action")
+    (assert-equal "actor/actor-system"
+                  (getf incident :parent-actor-id)
+                  "the runtime actor incident should escalate to the actor-system parent")
+    (assert-true (not (null (getf incident :open-p)))
+                 "new supervision incidents should be open")
+    (assert-equal 1
+                  (getf incidents :incident-count)
+                  "the incident query should return the recorded supervision incident")
+    (assert-equal 1
+                  (getf (getf runtime-actor :metrics) :open-supervision-incident-count)
+                  "the actor-system panel should reflect one open supervision incident on the runtime actor")))
+
+(defun actor-supervision-action-application-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (ignore
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(+ 10 8)"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation)))
+         (actor-flow
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-flow-service session :latest-only-p t)))
+         (runtime-entry
+           (first (getf (getf actor-flow :runtime-inbox) :messages)))
+         (mailbox-entry-id (getf runtime-entry :mailbox-entry-id))
+         (failure-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-desktop-task-fail-mailbox-entry-service
+             session
+             :runtime-inbox
+             mailbox-entry-id
+             :summary "Runtime mailbox entry failed during supervision action test."
+             :condition-string "simulated runtime failure"
+             :supervision-action :dead-letter)))
+         (incident-id (getf (getf failure-result :incident) :incident-id))
+         (action-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-desktop-task-apply-supervision-action-service
+             session
+             incident-id
+             :action :dead-letter
+             :note "Parent actor dead-lettered the failed mailbox entry.")))
+         (incidents
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-supervision-incidents-service
+             session
+             :mailbox :runtime-inbox
+             :mailbox-entry-id mailbox-entry-id)))
+         (incident (first (getf incidents :incidents)))
+         (panel
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
+         (runtime-actor
+           (find :runtime
+                 (getf panel :actors)
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq)))
+    (declare (ignore ignore))
+    (assert-equal :dead-letter
+                  (getf action-result :action)
+                  "the supervision action command should report the applied action")
+    (assert-equal :dead-lettered
+                  (getf (getf action-result :mailbox-entry) :delivery-status)
+                  "dead-letter supervision should move the mailbox entry into dead-lettered status")
+    (assert-equal :resolved
+                  (getf (getf action-result :incident) :status)
+                  "dead-letter supervision should resolve the originating incident")
+    (assert-true incident
+                 "the supervision incident should still be queryable after action application")
+    (assert-true (not (null incident-id))
+                 "the supervision incident should expose its incident id")
+    (assert-true (not (getf incident :open-p))
+                 "dead-letter supervision should close the incident")
+    (assert-equal 0
+                  (getf (getf runtime-actor :metrics) :open-supervision-incident-count)
+                  "the actor-system panel should show no open supervision incidents after dead-letter resolution")))
+
+(defun actor-supervision-restart-child-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (ignore
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(+ 11 12)"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation)))
+         (actor-flow
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-flow-service session :latest-only-p t)))
+         (runtime-entry
+           (first (getf (getf actor-flow :runtime-inbox) :messages)))
+         (mailbox-entry-id (getf runtime-entry :mailbox-entry-id))
+         (failure-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-desktop-task-fail-mailbox-entry-service
+             session
+             :runtime-inbox
+             mailbox-entry-id
+             :summary "Runtime mailbox entry failed during restart-child test."
+             :condition-string "simulated runtime failure"
+             :supervision-action :restart-child)))
+         (incident-id (getf (getf failure-result :incident) :incident-id))
+         (action-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-desktop-task-apply-supervision-action-service
+             session
+             incident-id
+             :action :restart-child
+             :note "Parent actor restarted the child and requeued the mailbox entry.")))
+         (restarted-entry (getf action-result :mailbox-entry))
+         (panel
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
+         (runtime-actor
+           (find :runtime
+                 (getf panel :actors)
+                 :key (lambda (entry) (getf entry :role))
+                 :test #'eq)))
+    (declare (ignore ignore))
+    (assert-equal :restart-child
+                  (getf action-result :action)
+                  "the supervision action command should report restart-child")
+    (assert-equal :resolved
+                  (getf (getf action-result :incident) :status)
+                  "restart-child should resolve the originating incident")
+    (assert-true restarted-entry
+                 "restart-child should create a new runnable mailbox entry")
+    (assert-equal :queued
+                  (getf restarted-entry :delivery-status)
+                  "restart-child should requeue the restarted mailbox entry")
+    (assert-equal mailbox-entry-id
+                  (getf (getf restarted-entry :metadata) :restarted-from-mailbox-entry-id)
+                  "restart-child should preserve lineage to the failed mailbox entry")
+    (assert-equal 0
+                  (getf (getf runtime-actor :metrics) :open-supervision-incident-count)
+                  "restart-child should clear the runtime actor's open supervision incident count")))
+
+(defun direct-conversation-runtime-definition-actor-state-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (session-id (sbcl-agent::agent-session-id session))
+         (definition-result
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(defun actor-runtime-state-foo (x) (* x 3))"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation)))
+         (inline-actor-flow (getf definition-result :actor-flow))
+         (runtime-reply (getf definition-result :runtime-reply))
+         (actor-flow (or inline-actor-flow
+                         (sbcl-agent::service-response-data
+                          (sbcl-agent::query-desktop-task-actor-flow-service
+                           session
+                           :latest-only-p t))))
+         (runtime-state (getf actor-flow :runtime-state))
+         (definitions (getf runtime-state :definitions))
+         (definition-entry
+           (find "ACTOR-RUNTIME-STATE-FOO"
+                 definitions
+                 :key (lambda (entry) (getf entry :symbol-name))
+                 :test #'string=))
+         (runtime-inbox (getf actor-flow :runtime-inbox))
+         (runtime-entry (and runtime-inbox
+                             (first (getf runtime-inbox :messages))))
+         (receiver (and runtime-entry
+                        (getf runtime-entry :receiver))))
+    (assert-true inline-actor-flow
+                 "runtime definition turn should carry actor flow inline in the conversation result")
+    (assert-true runtime-reply
+                 "runtime definition turn should carry the runtime actor reply inline in the conversation result")
+    (assert-true runtime-state
+                 "runtime actor flow should expose actor-owned runtime state")
+    (assert-true definition-entry
+                 "runtime actor state should retain the defun definition summary")
+    (assert-equal (format nil "actor/runtime/~A" session-id)
+                  (getf receiver :id)
+                  "runtime actor messages should target the canonical session-scoped runtime actor")
+    (let ((*package* (find-package "SBCL-AGENT-USER")))
+      (when (fboundp 'sbcl-agent-user::actor-runtime-state-foo)
+        (fmakunbound 'sbcl-agent-user::actor-runtime-state-foo)))
+    (assert-true (not (fboundp 'sbcl-agent-user::actor-runtime-state-foo))
+                 "the live runtime binding should be removed to force actor-state recovery")
+    (let* ((call-result
+             (sbcl-agent::service-response-data
+              (sbcl-agent::command-conversation-execution-service session
+                                                                  provider
+                                                                  "(actor-runtime-state-foo 5)"
+                                                                  '()
+                                                                  :source :say
+                                                                  :operator-mode :conversation)))
+           (turn-id (getf (getf call-result :turn) :id))
+           (turn-detail (sbcl-agent::turn-detail session turn-id))
+           (eval-operation (find "conversation-runtime-eval"
+                                 (getf turn-detail :operations)
+                                 :key (lambda (entry) (getf entry :name))
+                                 :test #'string=)))
+      (assert-true (search "Result: 15."
+                           (getf (getf call-result :assistant-message) :content))
+                   "runtime actor state should let the follow-up call recover the missing defun")
+      (assert-true eval-operation
+                   "replayed runtime definition should still be executed through the runtime actor path")
+      (assert-equal 15
+                    (getf (getf eval-operation :output) :result)
+                    "runtime actor state recovery should restore the function for the next eval"))))
+
+(defun runtime-actor-state-persists-through-environment-save-load-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (environment-path
+           (namestring
+            (merge-pathnames
+             (format nil "runtime-actor-state-~D.sexp" (get-universal-time))
+             #P"/private/tmp/"))))
+    (unwind-protect
+         (progn
+           (sbcl-agent::service-response-data
+            (sbcl-agent::command-conversation-execution-service session
+                                                                provider
+                                                                "(defun persisted-runtime-foo (x) (* x 7))"
+                                                                '()
+                                                                :source :say
+                                                                :operator-mode :conversation))
+           (sbcl-agent::save-environment environment environment-path)
+           (let* ((reloaded-environment (sbcl-agent::load-environment environment-path))
+                  (reloaded-session
+                    (sbcl-agent::compatibility-payload->session
+                     (sbcl-agent::environment-compatibility-session reloaded-environment)
+                     reloaded-environment))
+                  (mailboxes (sbcl-agent::agent-session-actor-mailboxes reloaded-session))
+                  (runtime-state (getf mailboxes :runtime-state))
+                  (definitions (getf runtime-state :definitions))
+                  (definition-entry
+                    (find "PERSISTED-RUNTIME-FOO"
+                          definitions
+                          :key (lambda (entry) (getf entry :symbol-name))
+                          :test #'string=)))
+             (assert-true definition-entry
+                          "runtime actor state definitions should persist through environment save/load")
+             (assert-true (string= "SBCL-AGENT-USER" (getf definition-entry :package-name))
+                          "reloaded runtime actor state should retain the package name for the definition")))
+      (ignore-errors
+        (delete-file environment-path)))))
+
+(defun direct-conversation-calculator-canonical-context-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service
+                   session
+                   provider
+                   "press 7 in the calculator"
+                   '(:surface-context (:calculator (:focused t)))
+                   :source :say
+                   :operator-mode :conversation)))
+         (turn-id (getf (getf result :turn) :id))
+         (turn-detail (sbcl-agent::turn-detail session turn-id)))
+    (assert-true (listp (getf result :retrieval-summary))
+                 "direct calculator execution should expose a retrieval summary like canonical conversation turns")
+    (assert-true (listp (getf result :cognition-summary))
+                 "direct calculator execution should expose a cognition summary like canonical conversation turns")
+    (assert-true (listp (getf result :reasoning-summary))
+                 "direct calculator execution should expose a reasoning summary like canonical conversation turns")
+    (assert-true (listp (getf result :planning-summary))
+                 "direct calculator execution should expose a planning summary like canonical conversation turns")
+    (assert-true (typep (getf result :response) 'sbcl-agent::assistant-response)
+                 "direct calculator execution should still return a structured assistant response object")
+    (assert-equal 1
+                  (length (sbcl-agent::assistant-response-actions (getf result :response)))
+                  "direct calculator execution should still expose the synthesized assistant action in the response object")
+    (assert-true (search "calculator"
+                         (string-downcase (getf (getf result :assistant-message) :content)))
+                 "direct calculator execution should still report calculator-directed completion in the assistant message")
+    (assert-equal 1
+                  (length (getf turn-detail :operations))
+                  "direct calculator execution should record the assistant action as a real turn operation")
+    (assert-true (find :retrieval-dossier
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit a retrieval dossier event")
+    (assert-true (find :reasoning-brief
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit a reasoning brief event")
+    (assert-true (find :planning-brief
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit a planning brief event")
+    (assert-true (find :cognition-bundle
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit a cognition bundle event")
+    (assert-true (find :assistant-response
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit an assistant-response event")
+    (assert-true (find :conversation-calculator-control
+                       (sbcl-agent::agent-session-events session)
+                       :key #'sbcl-agent::event-kind)
+                 "direct calculator execution should still emit its direct calculator control event")))
+
+(defun direct-vs-provider-conversation-lifecycle-equivalence-test ()
+  (flet ((assert-common-turn-contract (result session turn-detail mode-label)
+           (assert-true (stringp (getf (getf result :thread) :id))
+                        (format nil "~A should return a persisted thread id" mode-label))
+           (assert-true (stringp (getf (getf result :turn) :id))
+                        (format nil "~A should return a persisted turn id" mode-label))
+           (assert-equal :completed
+                         (getf (getf result :turn) :status)
+                         (format nil "~A should complete the turn" mode-label))
+           (assert-true (typep (getf result :response) 'sbcl-agent::assistant-response)
+                        (format nil "~A should return a structured assistant response" mode-label))
+           (assert-true (listp (getf result :retrieval-summary))
+                        (format nil "~A should expose a retrieval summary" mode-label))
+           (assert-true (listp (getf result :cognition-summary))
+                        (format nil "~A should expose a cognition summary" mode-label))
+           (assert-true (listp (getf result :reasoning-summary))
+                        (format nil "~A should expose a reasoning summary" mode-label))
+           (assert-true (listp (getf result :planning-summary))
+                        (format nil "~A should expose a planning summary" mode-label))
+           (assert-equal 2
+                         (length (sbcl-agent::agent-session-messages session))
+                         (format nil "~A should persist user and assistant messages" mode-label))
+           (assert-equal 1
+                         (length (sbcl-agent::agent-session-turns session))
+                         (format nil "~A should persist one completed turn" mode-label))
+           (assert-true (plusp (length (getf turn-detail :operations)))
+                        (format nil "~A should persist at least one turn operation" mode-label))
+           (dolist (event-kind '(:retrieval-dossier
+                                 :reasoning-brief
+                                 :planning-brief
+                                 :cognition-bundle
+                                 :assistant-response))
+             (assert-true (find event-kind
+                                (sbcl-agent::agent-session-events session)
+                                :key #'sbcl-agent::event-kind)
+                          (format nil "~A should emit a ~A event"
+                                  mode-label
+                                  event-kind)))
+           (assert-true (find :assistant
+                              (sbcl-agent::agent-session-transcript session)
+                              :key (lambda (entry) (getf entry :role)))
+                        (format nil "~A should append an assistant transcript entry" mode-label))))
+    (let* ((provider (make-test-provider))
+           (provider-session (sbcl-agent::make-default-session))
+           (provider-result (sbcl-agent::service-response-data
+                             (sbcl-agent::command-conversation-execution-service
+                              provider-session
+                              provider
+                              "ping"
+                              '()
+                              :source :say
+                              :operator-mode :conversation)))
+           (provider-turn-detail
+             (sbcl-agent::turn-detail provider-session
+                                      (getf (getf provider-result :turn) :id)))
+           (direct-session (sbcl-agent::make-default-session))
+           (direct-result (sbcl-agent::service-response-data
+                           (sbcl-agent::command-conversation-execution-service
+                            direct-session
+                            provider
+                            "(+ 2 3)"
+                            '()
+                            :source :say
+                            :operator-mode :conversation)))
+           (direct-turn-detail
+             (sbcl-agent::turn-detail direct-session
+                                      (getf (getf direct-result :turn) :id))))
+      (assert-common-turn-contract provider-result
+                                   provider-session
+                                   provider-turn-detail
+                                   "provider-backed conversation")
+      (assert-common-turn-contract direct-result
+                                   direct-session
+                                   direct-turn-detail
+                                   "direct runtime conversation")
+      (assert-true (search "Mock response: ping"
+                           (sbcl-agent::assistant-response-message
+                            (getf provider-result :response)))
+                   "provider-backed conversation should preserve provider response content")
+      (assert-true (search "Result: 5."
+                           (sbcl-agent::assistant-response-message
+                            (getf direct-result :response)))
+                   "direct runtime conversation should preserve runtime result content"))))
+
+(defun direct-vs-provider-calculator-lifecycle-equivalence-test ()
+  (flet ((assert-common-calculator-contract (result session turn-detail expression mode-label)
+           (assert-true (stringp (getf (getf result :thread) :id))
+                        (format nil "~A should return a persisted thread id" mode-label))
+           (assert-true (stringp (getf (getf result :turn) :id))
+                        (format nil "~A should return a persisted turn id" mode-label))
+           (assert-equal :completed
+                         (getf (getf result :turn) :status)
+                         (format nil "~A should complete the turn" mode-label))
+           (assert-true (typep (getf result :response) 'sbcl-agent::assistant-response)
+                        (format nil "~A should return a structured assistant response" mode-label))
+           (assert-equal 1
+                         (getf result :immediate-action-count)
+                         (format nil "~A should execute one immediate calculator action" mode-label))
+           (assert-equal 0
+                         (getf result :staged-action-count)
+                         (format nil "~A should stage no calculator actions" mode-label))
+           (assert-equal 1
+                         (length (or (getf result :action-results) '()))
+                         (format nil "~A should return one calculator action result" mode-label))
+           (assert-true (listp (getf result :retrieval-summary))
+                        (format nil "~A should expose a retrieval summary" mode-label))
+           (assert-true (listp (getf result :cognition-summary))
+                        (format nil "~A should expose a cognition summary" mode-label))
+           (assert-true (listp (getf result :reasoning-summary))
+                        (format nil "~A should expose a reasoning summary" mode-label))
+           (assert-true (listp (getf result :planning-summary))
+                        (format nil "~A should expose a planning summary" mode-label))
+           (assert-equal 2
+                         (length (sbcl-agent::agent-session-messages session))
+                         (format nil "~A should persist user and assistant messages" mode-label))
+           (assert-equal 1
+                         (length (sbcl-agent::agent-session-turns session))
+                         (format nil "~A should persist one completed turn" mode-label))
+           (assert-equal 2
+                         (length (getf turn-detail :operations))
+                         (format nil "~A should persist one top-level conversation operation and one calculator action operation" mode-label))
+           (assert-true (getf (getf result :turn) :operation-id)
+                        (format nil "~A should persist a primary turn operation id" mode-label))
+           (assert-equal "7"
+                         expression
+                         (format nil "~A should update the shared calculator expression" mode-label))
+           (assert-true (find :conversation-calculator-control
+                              (sbcl-agent::agent-session-events session)
+                              :key #'sbcl-agent::event-kind)
+                        (format nil "~A should emit a calculator control event" mode-label))
+           (dolist (event-kind '(:retrieval-dossier
+                                 :reasoning-brief
+                                 :planning-brief
+                                 :cognition-bundle
+                                 :assistant-response))
+             (assert-true (find event-kind
+                                (sbcl-agent::agent-session-events session)
+                                :key #'sbcl-agent::event-kind)
+                          (format nil "~A should emit a ~A event"
+                                  mode-label
+                                  event-kind)))
+           (assert-true (find :assistant
+                              (sbcl-agent::agent-session-transcript session)
+                              :key (lambda (entry) (getf entry :role)))
+                        (format nil "~A should append an assistant transcript entry" mode-label))))
+    (let* ((provider-backed-provider (make-instance 'calculator-action-provider))
+           (provider-session (sbcl-agent::make-default-session))
+           (provider-result nil)
+           (provider-turn-detail nil)
+           (provider-expression nil)
+           (direct-provider (make-test-provider))
+           (direct-session (sbcl-agent::make-default-session))
+           (direct-result nil)
+           (direct-turn-detail nil)
+           (direct-expression nil))
+      (sbcl-agent::command-calculator-clear-service provider-session)
+      (setf provider-result (sbcl-agent::service-response-data
+                             (sbcl-agent::command-conversation-execution-service
+                              provider-session
+                              provider-backed-provider
+                              "use the provider-backed calculator action path"
+                              '(:surface-context (:calculator (:focused t)))
+                              :source :say
+                              :operator-mode :conversation))
+            provider-turn-detail
+            (sbcl-agent::turn-detail provider-session
+                                     (getf (getf provider-result :turn) :id))
+            provider-expression
+            (getf (sbcl-agent::service-response-data
+                   (sbcl-agent::query-calculator-summary-service provider-session))
+                  :current-expression))
+      (sbcl-agent::command-calculator-clear-service direct-session)
+      (setf direct-result (sbcl-agent::service-response-data
+                           (sbcl-agent::command-conversation-execution-service
+                            direct-session
+                            direct-provider
+                            "press 7 in the calculator"
+                            '(:surface-context (:calculator (:focused t)))
+                            :source :say
+                            :operator-mode :conversation))
+            direct-turn-detail
+            (sbcl-agent::turn-detail direct-session
+                                     (getf (getf direct-result :turn) :id))
+            direct-expression
+            (getf (sbcl-agent::service-response-data
+                   (sbcl-agent::query-calculator-summary-service direct-session))
+                  :current-expression))
+      (assert-common-calculator-contract provider-result
+                                         provider-session
+                                         provider-turn-detail
+                                         provider-expression
+                                         "provider-backed calculator conversation")
+      (assert-common-calculator-contract direct-result
+                                         direct-session
+                                         direct-turn-detail
+                                         direct-expression
+                                         "direct calculator conversation")
+      (assert-equal 1
+                    (length (sbcl-agent::assistant-response-actions
+                             (getf provider-result :response)))
+                    "provider-backed calculator conversation should preserve the provider action payload")
+      (assert-equal 1
+                    (length (sbcl-agent::assistant-response-actions
+                             (getf direct-result :response)))
+                    "direct calculator conversation should preserve the synthesized action payload")
+      (assert-true (search "token"
+                           (string-downcase
+                            (sbcl-agent::assistant-response-message
+                             (getf direct-result :response))))
+                   "direct calculator conversation should describe the token append instead of pretending an evaluation occurred")
+      (assert-true (search "calculator"
+                           (string-downcase
+                            (sbcl-agent::assistant-response-message
+                             (getf provider-result :response))))
+                   "provider-backed calculator conversation should preserve calculator-directed response content")
+      (assert-true (search "calculator"
+                           (string-downcase
+                            (sbcl-agent::assistant-response-message
+                             (getf direct-result :response))))
+                   "direct calculator conversation should preserve calculator-directed response content"))))
+
+(defun direct-vs-provider-transcript-and-memory-side-effects-test ()
+  (flet ((assert-common-transcript-memory-contract (session environment result mode-label)
+           (let* ((turn-id (getf (getf result :turn) :id))
+                  (entries (sbcl-agent::environment-memory environment))
+                  (memory-event (find :memory-entry-recorded
+                                      (sbcl-agent::agent-session-events session)
+                                      :key #'sbcl-agent::event-kind))
+                  (assistant-entry (find :assistant
+                                         (sbcl-agent::agent-session-transcript session)
+                                         :from-end t
+                                         :key (lambda (entry) (getf entry :role)))))
+             (assert-true environment
+                          (format nil "~A should run with a bound environment" mode-label))
+             (assert-true (> (length entries) 0)
+                          (format nil "~A should persist durable memory entries" mode-label))
+             (assert-equal :turn-outcome
+                           (getf (first entries) :kind)
+                           (format nil "~A should persist turn-outcome memory" mode-label))
+             (assert-true memory-event
+                          (format nil "~A should emit a memory-entry-recorded event" mode-label))
+             (assert-equal turn-id
+                           (sbcl-agent::event-turn-id memory-event)
+                           (format nil "~A should correlate memory recording to the same turn" mode-label))
+             (assert-true assistant-entry
+                          (format nil "~A should append an assistant transcript entry" mode-label))
+             (assert-true (search (getf (getf result :assistant-message) :content)
+                                  (getf assistant-entry :content))
+                          (format nil "~A should persist the assistant message in transcript" mode-label)))))
+    (let* ((provider (make-test-provider))
+           (provider-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-memory-provider/"))
+           (provider-environment (sbcl-agent::make-default-environment
+                                  :session provider-session
+                                  :storage-root "/tmp/direct-vs-provider-memory-provider/"))
+           (provider-result nil))
+      (sbcl-agent::bind-session-to-environment provider-session provider-environment)
+      (setf provider-result (sbcl-agent::service-response-data
+                             (sbcl-agent::command-conversation-execution-service
+                              provider-session
+                              provider
+                              "Inspect the runtime and summarize the current code context."
+                              '()
+                              :source :say
+                              :operator-mode :conversation)))
+      (assert-common-transcript-memory-contract provider-session
+                                                provider-environment
+                                                provider-result
+                                                "provider-backed conversation"))
+    (let* ((provider (make-test-provider))
+           (direct-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-memory-direct/"))
+           (direct-environment (sbcl-agent::make-default-environment
+                                :session direct-session
+                                :storage-root "/tmp/direct-vs-provider-memory-direct/"))
+           (direct-result nil))
+      (sbcl-agent::bind-session-to-environment direct-session direct-environment)
+      (setf direct-result (sbcl-agent::service-response-data
+                           (sbcl-agent::command-conversation-execution-service
+                            direct-session
+                            provider
+                            "(+ 2 3)"
+                            '()
+                            :source :say
+                            :operator-mode :conversation)))
+      (assert-common-transcript-memory-contract direct-session
+                                                direct-environment
+                                                direct-result
+                                                "direct runtime conversation"))))
+
+(defun direct-vs-provider-runtime-result-contract-test ()
+  (flet ((plist-keys (plist)
+           (loop for (key value) on plist by #'cddr
+                 collect key)))
+    (let* ((provider (make-test-provider))
+           (provider-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-result-provider/"))
+           (direct-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-result-direct/"))
+           (provider-result (sbcl-agent::service-response-data
+                             (sbcl-agent::command-conversation-execution-service
+                              provider-session
+                              provider
+                              "Inspect the runtime and summarize the current code context."
+                              '()
+                              :source :say
+                              :operator-mode :conversation)))
+           (direct-result (sbcl-agent::service-response-data
+                           (sbcl-agent::command-conversation-execution-service
+                            direct-session
+                            provider
+                            "(+ 2 3)"
+                            '()
+                            :source :say
+                            :operator-mode :conversation)))
+           (provider-keys (plist-keys provider-result))
+           (direct-keys (plist-keys direct-result))
+           (provider-only (set-difference provider-keys direct-keys))
+           (direct-only (set-difference direct-keys provider-keys)))
+      (assert-equal '()
+                    provider-only
+                    "direct runtime conversations should expose the full provider-backed top-level result contract")
+      (assert-equal '(:RUNTIME-RESULT :DIRECT-RUNTIME-EVAL-REASON :DIRECT-RUNTIME-EVAL-P)
+                    direct-only
+                    "direct runtime conversations should only add explicit direct-runtime annotations beyond the shared contract")
+      (dolist (key '(:retrieval-summary
+                     :reasoning-summary
+                     :planning-summary
+                     :outcome-summary
+                     :cognition-summary
+                     :action-agenda-summary))
+        (assert-true (member key direct-keys)
+                     (format nil "direct runtime conversations should include ~A" key))))))
+
+(defun direct-vs-provider-assistant-response-event-envelope-test ()
+  (flet ((last-event-of-kind (session kind)
+           (find kind
+                 (sbcl-agent::agent-session-events session)
+                 :from-end t
+                 :key #'sbcl-agent::event-kind))
+         (assert-common-envelope (event mode-label)
+           (assert-true event
+                        (format nil "~A should emit the expected event" mode-label))
+           (assert-true (stringp (sbcl-agent::event-id event))
+                        (format nil "~A should emit an event with an id" mode-label))
+           (assert-true (stringp (sbcl-agent::event-thread-id event))
+                        (format nil "~A should correlate the event to a thread" mode-label))
+           (assert-true (stringp (sbcl-agent::event-turn-id event))
+                        (format nil "~A should correlate the event to a turn" mode-label))
+           (assert-equal :operator
+                         (sbcl-agent::event-visibility event)
+                         (format nil "~A should keep the event operator-visible" mode-label))
+           (assert-true (member :session-id (sbcl-agent::event-metadata event))
+                        (format nil "~A should include session id in the event metadata" mode-label))
+           (assert-true (member :environment-id (sbcl-agent::event-metadata event))
+                        (format nil "~A should include environment id in the event metadata" mode-label))))
+    (let* ((provider (make-test-provider))
+           (provider-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-envelope-provider/"))
+           (direct-session (sbcl-agent::make-default-session :cwd "/tmp/direct-vs-provider-envelope-direct/")))
+      (sbcl-agent::command-conversation-execution-service
+       provider-session
+       provider
+       "Inspect the runtime and summarize the current code context."
+       '()
+       :source :say
+       :operator-mode :conversation)
+      (sbcl-agent::command-conversation-execution-service
+       direct-session
+       provider
+       "(+ 2 3)"
+       '()
+       :source :say
+       :operator-mode :conversation)
+      (let ((provider-event (last-event-of-kind provider-session :assistant-response))
+            (direct-event (last-event-of-kind direct-session :assistant-response)))
+        (assert-common-envelope provider-event
+                                "provider-backed assistant response")
+        (assert-common-envelope direct-event
+                                "direct runtime assistant response")
+        (assert-true (typep (sbcl-agent::event-payload provider-event) 'sbcl-agent::assistant-response)
+                     "provider-backed assistant response event should carry a structured assistant response payload")
+        (assert-true (typep (sbcl-agent::event-payload direct-event) 'sbcl-agent::assistant-response)
+                     "direct runtime assistant response event should carry a structured assistant response payload")
+        (assert-true (member :provider
+                             (sbcl-agent::assistant-response-metadata
+                              (sbcl-agent::event-payload provider-event)))
+                     "provider-backed assistant response should retain provider metadata richness")
+        (assert-true (member :direct-runtime-eval-p
+                             (sbcl-agent::assistant-response-metadata
+                              (sbcl-agent::event-payload direct-event)))
+                     "direct runtime assistant response should retain direct-runtime annotations")))))
+
 (defun pasted-assistant-action-command-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
@@ -9821,6 +10980,44 @@ fi
                     "runtime/describe-symbol should describe the requested symbol")
       (assert-true (getf symbol-result :fboundp)
                    "runtime/describe-symbol should report function bindings"))
+    (multiple-value-bind (inspect-result inspect-kind inspect-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/inspect "*PACKAGE*" :package "SBCL-AGENT-USER"))
+         provider
+         session)
+      (declare (ignore inspect-session))
+      (assert-equal :runtime-inspect inspect-kind
+                    "runtime/inspect should report its command kind")
+      (assert-equal :runtime/inspect (getf inspect-result :tool)
+                    "runtime/inspect should dispatch through the runtime tool surface")
+      (assert-equal "*PACKAGE*" (getf inspect-result :symbol)
+                    "runtime/inspect should report the requested symbol")
+      (assert-true (listp (getf inspect-result :value-summary))
+                   "runtime/inspect should expose a structured live value summary")
+      (assert-equal :package
+                    (getf (getf inspect-result :value-summary) :kind)
+                    "runtime/inspect should classify the inspected package value")
+      (assert-equal "COMMON-LISP-USER"
+                    (getf (getf inspect-result :value-summary) :name)
+                    "runtime/inspect should expose the current live package value"))
+    (multiple-value-bind (object-result object-kind object-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(runtime/object "*PACKAGE*" :package "SBCL-AGENT-USER"))
+         provider
+         session)
+      (declare (ignore object-session))
+      (assert-equal :runtime-object object-kind
+                    "runtime/object should report its command kind")
+      (assert-equal :runtime/object (getf object-result :tool)
+                    "runtime/object should dispatch through the runtime tool surface")
+      (assert-equal :package
+                    (getf (getf object-result :object-detail) :kind)
+                    "runtime/object should expose the inspected object's kind")
+      (assert-equal "COMMON-LISP-USER"
+                    (getf (getf object-result :object-detail) :name)
+                    "runtime/object should preserve the live package identity")
+      (assert-true (integerp (getf (getf object-result :object-detail) :external-symbol-count))
+                   "runtime/object should expose richer package detail"))
     (multiple-value-bind (definition-result definition-kind definition-session)
         (sbcl-agent::execute-command
          (sbcl-agent::normalize-form-command '(runtime/find-definition "runtime-shell-commands-test"))
@@ -10061,6 +11258,40 @@ fi
                       "mutating runtime/eval should capture a work-item checkpoint")
         (assert-true (>= (length (sbcl-agent::work-item-runtime-observations work-item)) 2)
                      "mutating runtime/eval should append runtime observations to the work-item")))))
+
+(defun runtime-eval-recovery-launch-provenance-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (recovery-launch (list :source :incident-restart
+                                :incident-id "incident-runtime-recovery"
+                                :restart-label "CONTINUE")))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(approve :runtime-eval-mutate))
+     provider
+     session)
+    (let* ((response (sbcl-agent::command-runtime-eval-service
+                      session
+                      "(progn (defparameter sbcl-agent-user::*runtime-recovery-launch-flag* nil) (setf sbcl-agent-user::*runtime-recovery-launch-flag* :continued) sbcl-agent-user::*runtime-recovery-launch-flag*)"
+                      :package "SBCL-AGENT-USER"
+                      :mutating t
+                      :recovery-launch recovery-launch))
+           (result (sbcl-agent::service-response-data response))
+           (work-item (sbcl-agent::find-work-item session (getf result :work-item-id)))
+           (artifact (car (last (sbcl-agent::agent-session-artifacts session))))
+           (latest-observation (car (last (sbcl-agent::work-item-runtime-observations work-item))))
+           (history-entry (car (last (sbcl-agent::environment-runtime-history
+                                      (sbcl-agent::ensure-environment))))))
+      (assert-equal :continued (getf result :result)
+                    "runtime/eval provenance test should still execute the requested form")
+      (assert-equal recovery-launch
+                    (getf (sbcl-agent::artifact-metadata artifact) :recovery-launch)
+                    "runtime/eval should persist recovery launch provenance on the created artifact")
+      (assert-equal recovery-launch
+                    (getf (sbcl-agent::event-payload latest-observation) :recovery-launch)
+                    "runtime/eval should preserve recovery launch provenance in work-item observations")
+      (assert-equal recovery-launch
+                    (getf (getf history-entry :payload) :recovery-launch)
+                    "runtime/eval should preserve recovery launch provenance in runtime history"))))
 
 (defun runtime-reload-file-approval-and-workflow-test ()
   (let* ((provider (make-test-provider))
@@ -10336,6 +11567,142 @@ fi
                            (mapcar (lambda (entry) (getf entry :type))
                                    (getf result :recommended-actions)))
                      "incident recommended actions should still surface the work-item next action")))))
+
+(defun incident-condition-restart-summary-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (handler-case
+        (restart-case
+            (error "restart-aware incident")
+          (use-default () 42))
+      (error (condition)
+        (sbcl-agent::record-runtime-incident
+         session
+         condition
+         :thread (sbcl-agent::current-thread session)
+         :kind :runtime-eval-failure
+         :title "Runtime eval failed"
+         :summary (princ-to-string condition))))
+    (let* ((incident-id (getf (first (sbcl-agent::list-incident-summaries session)) :id)))
+      (multiple-value-bind (result kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(incident/show ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :incident-show kind
+                      "incident/show should dispatch for condition/restart analysis")
+        (assert-true (listp (getf (getf result :runtime-context) :condition-summary))
+                     "incident runtime context should expose structured condition summary")
+        (assert-true (listp (getf (getf result :runtime-context) :condition-detail))
+                     "incident runtime context should expose structured condition detail")
+        (assert-true (string= "SIMPLE-ERROR"
+                              (getf (getf (getf result :runtime-context) :condition-summary) :type))
+                     "incident condition summary should expose the concrete condition type")
+        (assert-true (string= "SIMPLE-ERROR"
+                              (getf (getf (getf result :runtime-context) :condition-detail) :type))
+                     "incident condition detail should expose the concrete condition type")
+        (assert-true (listp (getf (getf result :runtime-context) :restart-suggestions))
+                     "incident runtime context should expose restart suggestions")
+        (assert-true (> (length (getf (getf result :runtime-context) :restart-suggestions)) 0)
+                     "incident runtime context should include at least one restart suggestion")
+        (assert-true (every (lambda (entry)
+                              (or (getf entry :name)
+                                  (getf entry :label)))
+                            (getf (getf result :runtime-context) :restart-suggestions))
+                     "incident restart suggestions should carry readable restart identity")
+        (assert-true (find :consider-restart
+                           (mapcar (lambda (entry) (getf entry :type))
+                                   (getf result :recommended-actions)))
+                     "incident recommended actions should include restart-aware suggestions")))))
+
+(defun incident-condition-and-restarts-command-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (handler-case
+        (restart-case
+            (error "restart-aware incident")
+          (use-default () 42))
+      (error (condition)
+        (sbcl-agent::record-runtime-incident
+         session
+         condition
+         :thread (sbcl-agent::current-thread session)
+         :kind :runtime-eval-failure
+         :title "Runtime eval failed"
+         :summary (princ-to-string condition))))
+    (let ((incident-id (getf (first (sbcl-agent::list-incident-summaries session)) :id)))
+      (multiple-value-bind (condition-result condition-kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(incident/condition ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :incident-condition condition-kind
+                      "incident/condition should dispatch through the shell command surface")
+        (assert-true (listp (getf condition-result :condition-summary))
+                     "incident/condition should expose a structured condition summary")
+        (assert-true (listp (getf condition-result :condition-detail))
+                     "incident/condition should expose structured condition detail")
+        (assert-equal "SIMPLE-ERROR"
+                      (getf (getf condition-result :condition-summary) :type)
+                      "incident/condition should expose the captured condition type")
+        (assert-equal "SIMPLE-ERROR"
+                      (getf (getf condition-result :condition-detail) :type)
+                      "incident/condition detail should preserve the captured condition type"))
+      (multiple-value-bind (restart-result restart-kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(incident/restarts ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :incident-restarts restart-kind
+                      "incident/restarts should dispatch through the shell command surface")
+        (assert-true (> (getf restart-result :restart-count) 0)
+                     "incident/restarts should expose restart suggestions")
+        (assert-true (every (lambda (entry)
+                              (or (getf entry :name)
+                                  (getf entry :label)))
+                            (getf restart-result :restart-suggestions))
+                     "incident/restarts should expose readable restart entries")
+        (assert-true (find :consider-restart
+                           (mapcar (lambda (entry) (getf entry :type))
+                                   (getf restart-result :recommended-actions)))
+                     "incident/restarts should expose restart-oriented recovery actions"))
+      (multiple-value-bind (runtime-condition-result runtime-condition-kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(runtime/condition ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :runtime-condition runtime-condition-kind
+                      "runtime/condition should dispatch through the runtime shell surface")
+        (assert-equal :runtime/condition (getf runtime-condition-result :tool)
+                      "runtime/condition should expose the runtime tool identity")
+        (assert-equal "SIMPLE-ERROR"
+                      (getf (getf runtime-condition-result :condition-summary) :type)
+                      "runtime/condition should expose the captured runtime condition type")
+        (assert-true (listp (getf runtime-condition-result :condition-detail))
+                     "runtime/condition should expose structured condition detail")
+        (assert-equal "SIMPLE-ERROR"
+                      (getf (getf runtime-condition-result :condition-detail) :type)
+                      "runtime/condition detail should preserve the captured condition type")
+        (assert-true (listp (getf runtime-condition-result :runtime-context))
+                     "runtime/condition should expose runtime context"))
+      (multiple-value-bind (runtime-restart-result runtime-restart-kind updated-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command `(runtime/restarts ,incident-id))
+           provider
+           session)
+        (declare (ignore updated-session))
+        (assert-equal :runtime-restarts runtime-restart-kind
+                      "runtime/restarts should dispatch through the runtime shell surface")
+        (assert-equal :runtime/restarts (getf runtime-restart-result :tool)
+                      "runtime/restarts should expose the runtime tool identity")
+        (assert-true (> (getf runtime-restart-result :restart-count) 0)
+                     "runtime/restarts should expose captured restart options")
+        (assert-true (listp (getf runtime-restart-result :runtime-context))
+                     "runtime/restarts should expose runtime context")))))
 
 (defun incident-recovery-artifact-test ()
   (let ((provider (make-instance 'failing-mutating-eval-provider))

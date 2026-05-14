@@ -26,13 +26,29 @@
         :key (lambda (entry) (getf entry :action))
         :test #'eq))
 
-(defun record-assistant-action-operations (session thread turn action-report &key work-item)
-  (let ((records '()))
+(defun desktop-task-record-ids-for-action (action desktop-task-bindings fallback-record-ids)
+  (or (loop for binding in (or desktop-task-bindings '())
+            when (find action (getf binding :actions) :test #'eq)
+              append (copy-list (or (getf binding :record-ids)
+                                    (let ((record-id (getf binding :record-id)))
+                                      (and record-id (list record-id)))))
+            into matches
+            finally (return (remove-duplicates matches :test #'string=)))
+      fallback-record-ids))
+
+(defun record-assistant-action-operations (session thread turn action-report
+                                           &key work-item desktop-task-records desktop-task-bindings)
+  (let ((fallback-record-ids (mapcar #'desktop-task-record-id desktop-task-records))
+        (records '()))
     (dolist (entry (getf action-report :immediate-results))
       (let* ((action (getf entry :action))
              (result (getf entry :result))
              (assessment (action-report-assessment action-report action))
-         (operation (start-operation session
+             (action-task-record-ids
+               (desktop-task-record-ids-for-action action
+                                                   desktop-task-bindings
+                                                   fallback-record-ids))
+             (operation (start-operation session
                                          thread
                                          turn
                                          :assistant-action
@@ -41,6 +57,7 @@
                                          :policy-decision (assistant-action-policy-decision action :allowed)
                                          :metadata (list :assistant-action-type (assistant-action-type action)
                                                          :assistant-action action
+                                                         :desktop-task-record-ids action-task-record-ids
                                                          :action-assessment assessment
                                                          :work-item-id (and work-item (work-item-id work-item))
                                                          :source :say))))
@@ -55,7 +72,11 @@
     (dolist (action (getf action-report :staged-actions))
       (let* ((disposition (staged-assistant-action-disposition action))
              (assessment (action-report-assessment action-report action))
-         (operation (start-operation session
+             (action-task-record-ids
+               (desktop-task-record-ids-for-action action
+                                                   desktop-task-bindings
+                                                   fallback-record-ids))
+             (operation (start-operation session
                                          thread
                                          turn
                                          :assistant-action
@@ -64,6 +85,7 @@
                                          :policy-decision (assistant-action-policy-decision action disposition)
                                          :metadata (list :assistant-action-type (assistant-action-type action)
                                                          :assistant-action action
+                                                         :desktop-task-record-ids action-task-record-ids
                                                          :action-assessment assessment
                                                          :work-item-id (and work-item (work-item-id work-item))
                                                          :source :say))))
@@ -76,12 +98,16 @@
                                   :action-type (assistant-action-type action))
                             :status (staged-assistant-action-status action)
                             :metadata (list :execution (if (eq disposition :approval-required)
-                                                            :awaiting-approval
+                                                           :awaiting-approval
                                                            :staged)))
         (push operation records)))
     (dolist (action (getf action-report :deferred-actions))
       (let* ((disposition (deferred-assistant-action-disposition action))
              (assessment (action-report-assessment action-report action))
+             (action-task-record-ids
+               (desktop-task-record-ids-for-action action
+                                                   desktop-task-bindings
+                                                   fallback-record-ids))
              (operation (start-operation session
                                          thread
                                          turn
@@ -91,6 +117,7 @@
                                          :policy-decision (assistant-action-policy-decision action disposition)
                                          :metadata (list :assistant-action-type (assistant-action-type action)
                                                          :assistant-action action
+                                                         :desktop-task-record-ids action-task-record-ids
                                                          :action-assessment assessment
                                                          :work-item-id (and work-item (work-item-id work-item))
                                                          :source :say))))
@@ -111,22 +138,106 @@
                               &key streamed-p stream-event-count stream-events action-results
                                 retrieval-summary reasoning-summary planning-summary
                                 outcome-summary cognition-summary action-agenda-summary)
-  (append (list :response response
-                :staged-action-count (length (getf action-report :staged-actions))
-                :deferred-action-count (length (getf action-report :deferred-actions))
-                :immediate-action-count (length (getf action-report :immediate-actions))
-                :action-results action-results
-                :streamed-p streamed-p
-                :stream-event-count stream-event-count
-                :retrieval-summary retrieval-summary
-                :reasoning-summary reasoning-summary
-                :planning-summary planning-summary
-                :outcome-summary outcome-summary
-                :cognition-summary cognition-summary
-                :action-agenda-summary action-agenda-summary)
-          (when stream-events
-            (list :stream-events stream-events))
-          (conversation-turn-summary thread user-message assistant-message turn)))
+  (labels ((assistant-response-metadata-value (key)
+             (let ((metadata (and (typep response 'assistant-response)
+                                  (assistant-response-metadata response))))
+               (when (listp metadata)
+                 (or (getf metadata key)
+                     (getf metadata (intern (string-upcase (string key)) "KEYWORD"))))))
+           (pending-approval-summary (task-record-summaries)
+             (let ((awaiting
+                     (remove-if-not
+                      (lambda (summary)
+                        (eq (or (getf summary :approval-status)
+                                (getf summary :APPROVAL-STATUS))
+                            :awaiting-approval))
+                      task-record-summaries)))
+               (when awaiting
+                 (list :session-id (or (getf (first awaiting) :session-id)
+                                       (getf (first awaiting) :SESSION-ID))
+                       :thread-id (or (getf (first awaiting) :thread-id)
+                                      (getf (first awaiting) :THREAD-ID))
+                       :record-ids (mapcar (lambda (summary)
+                                             (or (getf summary :id)
+                                                 (getf summary :ID)))
+                                           awaiting)
+                       :approval-ids (remove nil
+                                             (mapcar (lambda (summary)
+                                                       (or (getf summary :approval-id)
+                                                           (getf summary :APPROVAL-ID)))
+                                                     awaiting))
+                       :policy-ids (remove-duplicates
+                                    (remove nil
+                                            (mapcar (lambda (summary)
+                                                      (let ((request-metadata
+                                                              (or (getf summary :request-metadata)
+                                                                  (getf summary :REQUEST-METADATA))))
+                                                        (and (listp request-metadata)
+                                                             (or (getf request-metadata :policy-id)
+                                                                 (getf request-metadata :POLICY-ID)))))
+                                                    awaiting))
+                                    :test #'eq)
+                       :actor-message-ids (remove nil
+                                                  (mapcar (lambda (summary)
+                                                            (or (getf summary :actor-message-id)
+                                                                (getf summary :ACTOR-MESSAGE-ID)
+                                                                (let ((actor-message
+                                                                        (or (getf summary :actor-message)
+                                                                            (getf summary :ACTOR-MESSAGE))))
+                                                                  (and (listp actor-message)
+                                                                       (or (getf actor-message :id)
+                                                                           (getf actor-message :ID))))))
+                                                          awaiting))
+                       :receiver-roles (remove-duplicates
+                                        (remove nil
+                                                (mapcar (lambda (summary)
+                                                          (let ((actor-message
+                                                                  (or (getf summary :actor-message)
+                                                                      (getf summary :ACTOR-MESSAGE))))
+                                                            (when (listp actor-message)
+                                                              (let ((receiver (or (getf actor-message :receiver)
+                                                                                  (getf actor-message :RECEIVER))))
+                                                                (and (listp receiver)
+                                                                     (or (getf receiver :role)
+                                                                         (getf receiver :ROLE)))))))
+                                                        awaiting))
+                                        :test #'eq))))))
+    (let* ((task-record-summaries
+             (assistant-response-metadata-value :desktop-task-records))
+           (desktop-task-results
+             (assistant-response-metadata-value :desktop-task-results))
+           (actor-flow
+             (assistant-response-metadata-value :actor-flow))
+           (runtime-reply
+             (assistant-response-metadata-value :runtime-reply))
+           (pending-approval
+             (pending-approval-summary task-record-summaries)))
+      (append (list :response response
+                    :staged-action-count (length (getf action-report :staged-actions))
+                    :deferred-action-count (length (getf action-report :deferred-actions))
+                    :immediate-action-count (length (getf action-report :immediate-actions))
+                    :action-results action-results
+                    :streamed-p streamed-p
+                    :stream-event-count stream-event-count
+                    :retrieval-summary retrieval-summary
+                    :reasoning-summary reasoning-summary
+                    :planning-summary planning-summary
+                    :outcome-summary outcome-summary
+                    :cognition-summary cognition-summary
+                    :action-agenda-summary action-agenda-summary)
+              (when task-record-summaries
+                (list :task-record-summaries task-record-summaries))
+              (when desktop-task-results
+                (list :desktop-task-results desktop-task-results))
+              (when actor-flow
+                (list :actor-flow actor-flow))
+              (when runtime-reply
+                (list :runtime-reply runtime-reply))
+              (when pending-approval
+                (list :pending-approval pending-approval))
+              (when stream-events
+                (list :stream-events stream-events))
+              (conversation-turn-summary thread user-message assistant-message turn)))))
 
 (defun emit-conversation-progress (phase payload)
   (when *task-progress-callback*
@@ -140,6 +251,37 @@
                   (string-upcase (string source))
                   (string-upcase (string suffix)))
           :keyword))
+
+(defun internal-elapsed-seconds (started-at completed-at)
+  (/ (- completed-at started-at)
+     internal-time-units-per-second))
+
+(defun record-turn-latency-sample (session thread turn source kind payload)
+  (append-session-event session
+                        :conversation-latency
+                        payload
+                        :family :provider
+                        :entity-id (turn-id turn)
+                        :thread-id (thread-id thread)
+                        :turn-id (turn-id turn)
+                        :visibility :operator
+                        :metadata (list :source source
+                                        :kind kind))
+  (emit-conversation-progress (conversation-progress-phase source :timing)
+                              (append (list :kind kind
+                                            :thread-id (thread-id thread)
+                                            :turn-id (turn-id turn))
+                                      payload)))
+
+(defun make-provider-timing-listener (session thread turn source)
+  (lambda (phase payload)
+    (record-turn-latency-sample session
+                                thread
+                                turn
+                                source
+                                :provider-phase
+                                (append (list :phase phase)
+                                        payload))))
 
 (defun provider-request-retrieval-summary (request)
   (let* ((dossier (provider-request-retrieval-dossier request))
@@ -188,7 +330,8 @@
       (list :step-count (getf agenda :step-count)
             :primary-step (getf agenda :primary-step)))))
 
-(defun record-turn-memory-entry (session thread turn request prompt assistant-message)
+(defun record-turn-memory-entry (session thread turn request prompt assistant-message
+                                 &key defer-inference-p)
   (let ((bundle (provider-request-cognition-bundle request)))
     (when bundle
       (remember-turn-outcome-memory session
@@ -197,11 +340,22 @@
                                     prompt
                                     bundle
                                     assistant-message))
-    (infer-operator-memory session
-                           thread
-                           turn
-                           prompt
-                           assistant-message)))
+    (if defer-inference-p
+        (append-session-event session
+                              :operator-memory-inference-deferred
+                              (list :prompt (provider-summary-content prompt)
+                                    :assistant-message (provider-summary-content assistant-message)
+                                    :reason :streaming-turn-post-response)
+                              :family :assistant
+                              :entity-id (and turn (turn-id turn))
+                              :thread-id (and thread (thread-id thread))
+                              :turn-id (and turn (turn-id turn))
+                              :visibility :operator)
+        (infer-operator-memory session
+                               thread
+                               turn
+                               prompt
+                               assistant-message))))
 
 (defun build-turn-provider-request (session prompt thread turn operator-mode stream-p
                                     &key retrieval-dossier attachments
@@ -351,6 +505,14 @@
                                         :phase phase
                                         :cognition-summary summary)))))
 
+(defun record-turn-request-trace (session thread turn request source
+                                  &key (phase (or (getf (provider-request-retrieval-dossier request) :phase)
+                                                  :pre-prompt)))
+  (record-turn-retrieval-dossier session thread turn request source :phase phase)
+  (record-turn-reasoning-brief session thread turn request source :phase phase)
+  (record-turn-planning-brief session thread turn request source :phase phase)
+  (record-turn-cognition-bundle session thread turn request source :phase phase))
+
 (defun materially-mutating-action-result-p (entry)
   (let* ((action (getf entry :action))
          (policy-id (and action (assistant-action-policy-id action))))
@@ -389,7 +551,8 @@
 (defun run-conversation-turn-streaming (provider session thread prompt
                                          &key (source :say) (operator-mode :conversation)
                                            attachments surface-context surface-actions)
-  (let* ((user-message (create-message session thread :user prompt
+  (let* ((request-build-started-at (get-internal-real-time))
+         (user-message (create-message session thread :user prompt
                                        :metadata (list :source source
                                                        :surface-context surface-context
                                                        :surface-actions surface-actions)
@@ -403,6 +566,7 @@
                                               :attachments attachments
                                               :surface-context surface-context
                                               :surface-actions surface-actions))
+         (request-ready-at (get-internal-real-time))
          (operation (start-operation session
                                      thread
                                      turn
@@ -420,32 +584,58 @@
                                                      :planning-summary
                                                      (provider-request-planning-summary request))))
          (run-id (format nil "provider-run-~A" (operation-id operation)))
-         (events '()))
-    (record-turn-retrieval-dossier session thread turn request source)
-    (record-turn-reasoning-brief session thread turn request source)
-    (record-turn-planning-brief session thread turn request source)
-    (record-turn-cognition-bundle session thread turn request source)
-    (let* ((response (stream-provider-request provider
-                                    request
-                                    (lambda (event)
-                                      (setf (provider-event-run-id event) run-id
-                                            (provider-event-operation-id event) (operation-id operation)
-                                            (provider-event-thread-id event) (thread-id thread)
-                                            (provider-event-turn-id event) (turn-id turn)
-                                            (provider-event-metadata event)
-                                            (merge-event-metadata
-                                             (provider-event-metadata event)
-                                             (list :run-id run-id
-                                                   :operation-id (operation-id operation)
-                                                   :thread-id (thread-id thread)
-                                                   :turn-id (turn-id turn))))
-                                      (setf events (handle-provider-stream-event session
-                                                                                event
-                                                                                events
-                                                                                :thread-id (thread-id thread)
-                                                                                :turn-id (turn-id turn)
-                                                                                :run-id run-id
-                                                                                :operation-id (operation-id operation))))))
+         (events '())
+         (first-stream-at nil))
+    (record-turn-latency-sample session
+                                thread
+                                turn
+                                source
+                                :request-built
+                                (list :request-build-seconds
+                                      (internal-elapsed-seconds request-build-started-at
+                                                                request-ready-at)
+                                      :stream-p t))
+    (let* ((response (let ((*provider-timing-listener*
+                             (make-provider-timing-listener session thread turn source)))
+                       (stream-provider-request provider
+                                               request
+                                               (lambda (event)
+                                                 (setf (provider-event-run-id event) run-id
+                                                       (provider-event-operation-id event) (operation-id operation)
+                                                       (provider-event-thread-id event) (thread-id thread)
+                                                       (provider-event-turn-id event) (turn-id turn)
+                                                       (provider-event-metadata event)
+                                                       (merge-event-metadata
+                                                        (provider-event-metadata event)
+                                                        (list :run-id run-id
+                                                              :operation-id (operation-id operation)
+                                                              :thread-id (thread-id thread)
+                                                              :turn-id (turn-id turn))))
+                                                 (when (and (null first-stream-at)
+                                                            (provider-text-delta-event-p event))
+                                                   (setf first-stream-at (get-internal-real-time))
+                                                   (record-turn-latency-sample
+                                                    session
+                                                    thread
+                                                    turn
+                                                    source
+                                                    :first-stream
+                                                    (list :request-build-seconds
+                                                          (internal-elapsed-seconds request-build-started-at
+                                                                                    request-ready-at)
+                                                          :pre-stream-seconds
+                                                          (internal-elapsed-seconds request-ready-at
+                                                                                    first-stream-at)
+                                                          :total-to-first-stream-seconds
+                                                          (internal-elapsed-seconds request-build-started-at
+                                                                                    first-stream-at))))
+                                                 (setf events (handle-provider-stream-event session
+                                                                                           event
+                                                                                           events
+                                                                                           :thread-id (thread-id thread)
+                                                                                           :turn-id (turn-id turn)
+                                                                                           :run-id run-id
+                                                                                           :operation-id (operation-id operation)))))))
            (action-report (process-response-actions response
                                                    session
                                                    :cognition-bundle
@@ -493,13 +683,32 @@
                                                           :operation-id (operation-id completed-operation)
                                                           :action-operation-ids (mapcar #'operation-id action-operations)))))
       (append-transcript-entry session :assistant (assistant-response->string response))
-      (append-session-event session :assistant-response response)
+      ;; Keep provider startup lean for streamed conversation turns by recording
+      ;; the richer request trace after the response completes instead of before
+      ;; the first delta can be emitted.
+      (record-turn-request-trace session thread completed-turn request source)
+      (append-session-event session
+                            :assistant-response
+                            response
+                            :family :assistant
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id completed-turn)
+                            :visibility :operator)
+      (when (calculator-control-actions-p (getf action-report :immediate-actions))
+        (append-conversation-calculator-control-event session
+                                                      thread
+                                                      completed-turn
+                                                      prompt
+                                                      (getf action-report :immediate-actions)
+                                                      immediate-results
+                                                      :source source))
       (record-turn-memory-entry session
                                 thread
                                 completed-turn
                                 request
                                 prompt
-                                (assistant-response->string response))
+                                (assistant-response->string response)
+                                :defer-inference-p t)
       (emit-conversation-progress (conversation-progress-phase source :response)
                                   (list :message (assistant-response-message response)
                                         :staged-action-count (length (getf action-report :staged-actions))
@@ -533,7 +742,8 @@
 (defun run-conversation-turn-sync (provider session thread prompt
                                     &key (source :say) (operator-mode :conversation)
                                       attachments surface-context surface-actions)
-  (let* ((user-message (create-message session thread :user prompt
+  (let* ((request-build-started-at (get-internal-real-time))
+         (user-message (create-message session thread :user prompt
                                        :metadata (list :source source
                                                        :surface-context surface-context
                                                        :surface-actions surface-actions)
@@ -547,6 +757,7 @@
                                               :attachments attachments
                                               :surface-context surface-context
                                               :surface-actions surface-actions))
+         (request-ready-at (get-internal-real-time))
          (operation (start-operation session
                                      thread
                                      turn
@@ -563,12 +774,23 @@
                                                      (provider-request-reasoning-summary request)
                                                      :planning-summary
                                                      (provider-request-planning-summary request))))
+         (response-started-at nil)
          (response (progn
-                     (record-turn-retrieval-dossier session thread turn request source)
-                     (record-turn-reasoning-brief session thread turn request source)
-                     (record-turn-planning-brief session thread turn request source)
-                     (record-turn-cognition-bundle session thread turn request source)
-                     (send-provider-request provider request)))
+                     (record-turn-latency-sample session
+                                                 thread
+                                                 turn
+                                                 source
+                                                 :request-built
+                                                 (list :request-build-seconds
+                                                       (internal-elapsed-seconds request-build-started-at
+                                                                                 request-ready-at)
+                                                       :stream-p nil))
+                     (record-turn-request-trace session thread turn request source)
+                     (let ((*provider-timing-listener*
+                             (make-provider-timing-listener session thread turn source)))
+                       (setf response-started-at (get-internal-real-time))
+                       (send-provider-request provider request))))
+         (response-completed-at (get-internal-real-time))
          (action-report (process-response-actions response
                                                  session
                                                  :cognition-bundle
@@ -612,8 +834,37 @@
                                         :metadata (list :stream-event-count 0
                                                         :operation-id (operation-id completed-operation)
                                                         :action-operation-ids (mapcar #'operation-id action-operations)))))
+    (record-turn-latency-sample session
+                                thread
+                                turn
+                                source
+                                :response-complete
+                                (list :request-build-seconds
+                                      (internal-elapsed-seconds request-build-started-at
+                                                                request-ready-at)
+                                      :provider-response-seconds
+                                      (internal-elapsed-seconds response-started-at
+                                                                response-completed-at)
+                                      :total-response-seconds
+                                      (internal-elapsed-seconds request-build-started-at
+                                                                response-completed-at)
+                                      :stream-p nil))
     (append-transcript-entry session :assistant (assistant-response->string response))
-    (append-session-event session :assistant-response response)
+    (append-session-event session
+                          :assistant-response
+                          response
+                          :family :assistant
+                          :thread-id (thread-id thread)
+                          :turn-id (turn-id completed-turn)
+                          :visibility :operator)
+    (when (calculator-control-actions-p (getf action-report :immediate-actions))
+      (append-conversation-calculator-control-event session
+                                                    thread
+                                                    completed-turn
+                                                    prompt
+                                                    (getf action-report :immediate-actions)
+                                                    immediate-results
+                                                    :source source))
     (record-turn-memory-entry session
                               thread
                               completed-turn
@@ -820,7 +1071,13 @@
                                           :metadata (list :followup-operation-id (operation-id completed-operation)
                                                           :followup-action-operation-ids (mapcar #'operation-id action-operations)))))
       (append-transcript-entry session :assistant (assistant-response->string response))
-      (append-session-event session :assistant-response response)
+      (append-session-event session
+                            :assistant-response
+                            response
+                            :family :assistant
+                            :thread-id (thread-id thread)
+                            :turn-id (turn-id completed-turn)
+                            :visibility :operator)
       (record-turn-memory-entry session
                                 thread
                                 completed-turn
@@ -866,10 +1123,27 @@
 (defun operation-assistant-action (operation)
   (getf (operation-metadata operation) :assistant-action))
 
+(defun operation-desktop-task-record-ids (operation)
+  (copy-list (or (getf (operation-metadata operation) :desktop-task-record-ids)
+                 '())))
+
+(defun desktop-task-records-for-operations (session operations)
+  (let ((record-ids
+          (remove-duplicates
+           (loop for operation in operations
+                 append (operation-desktop-task-record-ids operation))
+           :test #'string=)))
+    (remove nil
+            (mapcar (lambda (record-id)
+                      (find-desktop-task-record session record-id))
+                    record-ids))))
+
 (defun turn-pending-action-operations (session turn)
   (remove-if-not (lambda (operation)
-                   (or (eq (operation-status operation) :awaiting-approval)
-                       (eq (operation-status operation) :staged)))
+                   (and (eq (operation-kind operation) :assistant-action)
+                        (operation-assistant-action operation)
+                        (or (eq (operation-status operation) :awaiting-approval)
+                            (eq (operation-status operation) :staged))))
                  (list-turn-operations session (turn-id turn))))
 
 (defun execute-turn-pending-actions (session operations &key thread turn)
@@ -910,12 +1184,125 @@
       (remove-pending-actions session actions)
       results)))
 
+(defun turn-pending-governed-desktop-task-records (session turn)
+  (remove-if-not
+   (lambda (record)
+     (and (eq (desktop-task-record-approval-status record) :awaiting-approval)
+          (or (eq (desktop-task-record-status record) :awaiting-approval)
+              (eq (desktop-task-record-status record) :retryable-failure))))
+   (desktop-task-records-for-turn session (turn-id turn))))
+
+(defun execute-turn-governed-desktop-task-records (session records &key thread turn)
+  (let ((results '()))
+    (dolist (record records (nreverse results))
+      (let* ((request (make-desktop-task-request-from-record record))
+             (manifest (desktop-task-manifest-for-request request))
+             (resolution (resolve-governed-desktop-task-request request session)))
+        (handler-case
+            (progn
+              (when (eq (desktop-task-record-approval-status record) :awaiting-approval)
+                (mark-desktop-task-record-approved session record))
+              (if (eq (desktop-task-record-status record) :retryable-failure)
+                  (mark-desktop-task-record-retrying
+                   session
+                   record
+                   :reason "Retrying governed desktop task after approval.")
+                  (mark-desktop-task-record-executing session record))
+              (let* ((invocation-result
+                       (getf (invoke-governed-desktop-task-request
+                              request
+                              session
+                              :resolution resolution
+                              :manifest manifest)
+                             :result))
+                     (result-summary
+                       (make-desktop-task-record-completed-result
+                        request
+                        resolution
+                        invocation-result)))
+                (mark-desktop-task-record-completed session record result-summary)
+                (push (list :record-id (desktop-task-record-id record)
+                            :request-id (desktop-task-request-id request)
+                            :status :completed
+                            :result result-summary)
+                      results)))
+          (error (condition)
+            (let* ((error-summary
+                     (list :summary "Desktop task execution failed during resumed execution."
+                           :error (princ-to-string condition)
+                           :failure-classification :execution))
+                   (incident
+                     (record-runtime-incident session
+                                              condition
+                                              :thread thread
+                                              :turn turn
+                                              :kind :desktop-task-failure
+                                              :title "Desktop task execution failed"
+                                              :summary (princ-to-string condition)
+                                              :metadata (list :source :turn-resume
+                                                              :desktop-task-record-id
+                                                              (desktop-task-record-id record)
+                                                              :target (desktop-task-record-target record)
+                                                              :operation (desktop-task-record-operation record)))))
+              (mark-desktop-task-record-failed
+               session
+               record
+               (append error-summary
+                       (list :incident (incident-record-summary incident)))
+               :retryable-p (desktop-task-retryable-p record))
+              (push (list :record-id (desktop-task-record-id record)
+                          :request-id (desktop-task-request-id request)
+                          :status :failed
+                          :error (princ-to-string condition)
+                          :incident (incident-record-summary incident)
+                          :result error-summary)
+                    results))))))))
+
 (defun resume-turn-operation-results (turn operations results &key followup)
   (list :turn-id (turn-id turn)
         :resumed-operation-count (length operations)
         :action-result-count (length results)
         :action-results results
         :followup followup))
+
+(defun update-turn-desktop-task-records-from-resume-results (session turn operations results)
+  (declare (ignore turn))
+  (let ((record-results (make-hash-table :test #'equal)))
+    (loop for operation in operations
+          for result in results
+          do (dolist (record-id (operation-desktop-task-record-ids operation))
+               (push result (gethash record-id record-results))))
+    (maphash
+     (lambda (record-id associated-results)
+       (let* ((record (find-desktop-task-record session record-id))
+              (ordered-results (nreverse associated-results))
+              (failed-results
+                (remove-if-not (lambda (result)
+                                 (eq (getf result :status) :failed))
+                               ordered-results)))
+         (when record
+           (if (eq (desktop-task-record-status record) :retryable-failure)
+               (mark-desktop-task-record-retrying
+                session
+                record
+                :reason "Retrying governed desktop task after resumable failure.")
+               (mark-desktop-task-record-executing session record))
+           (if failed-results
+               (mark-desktop-task-record-failed
+                session
+                record
+                (list :summary "Desktop task execution failed during resumed execution."
+                      :failed-result-count (length failed-results)
+                      :results failed-results
+                      :operation-count (length ordered-results))
+                :retryable-p (desktop-task-retryable-p record))
+               (mark-desktop-task-record-completed
+                session
+                record
+                (list :summary "Desktop task completed during resumed execution."
+                      :result-count (length ordered-results)
+                      :results ordered-results))))))
+     record-results)))
 
 (defun resume-conversation-turn (provider session turn
                                   &key (source (or (getf (turn-metadata turn) :source) :say))
@@ -929,16 +1316,44 @@
         (when policy-id
           (ensure-policy-approved session policy-id))))
       (let* ((thread (or (find-thread session (turn-thread-id turn))
-                       (current-thread session)))
-           (results (execute-turn-pending-actions session
-                                                  operations
-                                                  :thread thread
-                                                  :turn turn))
+                         (current-thread session)))
+             (desktop-task-records (desktop-task-records-for-operations session operations))
+             (governed-records (turn-pending-governed-desktop-task-records session turn))
+             (action-results (if operations
+                                 (execute-turn-pending-actions session
+                                                               operations
+                                                               :thread thread
+                                                               :turn turn)
+                                 '()))
+             (governed-results (if governed-records
+                                   (execute-turn-governed-desktop-task-records session
+                                                                               governed-records
+                                                                               :thread thread
+                                                                               :turn turn)
+                                   '()))
+             (results (append action-results governed-results))
            (followup nil))
+      (dolist (record governed-records)
+        (let ((policy-id (desktop-task-record-policy-id record)))
+          (when policy-id
+            (ensure-policy-approved session policy-id))))
+      (when desktop-task-records
+        (update-turn-desktop-task-records-from-resume-results session
+                                                              turn
+                                                              operations
+                                                              action-results))
       (loop for operation in operations
-            for result in results
+            for result in action-results
             do (apply-resumed-mutation-result session thread turn operation result))
-      (refresh-turn-status session turn :metadata '(:resumed-p t))
+      (refresh-turn-status session
+                           turn
+                           :status (if governed-records
+                                       (if (find :failed results :key (lambda (entry)
+                                                                        (getf entry :status)))
+                                           :failed
+                                           :completed)
+                                       nil)
+                           :metadata '(:resumed-p t))
       (when (and provider
                  (provider-turn-followup-p provider)
                  (eq (turn-status turn) :completed))

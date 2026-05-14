@@ -39,6 +39,44 @@
   (format t "  (compatibility/windows [:app-id \"linux.vscode\"]) List visible Linux app display surfaces bridged into the shell model.~%")
   (format t "  (workspace/show)                   Show the shell workspace model built from execution surfaces.~%")
   (format t "  (desktop/show)                     Show the desktop-hostable shell model for the current workspace.~%")
+  (format t "  (desktop-task/manifests)          List discoverable governed desktop task operations.~%")
+  (format t "  (desktop-task/manifest :target :keyword :operation :keyword) Show one governed desktop task manifest.~%")
+  (format t "  (desktop-task/records [:thread-id \"thread\"] [:status :keyword] [:approval-status :keyword]) List governed desktop task records.~%")
+  (format t "  (desktop-task/actors)             List governed capability actors and mailbox summaries.~%")
+  (format t "  (desktop-task/actor :actor-role :keyword) Show one governed capability actor summary.~%")
+  (format t "  (desktop-task/actor-system-panel [:session-id \"session-id\"]) Show the live actor-system hierarchy, workflow edges, metrics, and supervision state.~%")
+  (format t "  (desktop-task/supervision-incidents [:session-id \"session-id\"] [:actor-id \"actor/runtime\"] [:mailbox :runtime-inbox]) Show actor supervision incidents.~%")
+  (format t "  (desktop-task/fail-mailbox-entry :mailbox :keyword :mailbox-entry-id \"entry-id\" [:summary \"...\"] [:condition-string \"...\"] [:supervision-action :keyword]) Mark one actor mailbox entry failed and record a supervision incident.~%")
+  (format t "  (desktop-task/apply-supervision-action \"incident-id\" [:action :dead-letter|:quarantine|:restart-child|:replace-child] [:note \"...\"]) Apply one parent-directed supervision action to a failed mailbox entry.~%")
+  (format t "  (desktop-task/inbox :actor-role :keyword [:status :keyword]) Show one capability actor inbox from governed task records.~%")
+  (format t "  (desktop-task/outbox :actor-role :keyword [:status :keyword]) Show one actor outbox from governed task records.~%")
+  (format t "  (desktop-task/message \"actor-message-id\") Show one actor message via its governed task record.~%")
+  (format t "  (desktop-task/editor-mailbox [:session-id \"session-id\"] [:pending-action-id \"id\"] [:status :keyword] [:approval-status :keyword] [:scope-id \"scope\"] [:latest-only-p t]) Show the editor actor mailbox keyed by editor pending-action ids.~%")
+  (format t "  (desktop-task/editor-pending-mutations [:session-id \"session-id\"] [:pending-action-id \"id\"] [:status :keyword] [:approval-status :keyword] [:scope-id \"scope\"] [:latest-only-p t]) Show the editor actor pending mutation mailbox before and after governance approval.~%")
+  (format t "  (desktop-task/context-chat-mailbox [:session-id \"session-id\"] [:status :keyword] [:approval-status :keyword] [:latest-only-p t]) Show the Context Chat actor mailbox keyed by session id.~%")
+  (format t "  (desktop-task/context-chat-approval-inbox [:session-id \"session-id\"] [:latest-only-p t]) Show governance-issued approval requests addressed to the Context Chat actor.~%")
+  (format t "  (desktop-task/ack-context-chat-approval \"approval-id\" [:session-id \"session-id\"] [:actor-message-id \"id\"] [:mailbox-entry-id \"entry-id\"]) Acknowledge one Context Chat approval-inbox message by approval id.~%")
+  (format t "  (desktop-task/editor-authorizations [:session-id \"session-id\"] [:pending-action-id \"id\"] [:scope-id \"scope\"] [:latest-only-p t]) Show governance-authorized pending editor mutations keyed by pending action id.~%")
+  (format t "  (desktop-task/consume-editor-authorization \"pending-action-id\" [:session-id \"session-id\"] [:scope-id \"scope\"] [:mailbox-entry-id \"entry-id\"]) Dequeue one editor authorization mailbox message by pending action id.~%")
+  (format t "  (desktop-task/apply-editor-authorization \"pending-action-id\" [:session-id \"session-id\"] [:scope-id \"scope\"]) Apply one governance-authorized pending editor mutation by pending action id.~%")
+  (format t "  (desktop-task/actor-trace [:actor-message-id \"id\"] [:actor-role :keyword] [:phase :keyword] [:latest-only-p t] [:dead-letters-only-p t]) Show actor transport trace events.~%")
+  (format t "  (desktop-task/dlq [:actor-role :keyword]) Show dead-lettered actor messages from the DLQ trace.~%")
+  (format t "  (desktop-task/replies :actor-role :keyword) Show completed/failed actor replies for one sender actor.~%")
+  (format t "  (desktop-task/latest-reply :actor-role :keyword) Show the latest completed/failed actor reply for one sender actor.~%")
+  (format t "  (desktop-task/approve-message \"actor-message-id\") Approve and resume one awaiting-approval actor message.~%")
+  (format t "  (desktop-task/approve-approval \"approval-id\" [:session-id \"session-id\"]) Approve and resume one awaiting governance approval by approval id.~%")
+  (format t "  (desktop-task/pending-approval)   Show the latest awaiting-approval actor-message context.~%")
+  (format t "  (desktop-task/governance-state [:session-id \"session-id\"] [:approval-id \"approval-id\"] [:actor-message-id \"id\"] [:latest-only-p t]) Show explicit governance actor state keyed by session/approval/message id.~%")
+  (format t "  (desktop-task/governance-inbox [:session-id \"session-id\"] [:approval-status :keyword] [:latest-only-p t]) Show the governance actor inbox keyed by session/approval state.~%")
+  (format t "  (desktop-task/governance-decisions [:session-id \"session-id\"] [:approval-id \"approval-id\"] [:pending-action-id \"id\"] [:latest-only-p t]) Show governance-issued decision messages retained in the governance outbox.~%")
+  (format t "  (desktop-task/runtime-outbox [:session-id \"session-id\"] [:latest-only-p t]) Show runtime-issued reply messages retained in the runtime outbox.~%")
+  (format t "  (desktop-task/runtime-state [:session-id \"session-id\"] [:package-name \"package\"] [:symbol-name \"symbol\"]) Show runtime actor-owned definition continuity state.~%")
+  (format t "  (desktop-task/actor-flow [:session-id \"session-id\"] [:approval-id \"approval-id\"] [:pending-action-id \"id\"] [:actor-message-id \"id\"] [:scope-id \"scope\"] [:latest-only-p t]) Show one combined actor-state packet spanning chat, governance, and editor mailboxes.~%")
+  (format t "  (desktop-task/show \"task-id\")    Show one governed desktop task record.~%")
+  (format t "  (desktop-task/mcp-servers)        List persisted MCP server configurations attached to the governed desktop task registry.~%")
+  (format t "  (desktop-task/mcp-server \"server-id\") Show one MCP server configuration with its registered operations.~%")
+  (format t "  (desktop-task/configure-mcp-server [:server-id \"id\"] :name \"name\" [:transport :stdio|:http] [:command \"cmd\"] [:arguments '(...) ] [:environment-variables '((\"KEY\" . \"VALUE\"))] [:working-directory \"/path\"] [:endpoint \"url\"] [:capabilities '(:capability ...)] [:retry-policy '(:retryable-p t :max-attempts 3 :backoff-seconds 5)] [:health-status :unknown|:healthy|:degraded] [:enabled-p t] [:discoverable-p t]) Create or update one MCP server configuration.~%")
+  (format t "  (desktop-task/remove-mcp-server \"server-id\") Remove one persisted MCP server configuration.~%")
   (format t "  (desktop/panel :workspace|:display|:governance|:object-browser|:inspector) Persist the active desktop panel for the hosted shell model.~%")
   (format t "  (desktop/select :panel ... [:index N] [:kind :object-kind] [:execution-id \"exec-id\"] [:app-id \"linux.echo\"]) Select one desktop-panel item through the hosted shell model.~%")
   (format t "  (desktop/restore [:panel-id ...] [:panel-state '(... )]) Restore one hosted desktop panel from persisted shell model state.~%")
@@ -67,6 +105,8 @@
   (format t "  (turn/resume [\"turn-id\"])         Resume an approval-gated turn using current pending actions.~%")
   (format t "  (incident/list)                    List recorded incidents for the current session.~%")
   (format t "  (incident/show \"incident-id\")     Show one incident with linked turn, operation, and workflow context.~%")
+  (format t "  (incident/condition \"incident-id\") Show structured condition detail for one incident.~%")
+  (format t "  (incident/restarts \"incident-id\")  Show restart options captured for one incident.~%")
   (format t "  (environment/status)               Show where you are, what is blocked, and what needs attention next.~%")
   (format t "  (review/mutation [\"turn-id\"])     Show mutation, evidence, incidents, and closure state in one view.~%")
   (format t "  (integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\") Bind this environment to an RGP governed runtime session.~%")
@@ -80,6 +120,10 @@
   (format t "  (runtime/current-package)           Show the active Lisp package for the current runtime session.~%")
   (format t "  (runtime/list-loaded-systems)       Show ASDF systems currently loaded in the image.~%")
   (format t "  (runtime/describe-symbol \"name\" [:package \"PKG\"]) Inspect one symbol in the live image.~%")
+  (format t "  (runtime/inspect \"name\" [:package \"PKG\"]) Inspect one symbol's live value and callable shape.~%")
+  (format t "  (runtime/object \"name\" [:package \"PKG\"]) Inspect richer live object detail for one bound symbol.~%")
+  (format t "  (runtime/condition \"incident-id\") Show runtime condition detail captured for one incident.~%")
+  (format t "  (runtime/restarts \"incident-id\")  Show runtime restart options captured for one incident.~%")
   (format t "  (runtime/find-definition \"name\" [:package \"PKG\"]) Find workspace definitions for a symbol and relate them to the image.~%")
   (format t "  (runtime/callers \"name\" [:package \"PKG\"]) Find source-level callers for a symbol in the workspace.~%")
   (format t "  (runtime/methods \"name\" [:package \"PKG\"]) List generic-function methods for a symbol in the image.~%")
@@ -237,6 +281,545 @@
     (maybe-set-shell-focus-object-id session
                                      (getf result :focus-object-id))
     result))
+
+(defun execute-desktop-task-manifests-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List discoverable governed desktop task manifests."
+                                  "desktop-task/manifests")))
+
+(defun execute-desktop-task-manifest-command (arguments session)
+  (let ((target (or (getf arguments :target)
+                    (first arguments)))
+        (operation (or (getf arguments :operation)
+                       (second arguments))))
+    (unless (keywordp target)
+      (error "DESKTOP-TASK/MANIFEST requires a keyword :target"))
+    (unless (keywordp operation)
+      (error "DESKTOP-TASK/MANIFEST requires a keyword :operation"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one governed desktop task manifest."
+                                    "desktop-task/manifest"
+                                    :payload (list :target target
+                                                   :operation operation)))))
+
+(defun execute-desktop-task-records-command (arguments session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List governed desktop task records."
+                                  "desktop-task/records"
+                                  :payload (list :thread-id (getf arguments :thread-id)
+                                                 :status (getf arguments :status)
+                                                 :approval-status (getf arguments :approval-status)))))
+
+(defun execute-desktop-task-actors-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List governed capability actors and mailbox summaries."
+                                  "desktop-task/actors")))
+
+(defun execute-desktop-task-actor-command (arguments session)
+  (let ((actor-role (or (getf arguments :actor-role)
+                        (getf arguments :role)
+                        (first arguments))))
+    (unless (keywordp actor-role)
+      (error "DESKTOP-TASK/ACTOR requires a keyword :actor-role"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one governed capability actor summary."
+                                    "desktop-task/actor"
+                                    :payload (list :actor-role actor-role)))))
+
+(defun execute-desktop-task-inbox-command (arguments session)
+  (let ((actor-role (or (getf arguments :actor-role)
+                        (getf arguments :role)
+                        (first arguments))))
+    (unless (keywordp actor-role)
+      (error "DESKTOP-TASK/INBOX requires a keyword :actor-role"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one governed capability actor inbox."
+                                    "desktop-task/inbox"
+                                    :payload (list :actor-role actor-role
+                                                   :status (getf arguments :status))))))
+
+(defun execute-desktop-task-outbox-command (arguments session)
+  (let ((actor-role (or (getf arguments :actor-role)
+                        (getf arguments :role)
+                        (first arguments))))
+    (unless (keywordp actor-role)
+      (error "DESKTOP-TASK/OUTBOX requires a keyword :actor-role"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one actor outbox."
+                                    "desktop-task/outbox"
+                                    :payload (list :actor-role actor-role
+                                                   :status (getf arguments :status))))))
+
+(defun execute-desktop-task-message-command (arguments session)
+  (let ((actor-message-id (or (first arguments)
+                              (getf arguments :actor-message-id)
+                              (getf arguments :message-id))))
+    (unless (stringp actor-message-id)
+      (error "DESKTOP-TASK/MESSAGE requires a string actor message id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one actor message detail."
+                                    "desktop-task/message"
+                                    :payload (list :actor-message-id actor-message-id)))))
+
+(defun execute-desktop-task-editor-mailbox-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (pending-action-id (or (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (status (getf arguments :status))
+        (approval-status (getf arguments :approval-status))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show the editor actor mailbox keyed by pending action ids."
+                                    "desktop-task/editor-mailbox"
+                                    :payload (list :session-id session-id
+                                                   :pending-action-id pending-action-id
+                                                   :status status
+                                                   :approval-status approval-status
+                                                   :scope-id scope-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-context-chat-mailbox-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (status (getf arguments :status))
+        (approval-status (getf arguments :approval-status))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show the Context Chat actor mailbox keyed by session id."
+                                    "desktop-task/context-chat-mailbox"
+                                    :payload (list :session-id session-id
+                                                   :status status
+                                                   :approval-status approval-status
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-editor-pending-mutations-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (pending-action-id (or (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (status (getf arguments :status))
+        (approval-status (getf arguments :approval-status))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show the editor actor pending mutation mailbox."
+                                    "desktop-task/editor-pending-mutations"
+                                    :payload (list :session-id session-id
+                                                   :pending-action-id pending-action-id
+                                                   :status status
+                                                   :approval-status approval-status
+                                                   :scope-id scope-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-context-chat-approval-inbox-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show governance-issued approval requests addressed to Context Chat."
+                                    "desktop-task/context-chat-approval-inbox"
+                                    :payload (list :session-id session-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-ack-context-chat-approval-command (arguments session)
+  (let ((approval-id (or (first arguments)
+                         (getf arguments :approval-id)))
+        (session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (actor-message-id (or (getf arguments :actor-message-id)
+                              (getf arguments :message-id)))
+        (mailbox-entry-id (or (getf arguments :mailbox-entry-id)
+                              (getf arguments :entry-id))))
+    (unless (stringp approval-id)
+      (error "DESKTOP-TASK/ACK-CONTEXT-CHAT-APPROVAL requires a string approval id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Acknowledge one Context Chat approval inbox message."
+                                    "desktop-task/ack-context-chat-approval"
+                                    :payload (list :approval-id approval-id
+                                                   :session-id session-id
+                                                   :actor-message-id actor-message-id
+                                                   :mailbox-entry-id mailbox-entry-id)))))
+
+(defun execute-desktop-task-editor-authorizations-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (pending-action-id (or (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show governance-authorized pending editor mutations."
+                                    "desktop-task/editor-authorizations"
+                                    :payload (list :session-id session-id
+                                                   :pending-action-id pending-action-id
+                                                   :scope-id scope-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-consume-editor-authorization-command (arguments session)
+  (let ((pending-action-id (or (first arguments)
+                               (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope)))
+        (mailbox-entry-id (or (getf arguments :mailbox-entry-id)
+                              (getf arguments :entry-id))))
+    (unless (stringp pending-action-id)
+      (error "DESKTOP-TASK/CONSUME-EDITOR-AUTHORIZATION requires a pending-action-id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Dequeue one editor authorization mailbox message."
+                                    "desktop-task/consume-editor-authorization"
+                                    :payload (list :session-id session-id
+                                                   :pending-action-id pending-action-id
+                                                   :scope-id scope-id
+                                                   :mailbox-entry-id mailbox-entry-id)))))
+
+(defun execute-desktop-task-apply-editor-authorization-command (arguments session)
+  (let ((pending-action-id (or (first arguments)
+                               (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope))))
+    (unless pending-action-id
+      (error "desktop-task/apply-editor-authorization requires a pending-action-id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Apply one governance-authorized pending editor mutation."
+                                    "desktop-task/apply-editor-authorization"
+                                    :payload (list :session-id session-id
+                                                   :pending-action-id pending-action-id
+                                                   :scope-id scope-id)))))
+
+(defun execute-desktop-task-actor-trace-command (arguments session)
+  (let ((actor-message-id (or (getf arguments :actor-message-id)
+                              (getf arguments :message-id)))
+        (actor-role (or (getf arguments :actor-role)
+                        (getf arguments :role)))
+        (phase (getf arguments :phase)))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show actor transport trace events."
+                                    "desktop-task/actor-trace"
+                                    :payload (append (when actor-message-id
+                                                       (list :actor-message-id actor-message-id))
+                                                     (when actor-role
+                                                       (list :actor-role actor-role))
+                                                     (when phase
+                                                       (list :phase phase))
+                                                     (when (getf arguments :latest-only-p)
+                                                       (list :latest-only-p t))
+                                                     (when (getf arguments :dead-letters-only-p)
+                                                       (list :dead-letters-only-p t)))))))
+
+(defun execute-desktop-task-dlq-command (arguments session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Show dead-lettered actor messages."
+                                  "desktop-task/dlq"
+                                  :payload (when (or (getf arguments :actor-role)
+                                                     (getf arguments :role))
+                                             (list :actor-role (or (getf arguments :actor-role)
+                                                                   (getf arguments :role)))))))
+
+(defun execute-desktop-task-replies-command (arguments session &key latest-only-p)
+  (let ((actor-role (or (getf arguments :actor-role)
+                        (getf arguments :role)
+                        (first arguments))))
+    (unless (keywordp actor-role)
+      (error (if latest-only-p
+                 "DESKTOP-TASK/LATEST-REPLY requires a keyword :actor-role"
+                 "DESKTOP-TASK/REPLIES requires a keyword :actor-role")))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    (if latest-only-p
+                                        "Show the latest completed/failed actor reply."
+                                        "Show completed/failed actor replies.")
+                                    (if latest-only-p
+                                        "desktop-task/latest-reply"
+                                        "desktop-task/replies")
+                                    :payload (list :actor-role actor-role)))))
+
+(defun execute-desktop-task-approve-message-command (arguments session provider)
+  (let ((actor-message-id (or (first arguments)
+                              (getf arguments :actor-message-id)
+                              (getf arguments :message-id))))
+    (unless (stringp actor-message-id)
+      (error "DESKTOP-TASK/APPROVE-MESSAGE requires a string actor message id"))
+    (unless provider
+      (error "DESKTOP-TASK/APPROVE-MESSAGE requires a provider"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Approve and resume one awaiting-approval actor message."
+                                    "desktop-task/approve-message"
+                                    :provider provider
+                                    :payload (list :actor-message-id actor-message-id)))))
+
+(defun execute-desktop-task-approve-approval-command (arguments session provider)
+  (let ((approval-id (or (first arguments)
+                         (getf arguments :approval-id)))
+        (session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id))))
+    (unless (stringp approval-id)
+      (error "DESKTOP-TASK/APPROVE-APPROVAL requires a string approval id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Approve and resume one awaiting governance approval by approval id."
+                                    "desktop-task/approve-approval"
+                                    :provider provider
+                                    :payload (list :approval-id approval-id
+                                                   :session-id session-id)))))
+
+(defun execute-desktop-task-pending-approval-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Show the latest awaiting-approval actor-message context."
+                                  "desktop-task/pending-approval")))
+
+(defun execute-desktop-task-governance-state-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (approval-id (getf arguments :approval-id))
+        (actor-message-id (or (getf arguments :actor-message-id)
+                              (getf arguments :message-id)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show explicit governance actor state keyed by session, approval, or actor-message id."
+                                    "desktop-task/governance-state"
+                                    :payload (list :session-id session-id
+                                                   :approval-id approval-id
+                                                   :actor-message-id actor-message-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-governance-inbox-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (approval-status (getf arguments :approval-status))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show the governance actor inbox keyed by session and approval status."
+                                    "desktop-task/governance-inbox"
+                                    :payload (list :session-id session-id
+                                                   :approval-status approval-status
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-governance-decisions-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (approval-id (getf arguments :approval-id))
+        (pending-action-id (or (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show governance-issued decision messages retained in the governance outbox."
+                                    "desktop-task/governance-decisions"
+                                    :payload (list :session-id session-id
+                                                   :approval-id approval-id
+                                                   :pending-action-id pending-action-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-runtime-outbox-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show runtime-issued reply messages retained in the runtime outbox."
+                                    "desktop-task/runtime-outbox"
+                                    :payload (list :session-id session-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-runtime-state-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (package-name (or (getf arguments :package-name)
+                          (getf arguments :package)))
+        (symbol-name (or (getf arguments :symbol-name)
+                         (getf arguments :symbol))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show runtime actor-owned definition continuity state."
+                                    "desktop-task/runtime-state"
+                                    :payload (list :session-id session-id
+                                                   :package-name package-name
+                                                   :symbol-name symbol-name)))))
+
+(defun execute-desktop-task-actor-flow-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id)))
+        (approval-id (getf arguments :approval-id))
+        (pending-action-id (or (getf arguments :pending-action-id)
+                               (getf arguments :mutation-id)))
+        (actor-message-id (or (getf arguments :actor-message-id)
+                              (getf arguments :message-id)))
+        (scope-id (or (getf arguments :scope-id)
+                      (getf arguments :receiver-scope)))
+        (latest-only-p (not (null (or (getf arguments :latest-only-p)
+                                      (getf arguments :latest-only))))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one combined actor-state packet spanning chat, governance, and editor mailboxes."
+                                    "desktop-task/actor-flow"
+                                    :payload (list :session-id session-id
+                                                   :approval-id approval-id
+                                                   :pending-action-id pending-action-id
+                                                   :actor-message-id actor-message-id
+                                                   :scope-id scope-id
+                                                   :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-actor-system-panel-command (arguments session)
+  (let ((session-id (or (getf arguments :session-id)
+                        (getf arguments :chat-session-id))))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show the live actor-system hierarchy, workflow edges, metrics, and supervision state."
+                                    "desktop-task/actor-system-panel"
+                                    :payload (list :session-id session-id)))))
+
+(defun execute-desktop-task-supervision-incidents-command (arguments session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Show actor supervision incidents."
+                                  "desktop-task/supervision-incidents"
+                                  :payload (list :actor-id (getf arguments :actor-id)
+                                                 :parent-actor-id (getf arguments :parent-actor-id)
+                                                 :mailbox (getf arguments :mailbox)
+                                                 :mailbox-entry-id (getf arguments :mailbox-entry-id)
+                                                 :session-id (or (getf arguments :session-id)
+                                                                 (getf arguments :chat-session-id))))))
+
+(defun execute-desktop-task-fail-mailbox-entry-command (arguments session)
+  (let ((mailbox (or (getf arguments :mailbox)
+                     (first arguments)))
+        (mailbox-entry-id (or (getf arguments :mailbox-entry-id)
+                              (second arguments))))
+    (unless mailbox
+      (error "DESKTOP-TASK/FAIL-MAILBOX-ENTRY requires :mailbox"))
+    (unless (stringp mailbox-entry-id)
+      (error "DESKTOP-TASK/FAIL-MAILBOX-ENTRY requires a string :mailbox-entry-id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Mark one actor mailbox entry failed and record a supervision incident."
+                                    "desktop-task/fail-mailbox-entry"
+                                    :payload (list :mailbox mailbox
+                                                   :mailbox-entry-id mailbox-entry-id
+                                                   :actor-message-id (getf arguments :actor-message-id)
+                                                   :approval-id (getf arguments :approval-id)
+                                                   :pending-action-id (getf arguments :pending-action-id)
+                                                   :summary (getf arguments :summary)
+                                                   :condition-string (getf arguments :condition-string)
+                                                   :supervision-action (getf arguments :supervision-action))))))
+
+(defun execute-desktop-task-apply-supervision-action-command (arguments session)
+  (let ((incident-id (or (first arguments)
+                         (getf arguments :incident-id))))
+    (unless (stringp incident-id)
+      (error "DESKTOP-TASK/APPLY-SUPERVISION-ACTION requires a string incident id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Apply one parent-directed supervision action to a failed mailbox entry."
+                                    "desktop-task/apply-supervision-action"
+                                    :payload (list :incident-id incident-id
+                                                   :action (or (getf arguments :action)
+                                                               :dead-letter)
+                                                   :note (getf arguments :note))))))
+
+(defun execute-desktop-task-show-command (arguments session)
+  (let ((record-id (or (first arguments)
+                       (getf arguments :record-id))))
+    (unless (stringp record-id)
+      (error "DESKTOP-TASK/SHOW requires a string record id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one governed desktop task record."
+                                    "desktop-task/record"
+                                    :payload (list :record-id record-id)))))
+
+(defun execute-desktop-task-mcp-servers-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List MCP server configurations attached to the governed desktop task registry."
+                                  "desktop-task/mcp-servers")))
+
+(defun execute-desktop-task-mcp-server-command (arguments session)
+  (let ((server-id (or (first arguments)
+                       (getf arguments :server-id))))
+    (unless (stringp server-id)
+      (error "DESKTOP-TASK/MCP-SERVER requires a string server id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Show one MCP server configuration."
+                                    "desktop-task/mcp-server"
+                                    :payload (list :server-id server-id)))))
+
+(defun execute-desktop-task-configure-mcp-server-command (arguments session)
+  (let ((name (getf arguments :name)))
+    (unless (and (stringp name) (> (length (string-trim " " name)) 0))
+      (error "DESKTOP-TASK/CONFIGURE-MCP-SERVER requires :name"))
+    (service-response-data
+     (command-kernel-invoke-service
+      session
+      "Create or update one MCP server configuration."
+      "desktop-task/configure-mcp-server"
+      :payload (list :server-id (getf arguments :server-id)
+                     :name name
+                     :transport (getf arguments :transport)
+                     :command (getf arguments :command)
+                     :arguments (getf arguments :arguments)
+                     :environment-variables (getf arguments :environment-variables)
+                     :working-directory (getf arguments :working-directory)
+                     :endpoint (getf arguments :endpoint)
+                     :capabilities (getf arguments :capabilities)
+                     :retry-policy (getf arguments :retry-policy)
+                     :health-status (getf arguments :health-status)
+                     :enabled-p (getf arguments :enabled-p)
+                     :discoverable-p (getf arguments :discoverable-p)
+                     :metadata (getf arguments :metadata))))))
+
+(defun execute-desktop-task-remove-mcp-server-command (arguments session)
+  (let ((server-id (or (first arguments)
+                       (getf arguments :server-id))))
+    (unless (stringp server-id)
+      (error "DESKTOP-TASK/REMOVE-MCP-SERVER requires a string server id"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Remove one MCP server configuration."
+                                    "desktop-task/remove-mcp-server"
+                                    :payload (list :server-id server-id)))))
 
 (defun execute-desktop-panel-command (arguments session)
   (let ((panel-id (or (first arguments)
@@ -1056,6 +1639,24 @@
     (service-response-data
      (query-incident-detail-service session incident-id))))
 
+(defun execute-incident-condition-command (arguments session)
+  (let ((incident-id (resolve-shell-incident-id session
+                                                (first arguments)
+                                                "INCIDENT/CONDITION")))
+    (unless (stringp incident-id)
+      (error "INCIDENT/CONDITION requires a string incident id"))
+    (service-response-data
+     (query-incident-condition-service session incident-id))))
+
+(defun execute-incident-restarts-command (arguments session)
+  (let ((incident-id (resolve-shell-incident-id session
+                                                (first arguments)
+                                                "INCIDENT/RESTARTS")))
+    (unless (stringp incident-id)
+      (error "INCIDENT/RESTARTS requires a string incident id"))
+    (service-response-data
+     (query-incident-restarts-service session incident-id))))
+
 (defun execute-environment-status-command (session &optional environment)
   (service-response-data
    (query-environment-status-service
@@ -1162,6 +1763,44 @@
       (error "RUNTIME/DESCRIBE-SYMBOL keyword options must be a property list"))
     (service-response-data
      (apply #'query-runtime-describe-symbol-service session symbol-name options))))
+
+(defun execute-runtime-inspect-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/INSPECT requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/INSPECT keyword options must be a property list"))
+    (service-response-data
+     (apply #'query-runtime-inspect-service session symbol-name options))))
+
+(defun execute-runtime-object-command (arguments session)
+  (let ((symbol-name (first arguments))
+        (options (rest arguments)))
+    (unless (stringp symbol-name)
+      (error "RUNTIME/OBJECT requires a string symbol name"))
+    (when (oddp (length options))
+      (error "RUNTIME/OBJECT keyword options must be a property list"))
+    (service-response-data
+     (apply #'query-runtime-object-service session symbol-name options))))
+
+(defun execute-runtime-condition-command (arguments session)
+  (let ((incident-id (resolve-shell-incident-id session
+                                                (first arguments)
+                                                "RUNTIME/CONDITION")))
+    (unless (stringp incident-id)
+      (error "RUNTIME/CONDITION requires a string incident id"))
+    (service-response-data
+     (query-runtime-condition-service session incident-id))))
+
+(defun execute-runtime-restarts-command (arguments session)
+  (let ((incident-id (resolve-shell-incident-id session
+                                                (first arguments)
+                                                "RUNTIME/RESTARTS")))
+    (unless (stringp incident-id)
+      (error "RUNTIME/RESTARTS requires a string incident id"))
+    (service-response-data
+     (query-runtime-restarts-service session incident-id))))
 
 (defun execute-runtime-find-definition-command (arguments session)
   (let ((symbol-name (first arguments))
@@ -1767,6 +2406,202 @@
                :desktop-show
                active-session
                provider))
+      (:desktop-task-manifests
+       (values (execute-desktop-task-manifests-command active-session)
+               :desktop-task-manifests
+               active-session
+               provider))
+      (:desktop-task-manifest
+       (values (execute-desktop-task-manifest-command (command-arguments command) active-session)
+               :desktop-task-manifest
+               active-session
+               provider))
+      (:desktop-task-records
+       (values (execute-desktop-task-records-command (command-arguments command) active-session)
+               :desktop-task-records
+               active-session
+               provider))
+      (:desktop-task-actors
+       (values (execute-desktop-task-actors-command active-session)
+               :desktop-task-actors
+               active-session
+               provider))
+      (:desktop-task-actor
+       (values (execute-desktop-task-actor-command (command-arguments command) active-session)
+               :desktop-task-actor
+               active-session
+               provider))
+      (:desktop-task-inbox
+       (values (execute-desktop-task-inbox-command (command-arguments command) active-session)
+               :desktop-task-inbox
+               active-session
+               provider))
+      (:desktop-task-outbox
+       (values (execute-desktop-task-outbox-command (command-arguments command) active-session)
+               :desktop-task-outbox
+               active-session
+               provider))
+      (:desktop-task-message
+       (values (execute-desktop-task-message-command (command-arguments command) active-session)
+               :desktop-task-message
+               active-session
+               provider))
+      (:desktop-task-editor-mailbox
+       (values (execute-desktop-task-editor-mailbox-command (command-arguments command) active-session)
+               :desktop-task-editor-mailbox
+               active-session
+               provider))
+      (:desktop-task-editor-pending-mutations
+       (values (execute-desktop-task-editor-pending-mutations-command (command-arguments command) active-session)
+               :desktop-task-editor-pending-mutations
+               active-session
+               provider))
+      (:desktop-task-context-chat-mailbox
+       (values (execute-desktop-task-context-chat-mailbox-command (command-arguments command) active-session)
+               :desktop-task-context-chat-mailbox
+               active-session
+               provider))
+      (:desktop-task-context-chat-approval-inbox
+       (values (execute-desktop-task-context-chat-approval-inbox-command (command-arguments command) active-session)
+               :desktop-task-context-chat-approval-inbox
+               active-session
+               provider))
+      (:desktop-task-ack-context-chat-approval
+       (values (execute-desktop-task-ack-context-chat-approval-command (command-arguments command) active-session)
+               :desktop-task-ack-context-chat-approval
+               active-session
+               provider))
+      (:desktop-task-editor-authorizations
+       (values (execute-desktop-task-editor-authorizations-command (command-arguments command) active-session)
+               :desktop-task-editor-authorizations
+               active-session
+               provider))
+      (:desktop-task-consume-editor-authorization
+       (values (execute-desktop-task-consume-editor-authorization-command (command-arguments command) active-session)
+               :desktop-task-consume-editor-authorization
+               active-session
+               provider))
+      (:desktop-task-apply-editor-authorization
+       (values (execute-desktop-task-apply-editor-authorization-command (command-arguments command) active-session)
+               :desktop-task-apply-editor-authorization
+               active-session
+               provider))
+      (:desktop-task-actor-trace
+       (values (execute-desktop-task-actor-trace-command (command-arguments command) active-session)
+               :desktop-task-actor-trace
+               active-session
+               provider))
+      (:desktop-task-dlq
+       (values (execute-desktop-task-dlq-command (command-arguments command) active-session)
+               :desktop-task-dlq
+               active-session
+               provider))
+      (:desktop-task-replies
+       (values (execute-desktop-task-replies-command (command-arguments command) active-session)
+               :desktop-task-replies
+               active-session
+               provider))
+      (:desktop-task-latest-reply
+       (values (execute-desktop-task-replies-command (command-arguments command)
+                                                     active-session
+                                                     :latest-only-p t)
+               :desktop-task-latest-reply
+               active-session
+               provider))
+      (:desktop-task-approve-message
+       (values (execute-desktop-task-approve-message-command (command-arguments command)
+                                                             active-session
+                                                             provider)
+               :desktop-task-approve-message
+               active-session
+               provider))
+      (:desktop-task-approve-approval
+       (values (execute-desktop-task-approve-approval-command (command-arguments command)
+                                                              active-session
+                                                              provider)
+               :desktop-task-approve-approval
+               active-session
+               provider))
+      (:desktop-task-pending-approval
+       (values (execute-desktop-task-pending-approval-command active-session)
+               :desktop-task-pending-approval
+               active-session
+               provider))
+      (:desktop-task-governance-state
+       (values (execute-desktop-task-governance-state-command (command-arguments command) active-session)
+               :desktop-task-governance-state
+               active-session
+               provider))
+      (:desktop-task-governance-inbox
+       (values (execute-desktop-task-governance-inbox-command (command-arguments command) active-session)
+               :desktop-task-governance-inbox
+               active-session
+               provider))
+      (:desktop-task-governance-decisions
+       (values (execute-desktop-task-governance-decisions-command (command-arguments command) active-session)
+               :desktop-task-governance-decisions
+               active-session
+               provider))
+      (:desktop-task-runtime-outbox
+       (values (execute-desktop-task-runtime-outbox-command (command-arguments command) active-session)
+               :desktop-task-runtime-outbox
+               active-session
+               provider))
+      (:desktop-task-runtime-state
+       (values (execute-desktop-task-runtime-state-command (command-arguments command) active-session)
+               :desktop-task-runtime-state
+               active-session
+               provider))
+      (:desktop-task-actor-flow
+       (values (execute-desktop-task-actor-flow-command (command-arguments command) active-session)
+               :desktop-task-actor-flow
+               active-session
+               provider))
+      (:desktop-task-actor-system-panel
+       (values (execute-desktop-task-actor-system-panel-command (command-arguments command) active-session)
+               :desktop-task-actor-system-panel
+               active-session
+               provider))
+      (:desktop-task-supervision-incidents
+       (values (execute-desktop-task-supervision-incidents-command (command-arguments command) active-session)
+               :desktop-task-supervision-incidents
+               active-session
+               provider))
+      (:desktop-task-fail-mailbox-entry
+       (values (execute-desktop-task-fail-mailbox-entry-command (command-arguments command) active-session)
+               :desktop-task-fail-mailbox-entry
+               active-session
+               provider))
+      (:desktop-task-apply-supervision-action
+       (values (execute-desktop-task-apply-supervision-action-command (command-arguments command) active-session)
+               :desktop-task-apply-supervision-action
+               active-session
+               provider))
+      (:desktop-task-show
+       (values (execute-desktop-task-show-command (command-arguments command) active-session)
+               :desktop-task-show
+               active-session
+               provider))
+      (:desktop-task-mcp-servers
+       (values (execute-desktop-task-mcp-servers-command active-session)
+               :desktop-task-mcp-servers
+               active-session
+               provider))
+      (:desktop-task-mcp-server
+       (values (execute-desktop-task-mcp-server-command (command-arguments command) active-session)
+               :desktop-task-mcp-server
+               active-session
+               provider))
+      (:desktop-task-configure-mcp-server
+       (values (execute-desktop-task-configure-mcp-server-command (command-arguments command) active-session)
+               :desktop-task-configure-mcp-server
+               active-session
+               provider))
+      (:desktop-task-remove-mcp-server
+       (values (execute-desktop-task-remove-mcp-server-command (command-arguments command) active-session)
+               :desktop-task-remove-mcp-server
+               active-session
+               provider))
       (:desktop-panel
        (values (execute-desktop-panel-command (command-arguments command) active-session)
                :desktop-panel
@@ -1899,6 +2734,26 @@
        (values (execute-incident-show-command (command-arguments command) active-session)
                :incident-show
                active-session))
+      (:incident-condition
+       (values (execute-incident-condition-command (command-arguments command) active-session)
+               :incident-condition
+               active-session))
+      (:incident-restarts
+       (values (execute-incident-restarts-command (command-arguments command) active-session)
+               :incident-restarts
+               active-session))
+      (:runtime-condition
+       (values (execute-runtime-condition-command (command-arguments command) active-session)
+               :runtime-condition
+               active-session))
+      (:runtime-object
+       (values (execute-runtime-object-command (command-arguments command) active-session)
+               :runtime-object
+               active-session))
+      (:runtime-restarts
+       (values (execute-runtime-restarts-command (command-arguments command) active-session)
+               :runtime-restarts
+               active-session))
       (:environment-status
        (values (execute-environment-status-command active-session)
                :environment-status
@@ -1950,6 +2805,10 @@
       (:runtime-describe-symbol
        (values (execute-runtime-describe-symbol-command (command-arguments command) active-session)
                :runtime-describe-symbol
+               active-session))
+      (:runtime-inspect
+       (values (execute-runtime-inspect-command (command-arguments command) active-session)
+               :runtime-inspect
                active-session))
       (:runtime-find-definition
        (values (execute-runtime-find-definition-command (command-arguments command) active-session)
@@ -2457,6 +3316,358 @@
                     (or (getf (getf panels :inspector) :focus-object-id) :none)
                     (or (getf (getf (getf panels :inspector) :actions) :open-command) :none)))
            (otherwise nil))))
+    (finish-output))
+    (:desktop-task-manifests
+     (format t "desktop-task-manifests> count=~D~%"
+             (length (or result '())))
+     (dolist (entry (or result '()))
+       (format t "desktop-task-manifest> id=~A target=~A operation=~A capability=~A backend=~A mode=~A policy=~A version=~A~%"
+               (or (getf entry :id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :capability) :none)
+               (or (getf entry :backend-kind) :none)
+               (or (getf entry :execution-mode) :none)
+               (or (getf entry :approval-policy) :none)
+               (or (getf entry :version) :none)))
+     (finish-output))
+    (:desktop-task-manifest
+     (format t "desktop-task-manifest> id=~A target=~A operation=~A capability=~A backend=~A mode=~A policy=~A version=~A~%"
+             (or (getf result :id) :none)
+             (or (getf result :target) :none)
+             (or (getf result :operation) :none)
+             (or (getf result :capability) :none)
+             (or (getf result :backend-kind) :none)
+             (or (getf result :execution-mode) :none)
+             (or (getf result :approval-policy) :none)
+             (or (getf result :version) :none))
+     (when (getf result :description)
+       (format t "desktop-task-manifest-description> ~A~%" (getf result :description)))
+     (when (getf result :request-schema)
+       (format t "desktop-task-manifest-request> ~S~%" (getf result :request-schema)))
+     (when (getf result :result-schema)
+       (format t "desktop-task-manifest-result> ~S~%" (getf result :result-schema)))
+     (finish-output))
+    (:desktop-task-records
+     (format t "desktop-task-records> count=~D~%" (length (or result '())))
+     (dolist (entry (or result '()))
+       (format t "desktop-task-record> id=~A target=~A operation=~A status=~A governance=~A approval=~A thread=~A turn=~A backend=~A retries=~A/~A~%"
+               (or (getf entry :id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)
+               (or (getf entry :thread-id) :none)
+               (or (getf entry :turn-id) :none)
+               (or (getf entry :backend-kind) :none)
+               (or (getf entry :retry-count) 0)
+               (or (getf entry :max-attempts) 0)))
+     (finish-output))
+    (:desktop-task-show
+     (format t "desktop-task-show> id=~A target=~A operation=~A status=~A governance=~A approval=~A backend=~A retryable=~A retries=~A/~A~%"
+             (or (getf result :id) :none)
+             (or (getf result :target) :none)
+             (or (getf result :operation) :none)
+             (or (getf result :status) :unknown)
+             (or (getf result :governance-status) :unknown)
+             (or (getf result :approval-status) :unknown)
+             (or (getf result :backend-kind) :none)
+             (if (getf result :retryable-p) :yes :no)
+             (or (getf result :retry-count) 0)
+             (or (getf result :max-attempts) 0))
+     (when (getf result :resolution)
+       (format t "desktop-task-resolution> ~S~%" (getf result :resolution)))
+     (when (getf result :result)
+       (format t "desktop-task-result> ~S~%" (getf result :result)))
+     (when (getf result :last-error)
+       (format t "desktop-task-error> ~S~%" (getf result :last-error)))
+     (finish-output))
+    (:desktop-task-governance-state
+     (format t "desktop-task-governance> session=~A approval=~A count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :approval-id) :none)
+             (or (getf result :count) 0))
+     (dolist (entry (or (getf result :requests) '()))
+       (format t "governance-request> approval=~A session=~A actor-message=~A target=~A operation=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :session-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-governance-inbox
+     (format t "desktop-task-governance-inbox> session=~A request-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :request-count) 0))
+     (dolist (entry (or (getf result :requests) '()))
+       (format t "governance-inbox> approval=~A session=~A actor-message=~A target=~A operation=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :session-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-editor-mailbox
+     (format t "desktop-task-editor-mailbox> session=~A mutation-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :mutation-count) 0))
+     (dolist (entry (or (getf result :mutations) '()))
+       (format t "editor-mutation> pending-action=~A approval=~A actor-message=~A scope=~A buffer=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :scope-id) :none)
+               (or (getf entry :buffer-id) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-editor-pending-mutations
+     (format t "desktop-task-editor-pending-mutations> session=~A mutation-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :mutation-count) 0))
+     (dolist (entry (or (getf result :mutations) '()))
+       (format t "editor-pending-mutation> approval=~A pending-action=~A actor-message=~A scope=~A buffer=~A delivery=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :scope-id) :none)
+               (or (getf entry :buffer-id) :none)
+               (or (getf entry :delivery-status) :unknown)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-context-chat-mailbox
+     (format t "desktop-task-context-chat-mailbox> session=~A message-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :message-count) 0))
+     (dolist (entry (or (getf result :messages) '()))
+       (format t "context-chat-message> approval=~A pending-action=~A actor-message=~A target=~A operation=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-governance-decisions
+     (format t "desktop-task-governance-decisions> session=~A decision-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :decision-count) 0))
+     (dolist (entry (or (getf result :decisions) '()))
+       (format t "governance-decision> approval=~A pending-action=~A actor-message=~A target=~A operation=~A delivery=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :delivery-status) :unknown)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-runtime-outbox
+     (format t "desktop-task-runtime-outbox> session=~A reply-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :reply-count) 0))
+     (dolist (entry (or (getf result :replies) '()))
+       (format t "runtime-reply> actor-message=~A form=~S package=~A delivery=~A status=~A result=~S~%"
+               (or (getf entry :actor-message-id) :none)
+               (getf entry :form)
+               (or (getf entry :package-name) :none)
+               (or (getf entry :delivery-status) :unknown)
+               (or (getf entry :status) :unknown)
+               (getf entry :result)))
+     (finish-output))
+    (:desktop-task-runtime-state
+     (format t "desktop-task-runtime-state> definition-count=~D~%"
+             (or (getf result :definition-count) 0))
+     (dolist (entry (or (getf result :definitions) '()))
+       (format t "runtime-definition> symbol=~A package=~A status=~A form=~S~%"
+               (or (getf entry :qualified-symbol-name)
+                   (getf entry :symbol-name)
+                   :none)
+               (or (getf entry :package-name) :none)
+               (or (getf entry :status) :unknown)
+               (getf entry :form)))
+     (finish-output))
+    (:desktop-task-actor-flow
+     (format t "desktop-task-actor-flow> session=~A approval=~A pending-action=~A actor-message=~A~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :approval-id) :none)
+             (or (getf result :pending-action-id) :none)
+             (or (getf result :actor-message-id) :none))
+     (format t "  chat-mailbox=~D approval-inbox=~D governance-inbox=~D governance-decisions=~D runtime-inbox=~D runtime-outbox=~D runtime-definitions=~D editor-pending=~D editor-authorizations=~D~%"
+             (or (getf (getf result :context-chat-mailbox) :message-count) 0)
+             (or (getf (getf result :context-chat-approval-inbox) :request-count) 0)
+             (or (getf (getf result :governance-inbox) :request-count) 0)
+             (or (getf (getf result :governance-decisions) :decision-count) 0)
+             (or (getf (getf result :runtime-inbox) :message-count) 0)
+             (or (getf (getf result :runtime-outbox) :reply-count) 0)
+             (or (getf (getf result :runtime-state) :definition-count) 0)
+             (or (getf (getf result :editor-pending-mutations) :mutation-count) 0)
+             (or (getf (getf result :editor-authorizations) :authorization-count) 0))
+     (finish-output))
+    (:desktop-task-actor-system-panel
+     (format t "desktop-task-actor-system-panel> root=~A session=~A actors=~D hierarchy-edges=~D workflow-edges=~D supervision-incidents=~D~%"
+             (or (getf result :root-actor-id) :none)
+             (or (getf result :session-id) :none)
+             (or (getf result :actor-count) 0)
+             (or (getf result :hierarchy-edge-count) 0)
+             (or (getf result :workflow-edge-count) 0)
+             (or (getf (getf result :supervision-incidents) :incident-count) 0))
+     (dolist (actor (or (getf result :actors) '()))
+       (format t "actor-system-panel-actor> id=~A role=~A parent=~A allocation=~A inbox-depth=~A outbox-depth=~A open-incidents=~A~%"
+               (or (getf actor :id) :none)
+               (or (getf actor :role) :none)
+               (or (getf actor :parent-actor-id) :none)
+               (or (getf (getf actor :allocation-strategy) :type) :unknown)
+               (or (getf (getf actor :metrics) :inbox-depth) 0)
+               (or (getf (getf actor :metrics) :outbox-depth) 0)
+               (or (getf (getf actor :metrics) :open-supervision-incident-count) 0)))
+     (finish-output))
+    (:desktop-task-supervision-incidents
+     (format t "desktop-task-supervision-incidents> session=~A incident-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :incident-count) 0))
+     (dolist (incident (or (getf result :incidents) '()))
+       (format t "supervision-incident> id=~A actor=~A parent=~A mailbox=~A mailbox-entry=~A action=~A open=~A~%"
+               (or (getf incident :incident-id) :none)
+               (or (getf incident :actor-id) :none)
+               (or (getf incident :parent-actor-id) :none)
+               (or (getf incident :mailbox) :none)
+               (or (getf incident :mailbox-entry-id) :none)
+               (or (getf incident :supervision-action) :none)
+               (not (null (getf incident :open-p)))))
+     (finish-output))
+    (:desktop-task-fail-mailbox-entry
+     (format t "desktop-task-fail-mailbox-entry> mailbox=~A mailbox-entry=~A incident=~A action=~A delivery=~A~%"
+             (or (getf result :mailbox) :none)
+             (or (getf (getf result :mailbox-entry) :mailbox-entry-id) :none)
+             (or (getf (getf result :incident) :incident-id) :none)
+             (or (getf (getf result :incident) :supervision-action) :none)
+             (or (getf (getf result :mailbox-entry) :delivery-status) :unknown))
+     (finish-output))
+    (:desktop-task-apply-supervision-action
+     (format t "desktop-task-apply-supervision-action> incident=~A action=~A mailbox=~A mailbox-entry=~A delivery=~A incident-status=~A~%"
+             (or (getf (getf result :incident) :incident-id) :none)
+             (or (getf result :action) :none)
+             (or (getf result :mailbox) :none)
+             (or (getf (getf result :mailbox-entry) :mailbox-entry-id) :none)
+             (or (getf (getf result :mailbox-entry) :delivery-status) :unknown)
+             (or (getf (getf result :incident) :status) :unknown))
+     (finish-output))
+    (:desktop-task-context-chat-approval-inbox
+     (format t "desktop-task-context-chat-approval-inbox> session=~A request-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :request-count) 0))
+     (dolist (entry (or (getf result :requests) '()))
+       (format t "context-chat-approval> approval=~A pending-action=~A actor-message=~A target=~A operation=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-ack-context-chat-approval
+     (format t "desktop-task-ack-context-chat-approval> approval=~A mailbox-entry=~A session=~A delivery=~A~%"
+             (or (getf result :approval-id) :none)
+             (or (getf result :mailbox-entry-id) :none)
+             (or (getf result :session-id) :none)
+             (or (getf result :delivery-status) :unknown))
+     (finish-output))
+    (:desktop-task-editor-authorizations
+     (format t "desktop-task-editor-authorizations> session=~A authorization-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :authorization-count) 0))
+     (dolist (entry (or (getf result :authorizations) '()))
+       (format t "editor-authorization> approval=~A pending-action=~A actor-message=~A scope=~A buffer=~A status=~A governance=~A approval-status=~A~%"
+               (or (getf entry :approval-id) :none)
+               (or (getf entry :pending-action-id) :none)
+               (or (getf entry :actor-message-id) :none)
+               (or (getf entry :scope-id) :none)
+               (or (getf entry :buffer-id) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :governance-status) :unknown)
+               (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-consume-editor-authorization
+     (format t "desktop-task-consume-editor-authorization> pending-action=~A mailbox-entry=~A session=~A delivery=~A~%"
+             (or (getf result :pending-action-id) :none)
+             (or (getf result :mailbox-entry-id) :none)
+             (or (getf result :session-id) :none)
+             (or (getf result :delivery-status) :unknown))
+     (finish-output))
+    (:desktop-task-apply-editor-authorization
+     (format t "desktop-task-apply-editor-authorization> pending-action=~A session=~A approval-ids=~S~%"
+             (or (getf result :pending-action-id) :none)
+             (or (getf result :session-id) :none)
+             (or (getf result :approval-ids) '()))
+     (when (getf result :summary)
+       (format t "assistant> ~A~%" (getf result :summary)))
+     (finish-output))
+    (:desktop-task-approve-approval
+     (format t "desktop-task-approve-approval> session=~A approval-ids=~S actor-message=~A turn=~A~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :approval-ids) '())
+             (or (getf result :actor-message-id) :none)
+             (or (getf result :turn-id) :none))
+     (when (getf result :summary)
+       (format t "assistant> ~A~%" (getf result :summary)))
+     (finish-output))
+    (:desktop-task-mcp-servers
+     (format t "desktop-task-mcp-servers> count=~D~%" (length (or result '())))
+     (dolist (entry (or result '()))
+       (format t "desktop-task-mcp-server> id=~A name=~A transport=~A enabled=~A discoverable=~A health=~A operations=~A~%"
+               (or (getf entry :id) :none)
+               (or (getf entry :name) :none)
+               (or (getf entry :transport) :unknown)
+               (if (getf entry :enabled-p) :yes :no)
+               (if (getf entry :discoverable-p) :yes :no)
+               (or (getf entry :health-status) :unknown)
+               (or (getf entry :operation-count) 0)))
+     (finish-output))
+    (:desktop-task-mcp-server
+     (format t "desktop-task-mcp-server> id=~A name=~A transport=~A enabled=~A discoverable=~A health=~A endpoint=~A command=~A operations=~A~%"
+             (or (getf result :id) :none)
+             (or (getf result :name) :none)
+             (or (getf result :transport) :unknown)
+             (if (getf result :enabled-p) :yes :no)
+             (if (getf result :discoverable-p) :yes :no)
+             (or (getf result :health-status) :unknown)
+             (or (getf result :endpoint) :none)
+             (or (getf result :command) :none)
+             (or (getf result :operation-count) 0))
+     (when (getf result :arguments)
+       (format t "desktop-task-mcp-server-arguments> ~S~%" (getf result :arguments)))
+     (when (getf result :capabilities)
+       (format t "desktop-task-mcp-server-capabilities> ~S~%" (getf result :capabilities)))
+     (finish-output))
+    (:desktop-task-configure-mcp-server
+     (format t "desktop-task-configure-mcp-server> id=~A name=~A transport=~A enabled=~A discoverable=~A~%"
+             (or (getf result :id) :none)
+             (or (getf result :name) :none)
+             (or (getf result :transport) :unknown)
+             (if (getf result :enabled-p) :yes :no)
+             (if (getf result :discoverable-p) :yes :no))
+     (finish-output))
+    (:desktop-task-remove-mcp-server
+     (format t "desktop-task-remove-mcp-server> id=~A removed=~A~%"
+             (or (getf result :id) :none)
+             (if (getf result :removed-p) :yes :no))
      (finish-output))
     (:desktop-panel
      (let ((desktop-model (getf result :desktop-model)))
@@ -3214,6 +4425,20 @@
      (when (getf (getf result :governance) :next-action)
        (format t "mutation-next> ~S~%" (getf (getf result :governance) :next-action)))
      (finish-output))
+    (:runtime-inspect
+     (format t "runtime-inspect> symbol=~A package=~A~%"
+             (or (getf result :symbol) :none)
+             (or (getf result :package) :none))
+     (when (getf result :value-summary)
+       (format t "runtime-value> kind=~A type=~A class=~A~%"
+               (or (getf (getf result :value-summary) :kind) :unknown)
+               (or (getf (getf result :value-summary) :type) :unknown)
+               (or (getf (getf result :value-summary) :class) :unknown)))
+     (when (getf result :function-summary)
+       (format t "runtime-function> kind=~A methods=~A~%"
+               (or (getf (getf result :function-summary) :kind) :unknown)
+               (or (getf result :method-count) 0)))
+     (finish-output))
     ((:runtime-find-definition :runtime-callers :runtime-methods :runtime-source-image-divergence)
      (format t "runtime-nav> tool=~A symbol=~A package=~A~%"
              (getf result :tool)
@@ -3227,6 +4452,41 @@
        (format t "runtime-methods> ~D~%" (getf result :method-count)))
      (when (getf result :divergence)
        (format t "runtime-divergence> ~A~%" (getf result :divergence)))
+     (finish-output))
+    (:incident-condition
+     (format t "incident-condition> id=~A kind=~A status=~A~%"
+             (or (getf result :incident-id) :none)
+             (or (getf result :kind) :unknown)
+             (or (getf result :status) :unknown))
+     (when (getf result :condition-summary)
+       (format t "incident-condition-summary> type=~A restarts=~A~%"
+               (or (getf (getf result :condition-summary) :type) :unknown)
+               (or (getf (getf result :condition-summary) :restart-count) 0)))
+     (finish-output))
+    (:incident-restarts
+     (format t "incident-restarts> id=~A count=~D~%"
+             (or (getf result :incident-id) :none)
+             (or (getf result :restart-count) 0))
+     (finish-output))
+    (:runtime-condition
+     (format t "runtime-condition> incident=~A status=~A~%"
+             (or (getf result :incident-id) :none)
+             (or (getf result :status) :unknown))
+     (when (getf result :condition-summary)
+       (format t "runtime-condition-summary> type=~A restarts=~A~%"
+               (or (getf (getf result :condition-summary) :type) :unknown)
+               (or (getf (getf result :condition-summary) :restart-count) 0)))
+     (finish-output))
+    (:runtime-restarts
+     (format t "runtime-restarts> incident=~A count=~D~%"
+             (or (getf result :incident-id) :none)
+             (or (getf result :restart-count) 0))
+     (finish-output))
+    (:runtime-object
+     (format t "runtime-object> symbol=~A package=~A kind=~A~%"
+             (or (getf result :symbol) :none)
+             (or (getf result :package) :none)
+             (or (getf (getf result :object-detail) :kind) :unknown))
      (finish-output))
     ((:thread-new :thread-list :thread-use :list-work-items :list-workflow-records :quarantine-work-item :resume-work-item :steer-work-item-plan :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approve :integration-rgp-resume)
      (format t "tasks> ~S~%" result))

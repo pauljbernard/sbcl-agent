@@ -13,6 +13,9 @@
   (or (resolve-runtime-package-designator (agent-session-package session))
       (error "Unknown runtime package ~S" (agent-session-package session))))
 
+(defparameter *runtime-eval-debug-log-path*
+  #P"/private/tmp/sbcl-agent-runtime-eval-debug.log")
+
 (defparameter *runtime-governance-thread* nil)
 (defparameter *runtime-governance-turn* nil)
 (defparameter *runtime-governance-operation* nil)
@@ -20,6 +23,16 @@
 (declaim (special *runtime-governance-thread*
                   *runtime-governance-turn*
                   *runtime-governance-operation*))
+
+(defun runtime-recovery-launch-summary (recovery-launch)
+  (when (listp recovery-launch)
+    (let ((source (getf recovery-launch :source))
+          (incident-id (getf recovery-launch :incident-id))
+          (restart-label (getf recovery-launch :restart-label)))
+      (when (and source incident-id restart-label)
+        (list :source source
+              :incident-id incident-id
+              :restart-label restart-label)))))
 
 (defparameter *runtime-source-extensions* '("lisp" "lsp" "asd" "cl"))
 
@@ -124,7 +137,7 @@
                                                  :result result)
                           :transaction-scope :runtime-mutation))))
 
-(defun create-runtime-mutation-work-item (session form-string policy-id result)
+(defun create-runtime-mutation-work-item (session form-string policy-id result &key recovery-launch)
   (let* ((work-item (runtime-governance-work-item session
                                                   form-string
                                                   :live-image-mutation
@@ -144,6 +157,7 @@
      (list :form form-string
            :package (agent-session-package session)
            :policy-id policy-id
+           :recovery-launch recovery-launch
            :result result))
     (append-work-item-image-mutation
      work-item
@@ -292,14 +306,132 @@
 (defun runtime-eval-policy-id (mutating)
   (if mutating :runtime-eval-mutate :runtime-eval-safe))
 
-(defun parse-runtime-forms (form-or-source)
-  (if (stringp form-or-source)
-      (with-input-from-string (stream form-or-source)
-        (loop with eof = (gensym "EOF")
-              for form = (read stream nil eof)
-              until (eq form eof)
-              collect form))
-      (list form-or-source)))
+(defun runtime-eval-primary-form (resolved-forms)
+  (and (consp resolved-forms)
+       (first resolved-forms)))
+
+(defun runtime-eval-primary-operator (resolved-forms)
+  (let ((form (runtime-eval-primary-form resolved-forms)))
+    (and (consp form)
+         (symbolp (first form))
+         (first form))))
+
+(defun runtime-eval-defined-name (resolved-forms)
+  (let ((form (runtime-eval-primary-form resolved-forms)))
+    (and (consp form)
+         (eq (first form) 'defun)
+         (symbolp (second form))
+         (second form))))
+
+(defun runtime-history-eval-payloads-for-package (package-name)
+  (loop for entry in (reverse (current-environment-runtime-history))
+        for payload = (getf entry :payload)
+        when (and (eq (getf entry :kind) :eval)
+                  (listp payload)
+                  (string= (or (getf payload :package) "") package-name))
+          collect payload))
+
+(defun runtime-actor-state-definition-payload-for-symbol (session package-name symbol)
+  (let* ((mailboxes (or (and (fboundp 'ensure-session-actor-mailboxes)
+                             (ignore-errors (ensure-session-actor-mailboxes session)))
+                        (agent-session-actor-mailboxes session)
+                        '()))
+         (runtime-state (and (listp mailboxes)
+                             (getf mailboxes :runtime-state)))
+         (definitions (and (listp runtime-state)
+                           (getf runtime-state :definitions)))
+         (match (find-if (lambda (entry)
+                           (and (string= (or (getf entry :package-name) "") package-name)
+                                (string= (or (getf entry :symbol-name) "")
+                                         (symbol-name symbol))))
+                         definitions)))
+    (and match
+         (list :package (getf match :package-name)
+               :form (getf match :form)
+               :source :runtime-actor-state
+               :actor-message-id (getf match :actor-message-id)
+               :request-id (getf match :request-id)))))
+
+(defun runtime-history-definition-payload-for-symbol (package-name symbol)
+  (loop for payload in (runtime-history-eval-payloads-for-package package-name)
+        for form-string = (getf payload :form)
+        for forms = (ignore-errors
+                      (parse-runtime-forms form-string
+                                           :package (symbol-package symbol)))
+        for form = (and forms (first forms))
+        when (and (consp form)
+                  (eq (first form) 'defun)
+                  (symbolp (second form))
+                  (string= (symbol-name (second form))
+                           (symbol-name symbol)))
+          return payload))
+
+(defun maybe-replay-runtime-definition-from-history (session resolved-package resolved-forms)
+  (let ((operator (runtime-eval-primary-operator resolved-forms)))
+    (when (and operator
+               (not (fboundp operator)))
+      (let* ((payload (or (runtime-actor-state-definition-payload-for-symbol
+                           session
+                           (package-name resolved-package)
+                           operator)
+                          (runtime-history-definition-payload-for-symbol
+                           (package-name resolved-package)
+                           operator)))
+             (form-string (and payload (getf payload :form)))
+             (history-forms (and form-string
+                                 (ignore-errors
+                                   (parse-runtime-forms form-string
+                                                        :package resolved-package)))))
+        (when history-forms
+          (append-runtime-eval-debug-log :replay-before
+                                         session
+                                         resolved-package
+                                         form-string
+                                         history-forms)
+          (let ((*package* resolved-package))
+            (dolist (history-form history-forms)
+              (eval history-form)))
+          (append-runtime-eval-debug-log :replay-after
+                                         session
+                                         resolved-package
+                                         form-string
+                                         history-forms))))))
+
+(defun append-runtime-eval-debug-log (stage session resolved-package form resolved-forms
+                                     &key values error)
+  (ignore-errors
+    (with-open-file (out *runtime-eval-debug-log-path*
+                         :direction :output
+                         :if-exists :append
+                         :if-does-not-exist :create)
+      (let* ((primary-operator (runtime-eval-primary-operator resolved-forms))
+             (defined-name (runtime-eval-defined-name resolved-forms)))
+        (format out
+                "~&stage=~A session-package=~A runtime-package=~A form=~S operator=~S operator-fboundp=~S defined-name=~S defined-name-fboundp=~S values=~S error=~S~%"
+                stage
+                (agent-session-package session)
+                (package-name resolved-package)
+                form
+                primary-operator
+                (and primary-operator (fboundp primary-operator))
+                defined-name
+                (and defined-name (fboundp defined-name))
+                values
+                error)))))
+
+(defun parse-runtime-forms (form-or-source &key package)
+  (flet ((collect-forms ()
+           (if (stringp form-or-source)
+               (with-input-from-string (stream form-or-source)
+                 (loop with eof = (gensym "EOF")
+                       for form = (read stream nil eof)
+                       until (eq form eof)
+                       collect form))
+               (list form-or-source))))
+    (if package
+        (let ((*package* package))
+          (collect-forms))
+        (collect-forms))))
 
 (defun runtime-function-kind (symbol)
   (cond
@@ -310,6 +442,153 @@
      :generic-function)
     ((fboundp symbol) :function)
     (t nil)))
+
+(defun runtime-class-display-name (class)
+  (typecase class
+    (class (let ((name (class-name class)))
+             (and name (string-upcase (string name)))))
+    (t nil)))
+
+(defun runtime-safe-princ-string (value &key (limit 160))
+  (let ((rendered (handler-case
+                      (princ-to-string value)
+                    (error ()
+                      (format nil "#<unprintable ~A>" (type-of value))))))
+    (if (> (length rendered) limit)
+        (concatenate 'string (subseq rendered 0 limit) "...")
+        rendered)))
+
+(defun runtime-slot-summary (object slot-definition)
+  (let* ((slot-name (ignore-errors (sb-mop:slot-definition-name slot-definition)))
+         (boundp (and slot-name
+                      (ignore-errors (slot-boundp object slot-name))))
+         (value (and boundp
+                     slot-name
+                     (ignore-errors (slot-value object slot-name)))))
+    (list :name (and slot-name (string-upcase (string slot-name)))
+          :boundp (not (null boundp))
+          :value (and boundp (runtime-safe-princ-string value))
+          :value-type (and boundp value (runtime-safe-princ-string (type-of value) :limit 80)))))
+
+(defun runtime-object-slot-summaries (object)
+  (let* ((class (ignore-errors (class-of object)))
+         (slots (and class
+                     (ignore-errors (sb-mop:class-slots class)))))
+    (when slots
+      (let* ((limited-slots (subseq slots 0 (min (length slots) 12)))
+             (summaries (remove nil (mapcar (lambda (slot)
+                                              (ignore-errors (runtime-slot-summary object slot)))
+                                            limited-slots))))
+        (list :slot-count (length slots)
+              :slots summaries)))))
+
+(defun runtime-list-preview (values &key (limit 8))
+  (let ((items '())
+        (count 0))
+    (dolist (value values)
+      (when (>= count limit)
+        (return))
+      (push (runtime-safe-princ-string value :limit 80) items)
+      (incf count))
+    (nreverse items)))
+
+(defun runtime-hash-table-preview (table &key (limit 8))
+  (let ((entries '())
+        (count 0))
+    (maphash (lambda (key value)
+               (when (< count limit)
+                 (push (list :key (runtime-safe-princ-string key :limit 80)
+                             :value (runtime-safe-princ-string value :limit 80))
+                       entries)
+                 (incf count)))
+             table)
+    (nreverse entries)))
+
+(defun runtime-package-symbol-counts (package)
+  (let ((external 0)
+        (internal 0))
+    (do-external-symbols (symbol package)
+      (declare (ignore symbol))
+      (incf external))
+    (do-symbols (symbol package)
+      (declare (ignore symbol))
+      (multiple-value-bind (_symbol status)
+          (find-symbol (symbol-name symbol) package)
+        (declare (ignore _symbol))
+        (when (eq status :internal)
+          (incf internal))))
+    (list :external-symbol-count external
+          :internal-symbol-count internal)))
+
+(defun runtime-value-summary (value)
+  (let* ((class (ignore-errors (class-of value)))
+         (class-name (runtime-class-display-name class))
+         (type-name (runtime-safe-princ-string (type-of value) :limit 80))
+         (summary (list :type type-name
+                        :class class-name
+                        :printed (runtime-safe-princ-string value))))
+    (append summary
+            (typecase value
+              (null (list :kind :null))
+              (cons (list :kind :list
+                          :length (ignore-errors (length value))))
+              (hash-table (list :kind :hash-table
+                                :count (hash-table-count value)
+                                :test (runtime-safe-princ-string (hash-table-test value) :limit 40)))
+              (array (list :kind :array
+                           :dimensions (array-dimensions value)))
+              (package (list :kind :package
+                             :name (package-name value)
+                             :nicknames (sort (copy-list (package-nicknames value)) #'string<)))
+              (symbol (list :kind :symbol
+                            :name (symbol-name value)
+                            :home-package (and (symbol-package value)
+                                               (package-name (symbol-package value)))))
+              (function (list :kind :function))
+              (standard-object (append (list :kind :standard-object)
+                                       (or (runtime-object-slot-summaries value) '())))
+              (structure-object (append (list :kind :structure-object)
+                                        (or (runtime-object-slot-summaries value) '())))
+              (t (list :kind :atom))))))
+
+(defun runtime-object-detail (value)
+  (append (runtime-value-summary value)
+          (typecase value
+            (null '())
+            (cons (list :preview (runtime-list-preview value)))
+            (hash-table (list :preview (runtime-hash-table-preview value)))
+            (array (list :total-size (array-total-size value)
+                         :element-type (runtime-safe-princ-string (array-element-type value) :limit 80)))
+            (package (append (list :used-packages
+                                   (sort (mapcar #'package-name (copy-list (package-use-list value))) #'string<)
+                                   :used-by-packages
+                                   (sort (mapcar #'package-name (copy-list (package-used-by-list value))) #'string<))
+                             (runtime-package-symbol-counts value)))
+            (symbol (list :boundp (boundp value)
+                          :fboundp (not (null (fboundp value)))
+                          :keywordp (keywordp value)
+                          :constantp (constantp value)))
+            (function (list :function-kind
+                            (typecase value
+                              (generic-function :generic-function)
+                              (function :function)
+                              (t :unknown))))
+            (t '()))))
+
+(defun runtime-function-summary (symbol)
+  (let ((kind (runtime-function-kind symbol)))
+    (when kind
+      (let ((function (ignore-errors (fdefinition symbol))))
+        (append (list :kind kind
+                      :name (symbol-name symbol)
+                      :lambda-list (ignore-errors
+                                     (multiple-value-bind (lambda-expression closure-p name)
+                                         (function-lambda-expression function)
+                                       (declare (ignore closure-p name))
+                                       (and (consp lambda-expression)
+                                            (second lambda-expression)))))
+                (when (eq kind :generic-function)
+                  (list :method-count (length (or (runtime-generic-function-methods symbol) '())))))))))
 
 (defun runtime-generic-function-methods (symbol)
   (let ((function (and (fboundp symbol) (fdefinition symbol))))
@@ -530,6 +809,57 @@
             :constantp (constantp resolved-symbol)
             :sandbox-profile :in-process))))
 
+(defun tool-runtime-inspect-symbol (session &key symbol package)
+  (unless symbol
+    (error ":runtime/inspect requires :symbol"))
+  (let* ((package-name (or package (agent-session-package session)))
+         (resolved-package (or (resolve-runtime-package-designator package-name)
+                               (error "Unknown package ~S" package-name))))
+    (multiple-value-bind (resolved-symbol status)
+        (find-symbol symbol resolved-package)
+      (unless resolved-symbol
+        (error "Symbol ~S was not found in package ~A" symbol (package-name resolved-package)))
+      (let* ((boundp (boundp resolved-symbol))
+             (value (and boundp (symbol-value resolved-symbol)))
+             (function-summary (runtime-function-summary resolved-symbol))
+             (methods (and (eq (getf function-summary :kind) :generic-function)
+                           (runtime-generic-function-methods resolved-symbol))))
+        (list :tool :runtime/inspect
+              :package (package-name resolved-package)
+              :symbol (symbol-name resolved-symbol)
+              :status (symbol-status-keyword status)
+              :home-package (let ((home (symbol-package resolved-symbol)))
+                              (and home (package-name home)))
+              :runtime-presence (runtime-symbol-presence-summary resolved-symbol status)
+              :value-summary (and boundp (runtime-value-summary value))
+              :function-summary function-summary
+              :method-count (length (or methods '()))
+              :methods methods
+              :sandbox-profile :in-process)))))
+
+(defun tool-runtime-object-symbol (session &key symbol package)
+  (unless symbol
+    (error ":runtime/object requires :symbol"))
+  (let* ((package-name (or package (agent-session-package session)))
+         (resolved-package (or (resolve-runtime-package-designator package-name)
+                               (error "Unknown package ~S" package-name))))
+    (multiple-value-bind (resolved-symbol status)
+        (find-symbol symbol resolved-package)
+      (unless resolved-symbol
+        (error "Symbol ~S was not found in package ~A" symbol (package-name resolved-package)))
+      (unless (boundp resolved-symbol)
+        (error "Symbol ~S is not bound in package ~A" symbol (package-name resolved-package)))
+      (let ((value (symbol-value resolved-symbol)))
+        (list :tool :runtime/object
+              :package (package-name resolved-package)
+              :symbol (symbol-name resolved-symbol)
+              :status (symbol-status-keyword status)
+              :home-package (let ((home (symbol-package resolved-symbol)))
+                              (and home (package-name home)))
+              :runtime-presence (runtime-symbol-presence-summary resolved-symbol status)
+              :object-detail (runtime-object-detail value)
+              :sandbox-profile :in-process)))))
+
 (defun tool-runtime-set-package (session &key package)
   (unless package
     (error ":runtime/set-package requires :package"))
@@ -563,17 +893,26 @@
           :package (package-name resolved-package)
           :sandbox-profile :in-process)))
 
-(defun tool-runtime-eval (session &key form package mutating)
+(defun tool-runtime-eval (session &key form package mutating recovery-launch)
   (unless form
     (error ":runtime/eval requires :form"))
   (let* ((policy-id (runtime-eval-policy-id mutating))
-         (resolved-forms (parse-runtime-forms form))
          (package-name (or package (agent-session-package session)))
          (resolved-package (or (resolve-runtime-package-designator package-name)
-                               (error "Unknown package ~S" package-name))))
+                               (error "Unknown package ~S" package-name)))
+         (resolved-forms (parse-runtime-forms form :package resolved-package))
+         (recovery-launch-summary (runtime-recovery-launch-summary recovery-launch)))
     (when (endp resolved-forms)
       (error ":runtime/eval requires at least one readable form"))
     (ensure-capability-granted session policy-id)
+    (append-runtime-eval-debug-log :before
+                                   session
+                                   resolved-package
+                                   form
+                                   resolved-forms)
+    (maybe-replay-runtime-definition-from-history session
+                                                  resolved-package
+                                                  resolved-forms)
     (call-with-runtime-incident-capture
      session
      (lambda ()
@@ -583,6 +922,12 @@
                       finally (return (multiple-value-list (eval resolved-form)))
                       do (eval resolved-form)))
               (result (first values)))
+         (append-runtime-eval-debug-log :after
+                                        session
+                                        resolved-package
+                                        form
+                                        resolved-forms
+                                        :values values)
          (append-session-event session
                                :runtime-evaluated
                                (list :package (package-name *package*)
@@ -595,12 +940,14 @@
                                              :form form
                                              :mutating (not (null mutating))
                                              :policy-id policy-id
+                                             :recovery-launch recovery-launch-summary
                                              :result result))
          (let ((work-item (and mutating
                                (create-runtime-mutation-work-item session
                                                                   form
                                                                   policy-id
-                                                                  result))))
+                                                                  result
+                                                                  :recovery-launch recovery-launch-summary))))
            (let ((artifact (create-artifact session
                                             (or *runtime-governance-thread* (current-thread session))
                                             *runtime-governance-turn*
@@ -617,6 +964,7 @@
                                                             :form form
                                                             :mutating (not (null mutating))
                                                             :policy-id policy-id
+                                                            :recovery-launch recovery-launch-summary
                                                             :work-item-id (and work-item (work-item-id work-item))
                                                             :result result))))
              (maybe-append-operation-artifact-link *runtime-governance-operation* artifact))
@@ -627,6 +975,7 @@
                  :form form
                  :mutating (not (null mutating))
                  :policy-id policy-id
+                 :recovery-launch recovery-launch-summary
                  :work-item-id (and work-item (work-item-id work-item))
                  :result result
                  :values values
@@ -640,7 +989,8 @@
                      :package (package-name resolved-package)
                      :form form
                      :mutating (not (null mutating))
-                     :policy-id policy-id))))
+                     :policy-id policy-id
+                     :recovery-launch recovery-launch-summary))))
 
 (defun tool-runtime-history (session &key tail)
   (declare (ignore session))
@@ -715,6 +1065,16 @@
                "Describe a symbol visible in the current runtime package or a specified package."
                :runtime-read
                #'tool-runtime-describe-symbol)
+
+(register-tool :runtime/inspect
+               "Inspect the live value and callable shape of a symbol in the current runtime package or a specified package."
+               :runtime-read
+               #'tool-runtime-inspect-symbol)
+
+(register-tool :runtime/object
+               "Inspect rich live object detail for one bound symbol in the current runtime package or a specified package."
+               :runtime-read
+               #'tool-runtime-object-symbol)
 
 (register-tool :runtime/find-definition
                "Locate source definitions for a symbol inside the current workspace and relate them to the live image."

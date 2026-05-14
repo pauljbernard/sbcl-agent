@@ -42,6 +42,24 @@
                   (sbcl-agent::make-assistant-action :type :tool :payload '(:tool-id :fs/read :arguments (:path "src/main.lisp"))))
    :metadata '(:provider :mixed-action-test)))
 
+(defclass calculator-action-provider (sbcl-agent::provider) ())
+
+(defmethod sbcl-agent::provider-name ((provider calculator-action-provider))
+  "calculator-action-test")
+
+(defmethod sbcl-agent::provider-capabilities ((provider calculator-action-provider))
+  '(:chat :structured-response :action-proposals))
+
+(defmethod sbcl-agent::send-request ((provider calculator-action-provider) request)
+  (declare (ignore provider request))
+  (sbcl-agent::make-assistant-response
+   :message "Appending token 7 in the calculator now."
+   :actions (list (sbcl-agent::make-assistant-action
+                   :type :tool
+                   :payload '(:tool-id :calculator/append-token
+                              :arguments (:token "7"))))
+   :metadata '(:provider :calculator-action-test)))
+
 (defclass patch-action-provider (sbcl-agent::provider) ())
 
 (defmethod sbcl-agent::provider-name ((provider patch-action-provider))

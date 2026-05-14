@@ -3,6 +3,19 @@
 (defstruct environment-compatibility-payload
   session-id)
 
+(defparameter +nonserializable-environment-metadata-keys+
+  '(:provider-request-snapshot-cache
+    :provider-request-snapshot-refresh-pending-p
+    :provider-request-snapshot-dirty-at
+    :provider-request-snapshot-dirty-domain-times
+    :provider-request-snapshot-dirty-reasons
+    :provider-request-snapshot-dirty-domains))
+
+(defun serializable-environment-metadata (metadata)
+  (let ((copy (copy-list (or metadata '()))))
+    (dolist (key +nonserializable-environment-metadata-keys+ copy)
+      (remf copy key))))
+
 (defun environment-event->session-event (environment-event)
   (let ((environment-metadata (event-metadata environment-event)))
     (make-event :id (or (getf environment-metadata :source-event-id)
@@ -195,6 +208,14 @@
     (setf (agent-session-plan session) plan)
     session))
 
+(defun rehydrate-session-actor-mailboxes-from-environment (session environment)
+  (let* ((agent-state (environment-agent-state environment))
+         (actor-mailboxes (copy-tree (or (and agent-state
+                                              (environment-agent-state-actor-mailboxes agent-state))
+                                         '()))))
+    (setf (agent-session-actor-mailboxes session) actor-mailboxes)
+    session))
+
 (defun rehydrate-session-pending-actions-from-environment (session environment)
   (let* ((agent-state (environment-agent-state environment))
          (pending-actions (copy-list (or (and agent-state
@@ -213,13 +234,17 @@
 
 (defun rehydrate-session-tasks-and-workers-from-environment (session environment)
   (let* ((agent-state (environment-agent-state environment))
+         (desktop-tasks (copy-list (or (and agent-state
+                                            (environment-agent-state-desktop-tasks agent-state))
+                                       '())))
          (tasks (copy-list (or (and agent-state
                                     (environment-agent-state-tasks agent-state))
                                '())))
          (workers (copy-list (or (and agent-state
                                       (environment-agent-state-workers agent-state))
                                  '()))))
-    (setf (agent-session-tasks session) tasks
+    (setf (agent-session-desktop-tasks session) desktop-tasks
+          (agent-session-tasks session) tasks
           (agent-session-workers session) workers)
     session))
 
@@ -274,6 +299,7 @@
                   :incidents '()
                   :workers '())))
     (rehydrate-session-plan-from-environment session environment)
+    (rehydrate-session-actor-mailboxes-from-environment session environment)
     (rehydrate-session-capability-grants-from-environment session environment)
     (rehydrate-session-events-from-environment session environment)
     (rehydrate-session-pending-actions-from-environment session environment)
@@ -327,7 +353,17 @@
   (let* ((summary (environment-summary environment))
          (conversation-summary (getf summary :conversation-state))
          (workflow-summary (getf summary :workflow-state))
-         (agent-summary (getf summary :agent-state)))
+         (agent-summary (getf summary :agent-state))
+         (environment-agent-registry
+           (or (environment-agent-registry environment) '()))
+         (session-agent-registry
+           (or (and (fboundp 'actor-system-registry-definitions)
+                    (ignore-errors (actor-system-registry-definitions session)))
+               environment-agent-registry))
+         (environment-actor-mailboxes
+           (and (environment-agent-state environment)
+                (environment-agent-state-actor-mailboxes
+                 (environment-agent-state environment)))))
     (or (not (string= (or (getf summary :session-id) "")
                       (or (agent-session-id session) "")))
         (not (string= (or (getf summary :storage-root) "")
@@ -350,14 +386,22 @@
             (length (agent-session-workflow-records session)))
         (/= (or (getf agent-summary :pending-action-count) 0)
             (length (agent-session-pending-actions session)))
+        (/= (or (getf agent-summary :desktop-task-count) 0)
+            (length (agent-session-desktop-tasks session)))
         (/= (or (getf agent-summary :incident-count) 0)
             (length (agent-session-incidents session)))
         (/= (or (getf agent-summary :task-count) 0)
             (length (agent-session-tasks session)))
         (/= (or (getf agent-summary :worker-count) 0)
             (length (agent-session-workers session)))
+        (/= (or (getf agent-summary :agent-count) 0)
+            (length environment-agent-registry))
         (not (equal (getf summary :plan)
                     (agent-session-plan session)))
+        (not (equal environment-agent-registry
+                    session-agent-registry))
+        (not (equal environment-actor-mailboxes
+                    (agent-session-actor-mailboxes session)))
         (/= (length (or (getf (environment-policy-state environment) :capability-grants) '()))
             (length (agent-session-capability-grants session))))))
 
@@ -387,7 +431,8 @@
      :summaries (environment-summaries active-environment)
      :event-log (environment-event-log active-environment)
      :compatibility-session (ensure-environment-compatibility-payload session)
-     :metadata (environment-metadata active-environment))))
+     :metadata (serializable-environment-metadata
+                (environment-metadata active-environment)))))
 
 (defun save-environment (environment path)
   (with-open-file (stream path

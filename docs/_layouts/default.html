@@ -6,6 +6,67 @@
     <title>{% if page.title %}{{ page.title }} | {% endif %}{{ site.title }}</title>
     <meta name="description" content="{{ page.description | default: site.description }}">
     <link rel="stylesheet" href="{{ '/assets/css/site.css' | relative_url }}">
+    <script type="module">
+      import mermaid from "https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.esm.min.mjs";
+
+      const mermaidConfig = {
+        startOnLoad: false,
+        theme: "base",
+        themeVariables: {
+          primaryColor: "#f8f4ea",
+          primaryTextColor: "#073b4c",
+          primaryBorderColor: "#0f5b78",
+          lineColor: "#5f6b7a",
+          secondaryColor: "#fffdf7",
+          tertiaryColor: "#eef6f8",
+          background: "#fffdf7",
+          mainBkg: "#f8f4ea",
+          secondBkg: "#ffffff",
+          tertiaryBkg: "#eef6f8",
+          clusterBkg: "#f8f4ea",
+          clusterBorder: "#d8d0bf",
+          edgeLabelBackground: "#fffdf7",
+          fontFamily: "Georgia, Iowan Old Style, Palatino Linotype, serif"
+        },
+        flowchart: {
+          curve: "basis",
+          htmlLabels: true
+        },
+        sequence: {
+          useMaxWidth: true
+        }
+      };
+
+      mermaid.initialize(mermaidConfig);
+
+      function promoteMermaidBlocks() {
+        document.querySelectorAll("pre > code.language-mermaid").forEach((codeBlock) => {
+          const pre = codeBlock.parentElement;
+          if (!pre || pre.dataset.mermaidPromoted === "true") {
+            return;
+          }
+          const wrapper = document.createElement("div");
+          wrapper.className = "mermaid";
+          wrapper.textContent = codeBlock.textContent ?? "";
+          pre.replaceWith(wrapper);
+        });
+      }
+
+      async function renderMermaid() {
+        promoteMermaidBlocks();
+        await mermaid.run({
+          querySelector: ".mermaid"
+        });
+      }
+
+      if (document.readyState === "loading") {
+        document.addEventListener("DOMContentLoaded", () => {
+          renderMermaid().catch(console.error);
+        }, { once: true });
+      } else {
+        renderMermaid().catch(console.error);
+      }
+    </script>
   </head>
   <body>
     <div class="site-shell">
@@ -44,6 +105,8 @@
           <a href="{{ '/user-guide.html' | relative_url }}"{% if page.url == '/user-guide.html' %} aria-current="page"{% endif %}>User Guide</a>
           <a href="{{ '/architecture.html' | relative_url }}"{% if page.url == '/architecture.html' %} aria-current="page"{% endif %}>Architecture and Design</a>
           <a href="{{ '/conversation-architecture.html' | relative_url }}"{% if page.url == '/conversation-architecture.html' %} aria-current="page"{% endif %}>Conversation Runtime</a>
+          <a href="{{ '/robust-actor-kernel-architecture.html' | relative_url }}"{% if page.url == '/robust-actor-kernel-architecture.html' %} aria-current="page"{% endif %}>Actor Runtime</a>
+          <a href="{{ '/actor-system-panel.html' | relative_url }}"{% if page.url == '/actor-system-panel.html' %} aria-current="page"{% endif %}>Actor System Surface</a>
           <a href="{{ '/streaming-event-model.html' | relative_url }}"{% if page.url == '/streaming-event-model.html' %} aria-current="page"{% endif %}>Streaming Event Model</a>
           <p class="sidebar-label">Roadmap</p>
           <a href="{{ '/roadmap/vision.html' | relative_url }}"{% if page.url == '/roadmap/vision.html' %} aria-current="page"{% endif %}>Positioning Statement</a>

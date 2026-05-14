@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent now has the accepted IntentOS target architecture in code: an SBCL-native execution kernel with <code>invoke</code>, <code>inspect</code>, and <code>control</code>; governed execution handles and execution surfaces; a compatibility kernel with Linux app manifests, lifecycle, and display bridging; a shell/desktop host contract; and a real developer-platform package layer. The current program is now enhancement, hardening, and backend evolution rather than target-architecture gap closure.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the runtime and persistence substrate, a more traditional governed kernel as the authority boundary, an address-based actor system as the primary execution and workflow substrate, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, and policy-based governance is native to the stack rather than bolted on around it.</div>
 
 ## Start Here
 
@@ -28,17 +28,115 @@ The current `Surface` desktop host for `sbcl-agent` looks like this:
 
 <img src="{{ '/Desktop.jpg' | relative_url }}" alt="Surface desktop snapshot" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
 
-## Current Kernel Architecture
+## Current Layered Architecture
 
-The execution-kernel structure that underlies the shell, the desktop, and the service boundary is shown below:
+The current stack is no longer just “shell over kernel.” It is now a shared introspective environment with a distinct actor-system layer between the governed kernel and the React presentation tier.
 
-<img src="{{ '/KernelArchitecture.png' | relative_url }}" alt="Execution kernel architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+```mermaid
+flowchart TB
+    React["React Surface Desktop<br/>projection / interaction / operator workflows"]
+    Actor["Actor System<br/>registry / inboxes / outboxes / supervision / worker pool"]
+    Kernel["Governed Kernel<br/>invoke / inspect / control / policy / execution records"]
+    Runtime["SBCL / Common Lisp<br/>runtime / persistence / introspection / live image"]
 
-## Realtime Introspective Environment Architecture
+    React --> Actor
+    Actor --> Kernel
+    Kernel --> Runtime
+```
 
-The diagram below shows the more fundamental architectural distinction behind `sbcl-agent`: the agent and the environment share one live runtime. This is what makes introspection, environment-native action, persistent transcript and memory, and self-executing governance possible without treating the environment as an external target.
+## Actor System Architecture
 
-<img src="{{ '/RealtimeIntrospectiveEnvironmentArchitecture.png' | relative_url }}" alt="Realtime introspective environment architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;" />
+The actor system is now the primary message-driven capability and workflow substrate above the kernel.
+
+```mermaid
+flowchart TB
+    subgraph ActorSystem["Actor System"]
+        Root["ActorSystem"]
+        Chat["ContextChatActor(session)"]
+        Gov["GovernanceActor(session)"]
+        Run["RuntimeActor(session)"]
+        Edit["EditorActor(session)"]
+        Calc["CalculatorActor(session)"]
+        Env["EnvironmentActor(environment)"]
+        MCP["MCP Pool(shared inbox)"]
+        Pool["SBCL Worker Pool"]
+    end
+
+    Root --> Chat
+    Root --> Gov
+    Root --> Run
+    Root --> Edit
+    Root --> Calc
+    Root --> Env
+    Root --> MCP
+
+    Chat --> Gov
+    Gov --> Run
+    Gov --> Edit
+    Chat --> Calc
+    Chat --> Env
+    Run --> MCP
+    Edit --> MCP
+    Calc --> MCP
+
+    Pool --> Chat
+    Pool --> Gov
+    Pool --> Run
+    Pool --> Edit
+    Pool --> Calc
+    Pool --> Env
+```
+
+## Runtime And Governance Flow
+
+```mermaid
+sequenceDiagram
+    participant UI as Surface UI
+    participant Chat as ContextChatActor
+    participant Gov as GovernanceActor
+    participant Runtime as RuntimeActor
+    participant Editor as EditorActor
+    participant Kernel as Governed Kernel
+
+    UI->>Chat: submit user intent
+    Chat->>Gov: RequestExecution(message)
+
+    alt runtime evaluation
+        Gov->>Runtime: AuthorizeRuntimeEvaluation
+        Runtime->>Kernel: invoke(runtime-eval)
+        Kernel-->>Runtime: result / evidence
+        Runtime-->>Chat: RuntimeReply
+    else governed mutation
+        Gov->>Editor: AuthorizePendingMutation
+        Editor->>Kernel: invoke(editor-mutation)
+        Kernel-->>Editor: result / evidence
+        Editor-->>Chat: MutationApplied
+    end
+
+    Chat-->>UI: project reply / approval / failure
+```
+
+## Actor System Surface
+
+The live `Actor System` surface in `Surface` now projects the actor registry, hierarchy, workflow edges, supervision incidents, and worker-pool state directly from actor-system data rather than inferring architecture from transcript behavior.
+
+```mermaid
+flowchart LR
+    Panel["Actor System Surface"]
+    Overview["Overview"]
+    Hierarchy["Hierarchy Graph"]
+    Workflow["Workflow Graph"]
+    Supervision["Supervision"]
+    Details["Node / Edge Detail"]
+
+    Panel --> Overview
+    Panel --> Hierarchy
+    Panel --> Workflow
+    Panel --> Supervision
+    Hierarchy --> Details
+    Workflow --> Details
+    Supervision --> Details
+```
 
 If you are evaluating whether the system is safe or mature enough for your use, read [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html) immediately after the user guide.
 
@@ -49,6 +147,8 @@ If you are evaluating whether the system is safe or mature enough for your use, 
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/application-domains.html"><strong>Application Domains</strong>See where governed, runtime-aware causality becomes necessary rather than optional.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/foundation.html"><strong>Foundation</strong>Learn the three-truth model and the environment-first framing.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/architecture.html"><strong>Architecture</strong>Map the conceptual model onto the code that exists today.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/robust-actor-kernel-architecture.html"><strong>Actor Runtime</strong>See the actor-system layer, worker-pool execution model, and kernel authority boundary.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/actor-system-panel.html"><strong>Actor System Surface</strong>See how the live hierarchy, workflow graph, supervision, and runtime pool are projected to operators.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html"><strong>Safety and Risk</strong>Read the system's strengths, weaknesses, and governance model directly.</a>
 </div>
 

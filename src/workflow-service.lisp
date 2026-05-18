@@ -54,3 +54,23 @@
                                                                   :read-model :workflow-record-detail-v1
                                                                   :session session
                                                                   :workflow-record-id workflow-record-id))))
+
+(defun command-workflow-record-detail-query-service (session workflow-record-id)
+  (call-with-workflow-query-actor
+   session
+   (make-workflow-query-request session
+                                :workflow-record-detail-query
+                                :workflow/record-detail
+                                :payload (list :workflow-record-id workflow-record-id)
+                                :workflow-record-id workflow-record-id
+                                :metadata (list :workflow-record-id workflow-record-id))
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    (format nil "Read workflow record ~A." workflow-record-id)
+                                    "workflow/record-detail"
+                                    :authority :operator
+                                    :payload (list :workflow-record-id workflow-record-id)))
+   :workflow/record-detail
+   :workflow-record-detail-query
+   :workflow-record-id workflow-record-id
+   :metadata (list :workflow-record-id workflow-record-id)))

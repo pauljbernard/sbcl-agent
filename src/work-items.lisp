@@ -245,7 +245,7 @@
 (defun capture-work-item-source-snapshot (session)
   (list :captured-at (get-universal-time)
         :cwd (agent-session-cwd session)
-        :plan (agent-session-plan session)
+        :plan (session-plan-display-value session)
         :transcript-count (length (agent-session-transcript session))
         :event-count (length (agent-session-events session))))
 
@@ -757,6 +757,160 @@
     (when record
       (update-workflow-record-resume-payload record (work-item-resume-payload work-item) :session session)))
   (work-item-resume-payload work-item))
+
+(defun latest-work-item-approval-policy (session work-item)
+  (let* ((record (work-item-workflow-record session work-item))
+         (requirement (and record
+                           (car (last (workflow-record-approval-requirements record))))))
+    (and requirement
+         (getf requirement :policy))))
+
+(defun latest-work-item-approval-reason (session work-item)
+  (let* ((record (work-item-workflow-record session work-item))
+         (requirement (and record
+                           (car (last (workflow-record-approval-requirements record))))))
+    (and requirement
+         (getf requirement :reason))))
+
+(defun derived-work-item-next-action (session work-item)
+  (let ((policy (latest-work-item-approval-policy session work-item))
+        (reason (or (and (work-item-workflow-record session work-item)
+                         (workflow-record-quarantine-reason
+                          (work-item-workflow-record session work-item)))
+                    (latest-work-item-approval-reason session work-item))))
+    (case (work-item-status work-item)
+      (:awaiting-approval
+       (list :type :await-approval
+             :policy policy
+             :resume-command `(resume-work-item ,(work-item-id work-item))))
+      (:quarantined
+       (list :type :operator-review
+             :resume-command `(resume-work-item ,(work-item-id work-item))
+             :reason reason))
+      (:resumed
+       (list :type :continue-transaction
+             :suggested-step :run-live-and-cold-validation))
+      (:awaiting-cold-validation
+       (list :type :complete-pending-validations
+             :suggested-step :run-cold-validation
+             :final-closure-decision (work-item-closure-decision work-item)))
+      (:failed
+       (list :type :review-failure
+             :suggested-step :quarantine-or-rollback))
+      (otherwise nil))))
+
+(defun derived-work-item-resume-payload (session work-item)
+  (let* ((transaction (current-work-item-transaction work-item))
+         (checkpoint-id (latest-work-item-checkpoint-id work-item))
+         (replay-id (and transaction
+                         (mutation-transaction-replay-id transaction)))
+         (rollback-point (work-item-rollback-point work-item))
+         (pending-validations (work-item-pending-validation-kinds work-item))
+         (validator-actions (work-item-validator-actions work-item))
+         (policy (latest-work-item-approval-policy session work-item))
+         (reason (latest-work-item-approval-reason session work-item))
+         (quarantine-reason (or (and (work-item-workflow-record session work-item)
+                                     (workflow-record-quarantine-reason
+                                      (work-item-workflow-record session work-item)))
+                                reason)))
+    (case (work-item-status work-item)
+      (:awaiting-approval
+       (list :resume-command `(resume-work-item ,(work-item-id work-item))
+             :rollback-point rollback-point
+             :checkpoint-id checkpoint-id
+             :pending-validations pending-validations
+             :validator-actions validator-actions
+             :replay-id replay-id
+             :approval-policy policy))
+      (:quarantined
+       (list :resume-command `(resume-work-item ,(work-item-id work-item))
+             :rollback-point rollback-point
+             :checkpoint-id checkpoint-id
+             :validator-actions validator-actions
+             :replay-id replay-id
+             :quarantine-reason quarantine-reason
+             :operator-options '(:resume :rollback)))
+      (:resumed
+       (list :resume-command :continue-transaction
+             :checkpoint-id checkpoint-id
+             :pending-validations pending-validations
+             :validator-actions validator-actions
+             :replay-id replay-id))
+      (:awaiting-cold-validation
+       (list :resume-command :complete-validations
+             :checkpoint-id checkpoint-id
+             :pending pending-validations
+             :validator-actions validator-actions
+             :replay-id replay-id
+             :rollback-point rollback-point
+             :final-closure-decision (work-item-closure-decision work-item)))
+      (:failed
+       (list :resume-command :quarantine-or-rollback
+             :checkpoint-id checkpoint-id
+             :replay-id replay-id))
+      (otherwise nil))))
+
+(defun recover-work-item-control-state (session work-item
+                                        &key (recovery-origin :session-load))
+  (let* ((record (work-item-workflow-record session work-item))
+         (status (work-item-status work-item))
+         (record-next-action (and record
+                                  (copy-tree (workflow-record-next-action record))))
+         (record-resume-payload (and record
+                                     (copy-tree (workflow-record-resume-payload record))))
+         (recovered-next-action nil)
+         (recovered-resume-payload nil)
+         (replay-class nil))
+    (refresh-work-item-pending-validations session work-item)
+    (when (null (work-item-next-action work-item))
+      (setf recovered-next-action
+            (or record-next-action
+                (derived-work-item-next-action session work-item)))
+      (when recovered-next-action
+        (set-work-item-next-action session work-item (copy-tree recovered-next-action))))
+    (when (null (work-item-resume-payload work-item))
+      (setf recovered-resume-payload
+            (or record-resume-payload
+                (derived-work-item-resume-payload session work-item)))
+      (when recovered-resume-payload
+        (set-work-item-resume-payload session work-item
+                                      (copy-tree recovered-resume-payload))))
+    (setf replay-class
+          (case status
+            (:awaiting-approval :approval-resume)
+            (:awaiting-cold-validation :validation-replay)
+            (:failed :rollback-replay)
+            (:quarantined :operator-review-replay)
+            (:resumed :workflow-resume)
+            (otherwise :state-restoration)))
+    (when (and record
+               (or recovered-next-action
+                   recovered-resume-payload))
+      (append-workflow-record-entry
+       session
+       record
+       :recovery
+       :control-state-recovered
+       (list :recovery-origin recovery-origin
+             :replay-class replay-class
+             :work-item-id (work-item-id work-item)
+             :work-item-status status
+             :recovered-next-action-p (not (null recovered-next-action))
+             :recovered-resume-payload-p (not (null recovered-resume-payload)))
+       :status (workflow-record-status record))
+      (append-workflow-record-event
+       session
+       :workflow-record-control-state-recovered
+       record
+       (list :recovery-origin recovery-origin
+             :replay-class replay-class
+             :work-item-id (work-item-id work-item)
+             :work-item-status status
+             :recovered-next-action-p (not (null recovered-next-action))
+             :recovered-resume-payload-p (not (null recovered-resume-payload)))
+       :metadata (list :recovery-origin recovery-origin
+                       :replay-class replay-class)))
+    work-item))
 
 (defun work-item-final-closure-decision (work-item)
   (or (getf (work-item-resume-payload work-item) :final-closure-decision)

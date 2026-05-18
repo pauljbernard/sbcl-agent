@@ -1,0 +1,45 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
+  <title id="title">Current layered sbcl-agent architecture</title>
+  <desc id="desc">Four-layer architecture showing React Surface over Actor System over Governed Kernel over SBCL Common Lisp runtime.</desc>
+  <style>
+    .bg { fill: #0f172a; }
+    .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 18; ry: 18; }
+    .accent1 { fill: #dbeafe; stroke: #2563eb; }
+    .accent2 { fill: #dcfce7; stroke: #16a34a; }
+    .accent3 { fill: #fef3c7; stroke: #d97706; }
+    .accent4 { fill: #ede9fe; stroke: #7c3aed; }
+    .title { font: 700 36px Inter, Arial, sans-serif; fill: #e2e8f0; }
+    .label { font: 700 28px Inter, Arial, sans-serif; fill: #0f172a; }
+    .text { font: 500 18px Inter, Arial, sans-serif; fill: #334155; }
+    .small { font: 500 16px Inter, Arial, sans-serif; fill: #475569; }
+    .line { stroke: #94a3b8; stroke-width: 4; marker-end: url(#arrow); }
+  </style>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#94a3b8"/>
+    </marker>
+  </defs>
+  <rect class="bg" width="1200" height="720"/>
+  <text class="title" x="60" y="70">sbcl-agent Current Layered Architecture</text>
+
+  <rect class="card accent1" x="180" y="120" width="840" height="110"/>
+  <text class="label" x="220" y="170">React Surface Desktop</text>
+  <text class="text" x="220" y="205">projection, operator workflows, actor-system panel, environment views</text>
+
+  <rect class="card accent2" x="180" y="280" width="840" height="130"/>
+  <text class="label" x="220" y="335">Actor System</text>
+  <text class="text" x="220" y="370">address registry, session actors, supervision, worker pool, workflow ownership</text>
+  <text class="small" x="220" y="398">ContextChatActor, GovernanceActor, RuntimeActor, EditorActor, EnvironmentActor, MCP pool</text>
+
+  <rect class="card accent3" x="180" y="460" width="840" height="110"/>
+  <text class="label" x="220" y="510">Governed Kernel</text>
+  <text class="text" x="220" y="545">invoke, inspect, control, policy, execution handles, capability registry</text>
+
+  <rect class="card accent4" x="180" y="620" width="840" height="70"/>
+  <text class="label" x="220" y="664">SBCL / Common Lisp Runtime</text>
+  <text class="text" x="620" y="664">image, persistence, introspection, concurrency substrate</text>
+
+  <line class="line" x1="600" y1="230" x2="600" y2="278"/>
+  <line class="line" x1="600" y1="410" x2="600" y2="458"/>
+  <line class="line" x1="600" y1="570" x2="600" y2="618"/>
+</svg>

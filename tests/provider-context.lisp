@@ -41,29 +41,56 @@
   (let* ((session (sbcl-agent::make-default-session))
          (environment (sbcl-agent::make-default-environment :session session))
          (thread (sbcl-agent::current-thread session))
-         (user-message (sbcl-agent::create-message session thread :user "inspect provider request"))
+         (prompt "Inspect the provider request context in detail, explain the runtime and environment state, and identify the decisive evidence and planning posture that should govern the response.")
+         (user-message (sbcl-agent::create-message session thread :user prompt))
          (turn (sbcl-agent::start-turn session thread user-message
                                        :metadata '(:source :test)))
          (assistant-message (sbcl-agent::create-message session thread :assistant "pending"))
          (ignore (sbcl-agent::complete-turn session thread turn assistant-message
                                             :status :completed))
-         (request (sbcl-agent::make-provider-request-from-session
-                   "inspect provider request"
+         (project (sbcl-agent::create-project-record
                    session
-                   :thread thread
-                   :turn turn
-                   :operator-mode :conversation
-                   :stream-p t)))
+                   :title "Planner Context Project"
+                   :summary "Governed project context should flow into planner authority state."
+                   :constitution '(:mission "Ship grounded changes."
+                                   :constraints ("Always validate before release."))
+                   :requirements '((:id "req-1"
+                                    :title "Respect project contract"
+                                    :summary "Changes must stay within project constitution."))
+                   :non-functional-requirements
+                   (list (sbcl-agent::make-project-requirement
+                          :id "nfr-1"
+                          :title "Validation fidelity"
+                          :summary "Validation evidence must remain visible."))
+                   :design-system '(:visual-language "governed-editorial")
+                   :style-guide '(:tone "direct")
+                   :architecture-decisions '((:id "adr-1"
+                                              :title "Actor mediated architecture"
+                                              :summary "Preserve actor and kernel mediation."
+                                              :status :accepted))
+                   :source-roots '("/tmp/project-root")))
+         (work-item (sbcl-agent::create-work-item session "Unlinked governed work"))
+         (linked-project (sbcl-agent::create-project-record
+                          session
+                          :title "Sibling Project"
+                          :summary "Secondary project context should appear as linked authority when multiple projects exist."
+                          :constitution '(:mission "Remain distinguishable from the active project.")
+                          :source-roots '("/tmp/sibling-project")))
+         (request nil))
     (declare (ignore ignore))
+    (sbcl-agent::select-project-record
+     session
+     (sbcl-agent::project-record-id project))
+    (setf (sbcl-agent::work-item-status work-item) :awaiting-cold-validation)
     (sbcl-agent::bind-session-to-environment session environment)
     (setf request (sbcl-agent::make-provider-request-from-session
-                   "inspect provider request"
+                   prompt
                    session
                    :thread thread
                    :turn turn
-                   :operator-mode :conversation
+                   :operator-mode :repl-bridge
                    :stream-p t))
-    (assert-equal :conversation
+    (assert-equal :repl-bridge
                   (sbcl-agent::provider-request-operator-mode request)
                   "provider request should retain the operator mode")
     (assert-true (sbcl-agent::provider-request-stream-p request)
@@ -91,6 +118,36 @@
     (assert-equal (sbcl-agent::environment-id environment)
                   (getf (sbcl-agent::provider-request-environment-context request) :environment-id)
                   "provider request should expose linked environment context")
+    (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request)
+                              :agent-constitution))
+                 "provider request environment context should expose the stable agent constitution")
+    (assert-equal :self-hosted-agentic-coding-agent
+                  (getf (getf (sbcl-agent::provider-request-environment-context request)
+                              :agent-constitution)
+                        :system-role)
+                  "provider request environment context should expose a strong system identity contract")
+    (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request)
+                              :capability-inventory))
+                 "provider request environment context should expose a live capability inventory")
+    (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request)
+                              :context-chat-project-selection))
+                 "provider request environment context should expose explicit context chat project targeting state")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-environment-context request)
+                                    :capability-inventory)
+                              :readiness-summary))
+                 "provider request environment context should expose capability readiness posture")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-environment-context request)
+                                    :capability-inventory)
+                              :anomalies))
+                 "provider request environment context should expose capability anomalies")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-environment-context request)
+                                    :capability-inventory)
+                              :provider-route-summary))
+                 "provider request environment context should expose provider route viability")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-environment-context request)
+                                    :capability-inventory)
+                              :executable-readiness))
+                 "provider request environment context should expose executable readiness posture")
     (assert-true (listp (getf (sbcl-agent::provider-request-environment-context request) :thread-refs))
                  "provider request environment context should expose compact thread refs")
     (assert-true (listp (getf (sbcl-agent::provider-request-retrieval-dossier request) :intent))
@@ -111,8 +168,185 @@
                  "provider request should expose an environment-grounded reasoning brief")
     (assert-true (listp (getf (sbcl-agent::provider-request-planning-brief request) :ordered-steps))
                  "provider request should expose an environment-grounded planning brief")
+    (assert-true (listp (sbcl-agent::provider-request-planning-context-packet request))
+                 "provider request should expose a canonical planning context packet")
+    (assert-true (getf (sbcl-agent::provider-request-planning-context-packet request) :decisive-evidence)
+                 "provider planning context packet should expose decisive evidence")
+    (assert-true (getf (sbcl-agent::provider-request-planning-context-packet request) :planner-directives)
+                 "provider planning context packet should expose explicit planner directives")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :agent-constitution))
+                 "provider planning context packet authority-state should expose the stable agent constitution")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :project-context))
+                 "provider planning context packet authority-state should expose canonical project context")
+    (assert-equal :session-selection
+                  (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :project-context)
+                        :selected-project-source)
+                  "provider planning context packet should expose how project authority was selected")
+    (assert-equal :multi-project
+                  (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :project-context)
+                        :ambiguity-risk)
+                  "provider planning context packet should surface multi-project ambiguity posture")
+    (assert-false
+     (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                       :authority-state)
+                 :project-context)
+           :selection-confident-p)
+     "provider planning context packet should not claim confident project selection for a project-agnostic prompt in a multi-project environment")
+    (assert-equal :weak-prompt-alignment
+                  (getf (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :project-context)
+                              :selection-posture)
+                        :selection-basis)
+                  "provider planning context packet should preserve weak project-selection posture when the prompt does not align to one project")
+    (assert-equal "Planner Context Project"
+                  (getf (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :project-context)
+                              :summary)
+                        :title)
+                  "provider planning context packet authority-state should preserve project summary")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :project-context)
+                              :requirements))
+                 "provider planning context packet authority-state should preserve canonical project requirements")
+    (assert-true (find (sbcl-agent::project-record-id linked-project)
+                       (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                         :authority-state)
+                                   :project-context)
+                             :linked-projects)
+                       :key (lambda (entry)
+                              (getf entry :id))
+                       :test #'equal)
+                 "provider planning context packet authority-state should surface linked project summaries when multiple projects exist")
+    (assert-equal :truthfulness
+                  (first (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                           :authority-state)
+                                     :agent-constitution)
+                               :optimization-priorities))
+                  "provider planning context packet authority-state should preserve optimization priorities")
+    (assert-true (listp (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :capability-inventory))
+                 "provider planning context packet authority-state should expose a live capability inventory")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :readiness-summary))
+                 "provider planning context packet authority-state should expose capability readiness posture")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :provider-route-summary))
+                 "provider planning context packet authority-state should expose provider route viability")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :executable-readiness))
+                 "provider planning context packet authority-state should expose executable readiness posture")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :missing-prerequisites))
+                 "provider planning context packet authority-state should expose missing prerequisites explicitly")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :dependency-anomalies))
+                 "provider planning context packet authority-state should expose dependency anomalies explicitly")
+    (assert-true (listp (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :capability-inventory)
+                              :package-management-summary))
+                 "provider planning context packet authority-state should expose package-management posture")
+    (assert-true (find :project-selection-low-confidence
+                       (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                   :uncertainty-and-obligations)
+                             :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "provider planning context packet uncertainty should escalate low-confidence project selection")
+    (assert-true (find :project-work-item-linkage-gap
+                       (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                   :uncertainty-and-obligations)
+                             :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "provider planning context packet uncertainty should surface project authority that is not linked to the active governed work")
     (assert-true (listp (sbcl-agent::provider-request-session-summary request))
                  "provider request should preserve the compact session summary")))
+
+(defun provider-request-context-chat-project-selection-test ()
+  (let* ((session (sbcl-agent::make-default-session))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (thread (sbcl-agent::current-thread session))
+         (prompt "Inspect the runtime and planning posture for the selected project context.")
+         (primary-project (sbcl-agent::create-project-record
+                           session
+                           :title "Explicit Chat Project"
+                           :summary "This project should be selected explicitly for the chat."
+                           :constitution '(:mission "Remain explicitly targeted by chat selection.")
+                           :source-roots '("/tmp/explicit-chat-project")))
+         (secondary-project (sbcl-agent::create-project-record
+                             session
+                             :title "Secondary Chat Project"
+                             :summary "Secondary explicit selection should remain linked context."
+                             :constitution '(:mission "Provide linked project context.")
+                             :source-roots '("/tmp/secondary-chat-project")))
+         (request nil)
+         (chat-context nil))
+    (sbcl-agent::select-project-record
+     session
+     (sbcl-agent::project-record-id secondary-project))
+    (sbcl-agent::set-context-chat-project-selection
+     session
+     (list (sbcl-agent::project-record-id primary-project)
+           (sbcl-agent::project-record-id secondary-project))
+     :primary-project-id (sbcl-agent::project-record-id primary-project))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (setf request (sbcl-agent::make-provider-request-from-session
+                   prompt
+                   session
+                   :thread thread
+                   :operator-mode :repl-bridge
+                   :stream-p t)
+          chat-context (sbcl-agent::service-response-data
+                        (sbcl-agent::query-desktop-task-context-chat-context-service session)))
+    (assert-equal :explicit
+                  (getf chat-context :selection-source)
+                  "context chat context service should expose explicit project selection")
+    (assert-equal (sbcl-agent::project-record-id primary-project)
+                  (getf chat-context :primary-project-id)
+                  "context chat context service should expose the explicit primary project")
+    (assert-equal :explicit-context-chat-selection
+                  (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :project-context)
+                        :selected-project-source)
+                  "provider planning context should prefer explicit chat project selection over ambient session selection")
+    (assert-equal (sbcl-agent::project-record-id primary-project)
+                  (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                    :authority-state)
+                              :project-context)
+                        :primary-project-id)
+                  "provider planning context should use the explicit chat primary project")
+    (assert-true
+     (find (sbcl-agent::project-record-id secondary-project)
+           (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                             :authority-state)
+                       :project-context)
+                 :selected-project-ids)
+           :test #'string=)
+     "provider planning context should retain secondary explicitly selected projects")))
 
 (defun provider-request-transcript-memory-context-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-transcript-memory/"))
@@ -177,6 +411,67 @@
                     (getf (first entries) :memory-id)
                     "provider request operator memory should include the stored preference"))))
 
+(defun provider-request-project-specific-selection-test ()
+  (let* ((session (sbcl-agent::make-default-session))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (thread (sbcl-agent::current-thread session))
+         (prompt "For Planner Context Project, inspect the actor mediated architecture and validate the governed-editorial planning posture under /tmp/project-root.")
+         (project (sbcl-agent::create-project-record
+                   session
+                   :title "Planner Context Project"
+                   :summary "Governed project context should flow into planner authority state."
+                   :constitution '(:mission "Ship grounded changes."
+                                   :principles ("truthfulness" "governed planning"))
+                   :requirements '((:id "req-1"
+                                    :title "Respect project contract"
+                                    :summary "Changes must stay within project constitution."))
+                   :feature-specifications '((:id "spec-1"
+                                              :title "Governed editorial planning"
+                                              :summary "Preserve governed-editorial planning posture."))
+                   :design-system '(:visual-language "governed-editorial")
+                   :architecture-decisions '((:id "adr-1"
+                                              :title "Actor mediated architecture"
+                                              :summary "Preserve actor and kernel mediation."
+                                              :status :accepted))
+                   :source-roots '("/tmp/project-root")))
+         (_linked-project (sbcl-agent::create-project-record
+                           session
+                           :title "Sibling Project"
+                           :summary "Secondary project context should remain distinguishable."
+                           :constitution '(:mission "Stay separate.")
+                           :source-roots '("/tmp/sibling-project")))
+         (request nil))
+    (declare (ignore _linked-project))
+    (sbcl-agent::select-project-record session (sbcl-agent::project-record-id project))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (setf request (sbcl-agent::make-provider-request-from-session
+                   prompt
+                   session
+                   :thread thread
+                   :operator-mode :repl-bridge
+                   :stream-p t))
+    (assert-true
+     (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                       :authority-state)
+                 :project-context)
+           :selection-confident-p)
+     "provider planning context packet should select the active project confidently when the prompt names project-specific evidence")
+    (assert-equal :prompt-aligned
+                  (getf (getf (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                                          :authority-state)
+                                    :project-context)
+                              :selection-posture)
+                        :selection-basis)
+                  "provider planning context packet should preserve prompt-aligned project selection for project-specific prompts")
+    (assert-false
+     (find :project-selection-low-confidence
+           (getf (getf (sbcl-agent::provider-request-planning-context-packet request)
+                       :uncertainty-and-obligations)
+                 :authority-conflicts)
+           :key (lambda (entry) (getf entry :kind))
+           :test #'eq)
+     "provider planning context packet should not escalate low-confidence project selection when the prompt is clearly project-specific")))
+
 (defun provider-request-cached-conversation-context-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-cached-conversation/"))
          (environment (sbcl-agent::make-default-environment
@@ -218,6 +513,8 @@
                    "cached conversational requests should skip reasoning brief construction")
       (assert-true (null (sbcl-agent::provider-request-planning-brief request))
                    "cached conversational requests should skip planning brief construction")
+      (assert-true (null (sbcl-agent::provider-request-planning-context-packet request))
+                   "cached conversational requests should skip planning-context packet construction")
       (assert-true (listp (getf dossier :ranking))
                    "cached conversational requests should expose ranked cached-context hits")
       (assert-true (> (length (getf dossier :ranking)) 0)
@@ -246,17 +543,53 @@
                     "provider workspace summary should align with environment-owned workflow counts when bound")
       (assert-equal (getf environment-summary :id)
                     (getf session-summary :environment-id)
-                    "provider session summary should expose the active environment identity"))))
+                    "provider session summary should expose the active environment identity")
+      (assert-true (listp (getf environment-summary :agent-constitution))
+                   "environment summary should expose the stable agent constitution")
+      (assert-equal :self-hosted-agentic-coding-agent
+                    (getf (getf environment-summary :agent-constitution) :system-role)
+                    "environment summary should expose a durable agent system role")
+      (assert-true (listp (getf (getf environment-summary :agent-constitution)
+                                :hard-invariants))
+                   "environment summary should expose hard invariants in the agent constitution")
+      (assert-true (listp (getf environment-summary :capability-inventory))
+                   "environment summary should expose the live capability inventory")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :readiness-summary))
+                   "environment summary should expose capability readiness posture")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :anomalies))
+                   "environment summary should expose capability anomalies")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :provider-route-summary))
+                   "environment summary should expose provider route viability")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :executable-readiness))
+                   "environment summary should expose executable readiness posture")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :missing-prerequisites))
+                   "environment summary should expose missing prerequisites explicitly")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :dependency-anomalies))
+                   "environment summary should expose dependency anomalies explicitly")
+      (assert-true (listp (getf (getf environment-summary :capability-inventory)
+                                :package-management-summary))
+                   "environment summary should expose package-management posture"))))
 
 (defun provider-rendering-context-test ()
   (let* ((request (sbcl-agent::make-provider-request
-                   :prompt "describe the current state"
+                   :prompt "Describe the current runtime, workflow, incident, and governance state in detail, identify the most decisive evidence, and explain what should be inspected before any mutation is proposed."
                    :session-summary '(:recent-transcript ((:role :assistant :content "Earlier")))
                    :thread-context '(:id "thread-1" :title "Default Thread")
                    :turn-context '(:id "turn-1" :status :running)
                    :environment-context '(:environment-id "env-1"
                                           :thread-count 2
                                           :work-item-count 1
+                                          :agent-constitution (:identity "SBCL Agent"
+                                                               :purpose "Operate as a governed, introspective, self-hosted coding agent.")
+                                          :capability-inventory (:loaded-system-count 3
+                                                                 :approved-policy-count 1
+                                                                 :testing-harness-count 2)
                                           :thread-refs ((:id "thread-1" :title "Default Thread" :status :active)))
                    :surface-context '(:active-workspace "conversations"
                                       :selected-conversation-section "draft"
@@ -316,46 +649,56 @@
                    :stream-p t))
          (prompt (sbcl-agent::build-openai-user-prompt request))
          (mock-response (sbcl-agent::build-mock-response request)))
-    (assert-true (search "Operator mode: :CONVERSATION" prompt)
-                 "build-openai-user-prompt should render operator mode")
-    (assert-true (search "Thread: (:ID \"thread-1\"" prompt)
-                 "build-openai-user-prompt should render thread context")
-    (assert-true (search "Environment context: (:ENVIRONMENT-ID \"env-1\"" prompt)
-                 "build-openai-user-prompt should render environment context")
-    (assert-true (search "Surface context: (:ACTIVE-WORKSPACE \"conversations\"" prompt)
-                 "build-openai-user-prompt should render surface context")
-    (assert-true (search "Available Surface actions: ((:TOOL-ID :DESKTOP/SHOW" prompt)
-                 "build-openai-user-prompt should render available surface actions")
-    (assert-true (search "Runtime summary: (:CWD \"/tmp/project\"" prompt)
-                 "build-openai-user-prompt should render runtime summary")
-    (assert-true (search "Retrieved environment dossier: (:INTENT (:CATEGORY :RUNTIME-INSPECTION)" prompt)
-                 "build-openai-user-prompt should render the retrieval dossier")
-    (assert-true (search "Canonical cognition bundle:" prompt)
-                 "build-openai-user-prompt should render the canonical cognition bundle")
+    (assert-true (search "Planning context packet: (:TASK-FRAME" prompt)
+                 "build-openai-user-prompt should render the canonical planning context packet")
+    (assert-true (search ":OPERATOR-MODE :CONVERSATION" prompt)
+                 "build-openai-user-prompt should preserve operator mode inside task framing")
+    (assert-true (search ":PLANNER-DIRECTIVES" prompt)
+                 "build-openai-user-prompt should render explicit planner directives")
+    (assert-true (search ":AUTHORITY-STATE" prompt)
+                 "build-openai-user-prompt should render authority state")
+    (assert-true (search ":ID \"thread-1\"" prompt)
+                 "build-openai-user-prompt should render thread authority state")
+    (assert-true (search ":ENVIRONMENT-ID \"env-1\"" prompt)
+                 "build-openai-user-prompt should render environment authority state")
+    (assert-true (search ":AGENT-CONSTITUTION" prompt)
+                 "build-openai-user-prompt should render the stable agent constitution")
+    (assert-true (search ":CAPABILITY-INVENTORY" prompt)
+                 "build-openai-user-prompt should render the live capability inventory")
+    (assert-true (search ":ACTIVE-WORKSPACE \"conversations\"" prompt)
+                 "build-openai-user-prompt should render surface authority state")
+    (assert-true (search ":CWD \"/tmp/project\"" prompt)
+                 "build-openai-user-prompt should render runtime authority state")
+    (assert-true (search ":DECISIVE-EVIDENCE" prompt)
+                 "build-openai-user-prompt should render decisive evidence tier")
+    (assert-true (search ":UNCERTAINTY-AND-OBLIGATIONS" prompt)
+                 "build-openai-user-prompt should render uncertainty and obligation tier")
+    (assert-true (search ":STRATEGY" prompt)
+                 "build-openai-user-prompt should render strategy tier")
+    (assert-true (search ":OUTCOME-MODE :EXPECTATION-VS-OBSERVATION" prompt)
+                 "build-openai-user-prompt should preserve outcome guidance inside strategy")
+    (assert-true (search "Treat the planning context packet as the canonical model-facing contract" prompt)
+                 "build-openai-user-prompt should explain the new canonical planning contract")
+    (assert-true (search "Use planner-directives as the explicit rule layer" prompt)
+                 "build-openai-user-prompt should tell the provider to obey explicit planner directives")
+    (assert-true (search "treat agent-constitution as the stable statement of system identity, purpose, goals, and hard constraints" prompt)
+                 "build-openai-user-prompt should explain how the provider should use the agent constitution")
+    (assert-true (search "Use decisive-evidence as the primary grounding core" prompt)
+                 "build-openai-user-prompt should tell the provider to prioritize decisive evidence")
+    (assert-true (search "Use uncertainty-and-obligations to determine what must be inspected" prompt)
+                 "build-openai-user-prompt should tell the provider to react to uncertainty explicitly")
+    (assert-true (search "Treat optional-support as secondary context" prompt)
+                 "build-openai-user-prompt should de-prioritize optional support")
     (assert-true (search ":EXECUTION-STRATEGY" prompt)
-                 "build-openai-user-prompt should render cognition execution strategy detail")
-    (assert-true (search "Reasoning brief: (:REASONING-MODE :ENVIRONMENT-GROUNDED" prompt)
-                 "build-openai-user-prompt should render the reasoning brief")
-    (assert-true (search "Planning brief: (:PLANNING-MODE :ENVIRONMENT-GROUNDED" prompt)
-                 "build-openai-user-prompt should render the planning brief")
-    (assert-true (search "Outcome brief: (:OUTCOME-MODE :EXPECTATION-VS-OBSERVATION" prompt)
-                 "build-openai-user-prompt should render the outcome brief when present")
-    (assert-true (search "Treat dossier ranking metadata as advisory prioritization" prompt)
-                 "build-openai-user-prompt should explain that ranking metadata is advisory")
-    (assert-true (search "Treat the canonical cognition bundle as the default reasoning loop" prompt)
-                 "build-openai-user-prompt should instruct the provider to follow the canonical cognition loop")
-    (assert-true (search "When the cognition bundle carries a retrieval focus plan, prioritize those domains first" prompt)
-                 "build-openai-user-prompt should instruct the provider to prioritize retrieval focus when present")
-    (assert-true (search "When the cognition bundle carries a validation plan, treat it as the concrete validation agenda" prompt)
-                 "build-openai-user-prompt should instruct the provider to follow the validation plan when present")
-    (assert-true (search "When the cognition bundle carries an action agenda, treat it as the ordered list of next steps" prompt)
-                 "build-openai-user-prompt should instruct the provider to follow the derived action agenda when present")
-    (assert-true (search "Reuse similar prior successes when they fit the current evidence" prompt)
-                 "build-openai-user-prompt should instruct the provider to reuse prior successful outcomes")
-    (assert-true (search "Use the reasoning brief to distinguish environment-backed facts" prompt)
-                 "build-openai-user-prompt should instruct the provider to reason from facts and uncertainties")
-    (assert-true (search "Use the planning brief as the default execution outline" prompt)
-                 "build-openai-user-prompt should instruct the provider to follow the environment-grounded plan by default")
+                 "build-openai-user-prompt should preserve execution strategy detail in the strategy tier")
+    (assert-true (null (search "Retrieved environment dossier:" prompt))
+                 "build-openai-user-prompt should stop dumping the raw retrieval dossier")
+    (assert-true (null (search "Canonical cognition bundle:" prompt))
+                 "build-openai-user-prompt should stop dumping the raw cognition bundle")
+    (assert-true (null (search "Reasoning brief:" prompt))
+                 "build-openai-user-prompt should stop dumping the raw reasoning brief")
+    (assert-true (null (search "Planning brief:" prompt))
+                 "build-openai-user-prompt should stop dumping the raw planning brief")
     (assert-true (search ":OPEN-INCIDENT-COUNT 1" prompt)
                  "build-openai-user-prompt should render incident posture in summaries")
     (assert-true (search "Governance directives: The environment is not currently mutation-clean." prompt)
@@ -373,6 +716,402 @@
     (assert-equal "env-1"
                   (getf (getf (sbcl-agent::assistant-response-metadata mock-response) :environment) :environment-id)
                   "mock provider responses should preserve environment context metadata")))
+
+(defun provider-planning-context-packet-directives-test ()
+  (let* ((packet (sbcl-agent::build-provider-planning-context-packet
+                  "Assess the runtime issue, determine what authoritative state is missing, and plan the safest next step."
+                  :repl-bridge
+                  t
+                  '(:current-thread-id "thread-1")
+                  nil
+                  '(:id "thread-1")
+                  '(:id "turn-1")
+                  '(:environment-id "env-1")
+                  '(:active-workspace "conversations")
+                  '((:tool-id :desktop/show :label "Inspect Surface"))
+                  '(:cwd "/tmp/project")
+                  '(:cwd "/tmp/project")
+                  '(:approved-policies (:safe-read))
+                  '(:intent (:primary-intent :analysis
+                             :task-archetype :debugging
+                             :mutation-likely-p t))
+                  (sbcl-agent::make-cognition-bundle
+                   :retrieval-dossier '(:intent (:primary-intent :analysis
+                                                :task-archetype :debugging))
+                   :reasoning-brief '(:missing-authority-facts ((:kind :missing-linked-event))
+                                     :authority-conflicts ((:kind :incident-vs-project-readiness))
+                                     :conflict-candidates ()
+                                     :blockers ()
+                                     :validation-obligations ())
+                   :planning-brief '(:ordered-steps ((:phase :inspect)))
+                   :execution-strategy '(:mode :inspection-first)
+                   :validation-strategy '(:mode :opportunistic)
+                   :validation-plan '(:entries ())
+                   :action-agenda '(:entries ()))
+                  '(:missing-authority-facts ((:kind :missing-linked-event))
+                    :authority-conflicts ((:kind :incident-vs-project-readiness))
+                    :conflict-candidates ()
+                    :blockers ()
+                    :validation-obligations ())
+                  '(:ordered-steps ((:phase :inspect)))
+                  '(:recommended-next-step :collect-evidence)))
+         (directives (getf packet :planner-directives))
+         (authority-state (getf packet :authority-state))
+         (uncertainty (getf packet :uncertainty-and-obligations)))
+    (assert-equal '(:authority-state :decisive-evidence :uncertainty-and-obligations :strategy :optional-support)
+                  (getf directives :authority-precedence)
+                  "planner directives should expose explicit authority precedence")
+    (assert-equal :escalate-before-mutate
+                  (getf directives :uncertainty-policy)
+                  "planner directives should require escalation before mutation when authority is missing")
+    (assert-equal :stabilize-before-change
+                  (getf directives :default-planning-posture)
+                  "planner directives should escalate to a stabilize-before-change posture when authoritative context is missing")
+    (assert-equal :resolve-authority-conflicts-before-mutate
+                  (getf uncertainty :default-action)
+                  "uncertainty contract should require resolving authority conflicts before mutation")
+    (assert-equal :critical
+                  (getf uncertainty :escalation-priority)
+                  "uncertainty contract should treat authority conflicts as critical escalation")
+    (assert-true (listp (getf uncertainty :authority-conflicts))
+                 "uncertainty contract should surface authority conflicts explicitly")
+    (assert-equal '(:agent-constitution
+                    :project-context
+                    :environment
+                    :policy-summary
+                    :capability-inventory
+                    :runtime-summary
+                    :workspace-summary
+                    :thread
+                    :turn
+                    :surface-context
+                    :surface-actions
+                    :optional-support)
+                  (getf authority-state :precedence)
+                  "authority-state should expose explicit source precedence")
+    (assert-true (getf uncertainty :escalation-required-p)
+                 "uncertainty tier should mark escalation required when authority is missing")
+    (assert-equal :critical
+                  (getf uncertainty :escalation-priority)
+                  "uncertainty tier should elevate missing authority to critical escalation")
+    (assert-equal :resolve-authority-conflicts-before-mutate
+                  (getf uncertainty :default-action)
+                  "uncertainty tier should expose the default escalation action")))
+
+(defun provider-planning-context-packet-archetype-shaping-test ()
+  (let* ((debug-packet
+           (sbcl-agent::build-provider-planning-context-packet
+            "Investigate the runtime failure, explain the cause, and determine what must be inspected before any change."
+            :repl-bridge
+            t
+            '(:current-thread-id "thread-debug")
+            nil
+            '(:id "thread-debug")
+            '(:id "turn-debug")
+            '(:environment-id "env-debug")
+            '(:active-workspace "runtime")
+            '((:tool-id :desktop/show :label "Inspect Runtime"))
+            '(:cwd "/tmp/project-debug")
+            '(:cwd "/tmp/project-debug")
+            '(:approved-policies (:safe-read))
+            '(:intent (:primary-intent :runtime-debugging
+                       :task-archetype :investigate-runtime-failure
+                       :requested-deliverable :analysis
+                       :mutation-likely-p nil))
+            (sbcl-agent::make-cognition-bundle
+             :retrieval-dossier '(:intent (:task-archetype :investigate-runtime-failure))
+             :reasoning-brief '(:conflict-candidates ()
+                               :missing-authority-facts ()
+                               :blockers ()
+                               :validation-obligations ())
+             :planning-brief '(:ordered-steps ((:phase :inspect) (:phase :plan)))
+             :execution-strategy '(:mode :inspection-first)
+             :validation-strategy '(:mode :opportunistic)
+             :validation-plan '(:entries ())
+             :action-agenda '(:entries ()))
+            '(:conflict-candidates ()
+              :missing-authority-facts ()
+              :blockers ()
+              :validation-obligations ())
+            '(:ordered-steps ((:phase :inspect) (:phase :plan)))
+            '(:recommended-next-step :collect-evidence)))
+         (implementation-packet
+           (sbcl-agent::build-provider-planning-context-packet
+            "Implement the fix, run the regression tests, and validate the result."
+            :repl-bridge
+            t
+            '(:current-thread-id "thread-impl")
+            nil
+            '(:id "thread-impl")
+            '(:id "turn-impl")
+            '(:environment-id "env-impl")
+            '(:active-workspace "workspace")
+            '((:tool-id :desktop/action :label "Apply Patch"))
+            '(:cwd "/tmp/project-impl")
+            '(:cwd "/tmp/project-impl")
+            '(:approved-policies (:safe-read))
+            '(:intent (:primary-intent :code-change
+                       :task-archetype :implement-and-validate
+                       :requested-deliverable :code-change-with-validation
+                       :mutation-likely-p t))
+            (sbcl-agent::make-cognition-bundle
+             :retrieval-dossier '(:intent (:task-archetype :implement-and-validate))
+             :reasoning-brief '(:conflict-candidates ()
+                               :missing-authority-facts ()
+                               :blockers ()
+                               :validation-obligations ())
+             :planning-brief '(:ordered-steps ((:phase :inspect) (:phase :mutate) (:phase :validate)))
+             :execution-strategy '(:mode :mutation-ready)
+             :validation-strategy '(:mode :required)
+             :validation-plan '(:entries ((:kind :test-suite)))
+             :action-agenda '(:entries ((:kind :patch) (:kind :validate))))
+            '(:conflict-candidates ()
+              :missing-authority-facts ()
+              :blockers ()
+              :validation-obligations ())
+            '(:ordered-steps ((:phase :inspect) (:phase :mutate) (:phase :validate)))
+            '(:recommended-next-step :patch)))
+         (debug-directives (getf debug-packet :planner-directives))
+         (implementation-directives (getf implementation-packet :planner-directives))
+         (debug-strategy (getf debug-packet :strategy))
+         (implementation-strategy (getf implementation-packet :strategy)))
+    (assert-equal :diagnostic
+                  (getf debug-directives :strategy-shape)
+                  "runtime investigation packets should declare a diagnostic strategy shape")
+    (assert-equal :implementation-with-validation
+                  (getf implementation-directives :strategy-shape)
+                  "implementation packets should declare an implementation-with-validation strategy shape")
+    (assert-equal '(:inspect :isolate :explain :plan)
+                  (getf debug-strategy :phase-order)
+                  "runtime investigation packets should prioritize diagnostic phases")
+    (assert-equal '(:inspect :plan :mutate :validate)
+                  (getf implementation-strategy :phase-order)
+                  "implementation packets should prioritize mutate/validate phases")
+    (assert-equal :diagnostic-explanation
+                  (getf debug-strategy :preferred-output-shape)
+                  "runtime investigation packets should prefer explanatory diagnostic output")
+    (assert-equal :patch-with-validation
+                  (getf implementation-strategy :preferred-output-shape)
+                  "implementation packets should prefer patch-with-validation output")
+    (assert-equal '(:authority-state :decisive-evidence :uncertainty-and-obligations :strategy :optional-support)
+                  (getf debug-directives :budget-emphasis)
+                  "runtime investigation packets should emphasize authority and uncertainty first")
+    (assert-equal '(:decisive-evidence :strategy :uncertainty-and-obligations :authority-state :optional-support)
+                  (getf implementation-directives :budget-emphasis)
+                  "implementation packets should emphasize decisive evidence and strategy first")))
+
+(defun provider-planning-context-packet-advanced-archetype-and-risk-shaping-test ()
+  (let* ((review-packet
+           (sbcl-agent::build-provider-planning-context-packet
+            "Review the architecture decisions, assess the design constraints, and recommend the best direction."
+            :repl-bridge
+            nil
+            '(:current-thread-id "thread-review")
+            nil
+            '(:id "thread-review")
+            '(:id "turn-review")
+            '(:environment-id "env-review")
+            '(:active-workspace "project")
+            '((:tool-id :desktop/show :label "Inspect Project"))
+            '(:cwd "/tmp/project-review")
+            '(:cwd "/tmp/project-review")
+            '(:approved-policies (:safe-read))
+            '(:intent (:primary-intent :project-governance
+                       :task-archetype :architecture-review
+                       :requested-deliverable :assessment
+                       :mutation-likely-p nil))
+            (sbcl-agent::make-cognition-bundle
+             :retrieval-dossier '(:intent (:task-archetype :architecture-review))
+             :reasoning-brief '(:conflict-candidates ()
+                               :missing-authority-facts ()
+                               :blockers ()
+                               :validation-obligations ())
+             :planning-brief '(:ordered-steps ((:phase :inspect) (:phase :assess) (:phase :recommend)))
+             :execution-strategy '(:mode :inspection-first)
+             :validation-strategy '(:mode :opportunistic)
+             :validation-plan '(:entries ())
+             :action-agenda '(:entries ()))
+            '(:conflict-candidates ()
+              :missing-authority-facts ()
+              :blockers ()
+              :validation-obligations ())
+            '(:ordered-steps ((:phase :inspect) (:phase :assess) (:phase :recommend)))
+            '(:recommended-next-step :conclude)))
+         (recovery-packet
+           (sbcl-agent::build-provider-planning-context-packet
+            "Recover the blocked workflow, inspect the incident, and validate that the system is stable again."
+            :repl-bridge
+            nil
+            '(:current-thread-id "thread-recovery")
+            nil
+            '(:id "thread-recovery")
+            '(:id "turn-recovery")
+            '(:environment-id "env-recovery")
+            '(:active-workspace "workflow")
+            '((:tool-id :desktop/show :label "Inspect Workflow"))
+            '(:cwd "/tmp/project-recovery")
+            '(:cwd "/tmp/project-recovery")
+            '(:approved-policies (:safe-read))
+            '(:intent (:primary-intent :incident-follow-up
+                       :task-archetype :recover-remediate
+                       :requested-deliverable :recovery-plan
+                       :mutation-likely-p t))
+            (sbcl-agent::make-cognition-bundle
+             :retrieval-dossier '(:intent (:task-archetype :recover-remediate))
+             :reasoning-brief '(:conflict-candidates ((:kind :incident-conflict))
+                               :missing-authority-facts ()
+                               :blockers ((:kind :workflow-blocker))
+                               :validation-obligations ())
+             :planning-brief '(:ordered-steps ((:phase :inspect) (:phase :recover) (:phase :validate)))
+             :execution-strategy '(:mode :governed-conservative)
+             :validation-strategy '(:mode :required)
+             :validation-plan '(:entries ((:kind :stability-check)))
+             :action-agenda '(:entries ((:kind :recover))))
+            '(:conflict-candidates ((:kind :incident-conflict))
+              :missing-authority-facts ()
+              :blockers ((:kind :workflow-blocker))
+              :validation-obligations ())
+            '(:ordered-steps ((:phase :inspect) (:phase :recover) (:phase :validate)))
+            '(:recommended-next-step :recover)))
+         (risky-implementation-packet
+           (sbcl-agent::build-provider-planning-context-packet
+            "Implement the fix and validate it against the failing workflow."
+            :repl-bridge
+            t
+            '(:current-thread-id "thread-risk")
+            nil
+            '(:id "thread-risk")
+            '(:id "turn-risk")
+            '(:environment-id "env-risk")
+            '(:active-workspace "workspace")
+            '((:tool-id :desktop/action :label "Apply Patch"))
+            '(:cwd "/tmp/project-risk")
+            '(:cwd "/tmp/project-risk")
+            '(:approved-policies (:safe-read))
+            '(:intent (:primary-intent :code-change
+                       :task-archetype :implement-and-validate
+                       :requested-deliverable :code-change-with-validation
+                       :mutation-likely-p t))
+            (sbcl-agent::make-cognition-bundle
+             :retrieval-dossier '(:intent (:task-archetype :implement-and-validate))
+             :reasoning-brief '(:conflict-candidates ()
+                               :missing-authority-facts ()
+                               :blockers ((:kind :workflow-blocker))
+                               :validation-obligations ((:kind :run-tests)))
+             :planning-brief '(:ordered-steps ((:phase :inspect) (:phase :mutate) (:phase :validate)))
+             :execution-strategy '(:mode :mutation-ready)
+             :validation-strategy '(:mode :required)
+             :validation-plan '(:entries ((:kind :test-suite)))
+             :action-agenda '(:entries ((:kind :patch) (:kind :validate))))
+            '(:conflict-candidates ()
+              :missing-authority-facts ()
+              :blockers ((:kind :workflow-blocker))
+              :validation-obligations ((:kind :run-tests)))
+            '(:ordered-steps ((:phase :inspect) (:phase :mutate) (:phase :validate)))
+            '(:recommended-next-step :patch)))
+         (review-directives (getf review-packet :planner-directives))
+         (recovery-directives (getf recovery-packet :planner-directives))
+         (review-strategy (getf review-packet :strategy))
+         (risky-directives (getf risky-implementation-packet :planner-directives))
+         (risky-strategy (getf risky-implementation-packet :strategy)))
+    (assert-equal :assessment
+                  (getf review-directives :strategy-shape)
+                  "architecture review packets should declare an assessment strategy shape")
+    (assert-equal :assessment
+                  (getf review-strategy :archetype-layout)
+                  "architecture review packets should use assessment layout")
+    (assert-equal '(:inspect :assess :recommend)
+                  (getf review-strategy :phase-order)
+                  "architecture review packets should prioritize assess/recommend phases")
+    (assert-equal :risk-managed
+                  (getf recovery-directives :strategy-shape)
+                  "recovery packets with live blockers should be upgraded to risk-managed strategy shape")
+    (assert-equal :stabilize-before-change
+                  (getf recovery-directives :default-planning-posture)
+                  "recovery packets with live blockers should switch to a stabilize-before-change posture")
+    (assert-equal '(:uncertainty-and-obligations :authority-state :decisive-evidence :strategy :optional-support)
+                  (getf recovery-directives :budget-emphasis)
+                  "recovery packets with active risk should prioritize uncertainty first")
+    (assert-equal :risk-managed
+                  (getf risky-directives :strategy-shape)
+                  "high-risk implementation packets should be upgraded to risk-managed strategy shape")
+    (assert-equal :stabilize-before-change
+                  (getf risky-directives :default-planning-posture)
+                  "high-risk implementation packets should stop using mutate-first posture")
+    (assert-equal '(:inspect :stabilize :plan :validate)
+                  (getf risky-strategy :phase-order)
+                  "high-risk implementation packets should insert stabilization before plan/validate")
+    (assert-equal :risk-managed
+                  (getf risky-strategy :archetype-layout)
+                  "high-risk implementation packets should switch to risk-managed layout")))
+
+(defun provider-request-end-to-end-planning-packet-differential-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/provider-request-differential/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/provider-request-differential/"
+                       :session session))
+         (thread (sbcl-agent::current-thread session)))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (let* ((debug-prompt "Investigate the runtime failure, explain the cause, and determine what must be inspected before any change.")
+           (debug-user (sbcl-agent::create-message session thread :user debug-prompt))
+           (debug-turn (sbcl-agent::start-turn session thread debug-user
+                                               :metadata '(:source :test)))
+           (debug-assistant (sbcl-agent::create-message session thread :assistant "pending"))
+           (_debug-complete
+             (sbcl-agent::complete-turn session thread debug-turn debug-assistant
+                                        :status :completed))
+           (debug-request
+             (sbcl-agent::make-provider-request-from-session
+              debug-prompt
+              session
+              :thread thread
+              :turn debug-turn
+              :operator-mode :repl-bridge
+              :stream-p t))
+           (implementation-prompt "Implement the fix, run the regression tests, and validate the result.")
+           (implementation-user (sbcl-agent::create-message session thread :user implementation-prompt))
+           (implementation-turn
+             (sbcl-agent::start-turn session thread implementation-user
+                                     :metadata '(:source :test)))
+           (implementation-assistant
+             (sbcl-agent::create-message session thread :assistant "pending"))
+           (_implementation-complete
+             (sbcl-agent::complete-turn session thread implementation-turn implementation-assistant
+                                        :status :completed))
+           (implementation-request
+             (sbcl-agent::make-provider-request-from-session
+              implementation-prompt
+              session
+              :thread thread
+              :turn implementation-turn
+              :operator-mode :repl-bridge
+              :stream-p t))
+           (debug-packet (sbcl-agent::provider-request-planning-context-packet debug-request))
+           (implementation-packet
+             (sbcl-agent::provider-request-planning-context-packet implementation-request))
+           (debug-directives (getf debug-packet :planner-directives))
+           (implementation-directives (getf implementation-packet :planner-directives))
+           (debug-strategy (getf debug-packet :strategy))
+           (implementation-strategy (getf implementation-packet :strategy)))
+      (declare (ignore _debug-complete _implementation-complete))
+      (assert-equal :diagnostic
+                    (getf debug-directives :strategy-shape)
+                    "runtime-investigation requests should produce a diagnostic planner shape end to end")
+      (assert-equal :implementation-with-validation
+                    (getf implementation-directives :strategy-shape)
+                    "implementation requests should produce an implementation-with-validation planner shape end to end")
+      (assert-equal '(:inspect :isolate :explain :plan)
+                    (getf debug-strategy :phase-order)
+                    "runtime-investigation requests should preserve diagnostic phase order end to end")
+      (assert-equal '(:inspect :plan :mutate :validate)
+                    (getf implementation-strategy :phase-order)
+                    "implementation requests should preserve implementation phase order end to end")
+      (assert-equal '(:authority-state :decisive-evidence :uncertainty-and-obligations :strategy :optional-support)
+                    (getf debug-directives :budget-emphasis)
+                    "runtime-investigation requests should prioritize authority/uncertainty end to end")
+      (assert-equal '(:decisive-evidence :strategy :uncertainty-and-obligations :authority-state :optional-support)
+                    (getf implementation-directives :budget-emphasis)
+                    "implementation requests should prioritize decisive evidence and strategy end to end"))))
 
 (defun calculator-control-policy-test ()
   (assert-equal :calculator-control
@@ -633,6 +1372,9 @@
       (assert-equal (sbcl-agent::provider-context-bundle-planning-brief bundle)
                     (sbcl-agent::provider-request-planning-brief request)
                     "provider request planning brief should come from the provider context bundle")
+      (assert-equal (sbcl-agent::provider-context-bundle-planning-context-packet bundle)
+                    (sbcl-agent::provider-request-planning-context-packet request)
+                    "provider request planning-context packet should come from the provider context bundle")
       (assert-equal (sbcl-agent::provider-context-bundle-outcome-brief bundle)
                     (sbcl-agent::provider-request-outcome-brief request)
                     "provider request outcome brief should come from the provider context bundle"))))
@@ -701,6 +1443,9 @@
       (assert-equal (sbcl-agent::provider-request-snapshot-planning-brief snapshot)
                     (sbcl-agent::provider-request-planning-brief request)
                     "provider request should consume the request snapshot planning brief")
+      (assert-equal (sbcl-agent::provider-request-snapshot-planning-context-packet snapshot)
+                    (sbcl-agent::provider-request-planning-context-packet request)
+                    "provider request should consume the request snapshot planning-context packet")
       (assert-equal (sbcl-agent::provider-request-snapshot-outcome-brief snapshot)
                     (sbcl-agent::provider-request-outcome-brief request)
                     "provider request should consume the request snapshot outcome brief"))))
@@ -889,8 +1634,7 @@
     (sbcl-agent::bind-session-to-environment session environment)
     (let* ((snapshot (sbcl-agent::refresh-provider-request-snapshot-cache session))
            (index (sbcl-agent::provider-request-snapshot-cached-context-index snapshot))
-           (recent-postings (copy-tree (gethash "recent" index)))
-           (runtime-postings (copy-tree (gethash "runtime" index))))
+           (recent-postings (copy-tree (gethash "recent" index))))
       (sleep 1)
       (let* ((refreshed (sbcl-agent::refresh-provider-request-snapshot-cache
                          session

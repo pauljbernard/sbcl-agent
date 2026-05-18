@@ -177,7 +177,12 @@
   (when context
     (list :current-project-id (getf context :current-project-id)
           :project-count (getf context :project-count)
+          :selected-project-source (getf context :selected-project-source)
+          :ambiguity-risk (getf context :ambiguity-risk)
+          :selection-confident-p (getf context :selection-confident-p)
+          :selection-posture (copy-tree (or (getf context :selection-posture) '()))
           :projects (getf context :projects)
+          :linked-projects (compact-list (or (getf context :linked-projects) '()) 6)
           :summary (getf context :summary)
           :constitution (let ((constitution (getf context :constitution)))
                           (and constitution
@@ -193,6 +198,8 @@
           :linked-incidents (compact-list (or (getf context :linked-incidents) '()) 6)
           :linked-testing-harnesses (compact-list (or (getf context :linked-testing-harnesses) '()) 6)
           :testing-evidence (getf context :testing-evidence)
+          :readiness-summary (copy-tree (or (getf context :readiness-summary) '()))
+          :readiness-obligations (compact-list (or (getf context :readiness-obligations) '()) 6)
           :quality-gate-evidence (getf context :quality-gate-evidence)
           :design-system (let ((design-system (getf context :design-system)))
                            (and design-system
@@ -302,6 +309,11 @@
 (defun copy-retrieval-intent-with-domains (intent domains)
   (make-retrieval-intent
    :category (retrieval-intent-category intent)
+   :primary-intent (retrieval-intent-primary-intent intent)
+   :secondary-intents (copy-list (or (retrieval-intent-secondary-intents intent) '()))
+   :task-archetype (retrieval-intent-task-archetype intent)
+   :requested-deliverable (retrieval-intent-requested-deliverable intent)
+   :phase-intent (retrieval-intent-phase-intent intent)
    :domains domains
    :historical-p (retrieval-intent-historical-p intent)
    :intent-context-p (or (retrieval-intent-intent-context-p intent)
@@ -390,7 +402,7 @@
      :testing-context (when (find :testing domains :test #'eq)
                         (build-testing-dossier-section session prompt plan))
      :project-context (when (find :project domains :test #'eq)
-                        (build-project-dossier-section session plan))
+                        (build-project-dossier-section session prompt plan))
      :source-context (when (find :workspace domains :test #'eq)
                        (build-source-dossier-section session prompt plan))
      :trace-context (when (or (find :intent domains :test #'eq)
@@ -402,7 +414,7 @@
                                                    (when (find :intent domains :test #'eq)
                                                      (build-intent-dossier-section session plan))
                                                    (when (find :project domains :test #'eq)
-                                                     (build-project-dossier-section session plan))
+                                                     (build-project-dossier-section session prompt plan))
                                                    (when (find :workflow domains :test #'eq)
                                                      (build-workflow-dossier-section session plan))
                                                    (when (find :incident domains :test #'eq)
@@ -419,6 +431,11 @@
         (plan (retrieval-dossier-plan dossier)))
     (list :phase (retrieval-dossier-phase dossier)
           :intent (list :category (retrieval-intent-category intent)
+                        :primary-intent (retrieval-intent-primary-intent intent)
+                        :secondary-intents (copy-list (or (retrieval-intent-secondary-intents intent) '()))
+                        :task-archetype (retrieval-intent-task-archetype intent)
+                        :requested-deliverable (retrieval-intent-requested-deliverable intent)
+                        :phase-intent (retrieval-intent-phase-intent intent)
                         :domains (retrieval-intent-domains intent)
                         :historical-p (retrieval-intent-historical-p intent)
                         :intent-context-p (retrieval-intent-intent-context-p intent)
@@ -441,6 +458,7 @@
                       :semantic-ranking-p (retrieval-plan-semantic-ranking-p plan)
                       :explanation (retrieval-plan-explanation plan))
           :ranking (retrieval-dossier-ranking dossier)
+          :decisive-context-core (retrieval-dossier-decisive-context-core dossier)
           :observed-consequences (retrieval-dossier-observed-consequences dossier)
           :conversation-context (summarized-conversation-context
                                  (retrieval-dossier-conversation-context dossier))
@@ -663,7 +681,9 @@
                                                         action-results
                                                         :operator-mode operator-mode)))
     (setf (retrieval-dossier-ranking dossier)
-          (build-retrieval-ranking prompt dossier))
+          (build-retrieval-ranking prompt dossier)
+          (retrieval-dossier-decisive-context-core dossier)
+          (build-decisive-context-core dossier))
     (make-service-query-response :retrieval
                                  :dossier
                                  (retrieval-dossier->plist dossier)

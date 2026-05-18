@@ -153,3 +153,29 @@
                                    :metadata (make-service-metadata :authority :environment
                                                                     :read-model :console-stream-v1
                                                                     :environment active-environment)))))
+
+(defun command-console-log-stream-query-service (&key environment after-cursor limit type source)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request
+      active-environment
+      :console-stream-query
+      :console/stream
+      :payload (list :after-cursor after-cursor
+                     :limit limit
+                     :type type
+                     :source source))
+     (lambda ()
+       (command-kernel-invoke-service
+        (environment-control-session active-environment)
+        "Inspect console stream."
+        "console/stream"
+        :authority :environment
+        :environment active-environment
+        :payload (list :after-cursor after-cursor
+                       :limit limit
+                       :type type
+                       :source source)))
+     :console/stream
+     :console-stream-query)))

@@ -114,6 +114,16 @@ The current implementation now includes concrete service modules for:
 - RGP bind/show/export/artifacts/approvals/approve/resume
 - event-stream queries for UX-facing observation
 
+The project and planning context layer now also needs to be treated as part of the stable public interface, not as internal prompt assembly.
+
+That means presentation tiers should be able to rely on governed service contracts for:
+
+- governed project list and detail
+- project constitutions, requirements, design guidance, and readiness posture
+- environment-scoped context-chat project targeting
+- planner-grade environment summaries that expose `agent-constitution` and `capability-inventory`
+- retrieval dossiers and planning-context packet inputs that already reflect authority precedence and contradiction-aware uncertainty
+
 The provider configuration and routing surface is now also exposed through stable service contracts:
 
 - `query-environment-provider-service`
@@ -145,6 +155,15 @@ That execution family matters because it is now the shared mutation and interact
 
 That removes one of the most important shell-first assumptions from the older design: the shell is no longer the only place where interaction and mutation semantics are assembled.
 
+The current service boundary now also matters for planning and context engineering because the desktop and any future remote UX should not reconstruct planning context on their own. The public layer already exposes the durable inputs required for robust planning:
+
+- environment summary and status
+- project records and linked work posture
+- actor-system hierarchy and supervision state
+- retrieval dossier assembly
+- provider route preview and active route posture
+- context-chat project targeting state
+
 ## Query And Command Split
 
 The public interface should separate:
@@ -160,6 +179,13 @@ Commands should:
 - create operation and workflow evidence
 - surface approval requirements explicitly
 - emit canonical events for UI refresh and audit
+
+Where a read model participates in planning or operator orientation, it should also make authority and context selection visible instead of burying them in ad hoc payload fragments. In practice that means clients should be able to observe:
+
+- environment authority binding
+- current or explicit project targeting
+- capability readiness posture
+- contradiction or uncertainty posture when the relevant service family owns it
 
 ## Security Rule
 

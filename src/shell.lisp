@@ -47,13 +47,15 @@
   (format t "  (desktop-task/actor-system-panel [:session-id \"session-id\"]) Show the live actor-system hierarchy, workflow edges, metrics, and supervision state.~%")
   (format t "  (desktop-task/supervision-incidents [:session-id \"session-id\"] [:actor-id \"actor/runtime\"] [:mailbox :runtime-inbox]) Show actor supervision incidents.~%")
   (format t "  (desktop-task/fail-mailbox-entry :mailbox :keyword :mailbox-entry-id \"entry-id\" [:summary \"...\"] [:condition-string \"...\"] [:supervision-action :keyword]) Mark one actor mailbox entry failed and record a supervision incident.~%")
-  (format t "  (desktop-task/apply-supervision-action \"incident-id\" [:action :dead-letter|:quarantine|:restart-child|:replace-child] [:note \"...\"]) Apply one parent-directed supervision action to a failed mailbox entry.~%")
+  (format t "  (desktop-task/apply-supervision-action \"incident-id\" [:action :recommended|:dead-letter|:quarantine|:restart-child|:replace-child|:resume-from-checkpoint|:resume-work-item|:complete-validations|:rollback-work-item] [:note \"...\"]) Apply one parent-directed or workflow-derived supervision action to a failed mailbox entry.~%")
   (format t "  (desktop-task/inbox :actor-role :keyword [:status :keyword]) Show one capability actor inbox from governed task records.~%")
   (format t "  (desktop-task/outbox :actor-role :keyword [:status :keyword]) Show one actor outbox from governed task records.~%")
   (format t "  (desktop-task/message \"actor-message-id\") Show one actor message via its governed task record.~%")
   (format t "  (desktop-task/editor-mailbox [:session-id \"session-id\"] [:pending-action-id \"id\"] [:status :keyword] [:approval-status :keyword] [:scope-id \"scope\"] [:latest-only-p t]) Show the editor actor mailbox keyed by editor pending-action ids.~%")
   (format t "  (desktop-task/editor-pending-mutations [:session-id \"session-id\"] [:pending-action-id \"id\"] [:status :keyword] [:approval-status :keyword] [:scope-id \"scope\"] [:latest-only-p t]) Show the editor actor pending mutation mailbox before and after governance approval.~%")
   (format t "  (desktop-task/context-chat-mailbox [:session-id \"session-id\"] [:status :keyword] [:approval-status :keyword] [:latest-only-p t]) Show the Context Chat actor mailbox keyed by session id.~%")
+  (format t "  (desktop-task/context-chat-context) Show the explicit project targeting state for the Context Chat actor.~%")
+  (format t "  (desktop-task/set-context-chat-projects :project-ids '(\"project-a\" \"project-b\") [:primary-project-id \"project-a\"]) Set or clear explicit project targeting for the Context Chat actor. Use an empty list to clear targeting.~%")
   (format t "  (desktop-task/context-chat-approval-inbox [:session-id \"session-id\"] [:latest-only-p t]) Show governance-issued approval requests addressed to the Context Chat actor.~%")
   (format t "  (desktop-task/ack-context-chat-approval \"approval-id\" [:session-id \"session-id\"] [:actor-message-id \"id\"] [:mailbox-entry-id \"entry-id\"]) Acknowledge one Context Chat approval-inbox message by approval id.~%")
   (format t "  (desktop-task/editor-authorizations [:session-id \"session-id\"] [:pending-action-id \"id\"] [:scope-id \"scope\"] [:latest-only-p t]) Show governance-authorized pending editor mutations keyed by pending action id.~%")
@@ -151,6 +153,15 @@
   (format t "  (describe-work-item-plan \"work-id\") Show the current long-horizon plan and steering state for one work-item.~%")
   (format t "  (list-workflow-records)           Show workflow records for the current session.~%")
   (format t "  (describe-workflow-record \"wf-id\") Show one workflow record with its durable log entries.~%")
+  (format t "  (list-plans)                      Show durable plan summaries for the current session.~%")
+  (format t "  (list-orchestrations)             Show compact orchestration posture for all durable plans.~%")
+  (format t "  (list-orchestration-inbox)        Show actionable plans waiting on approval, review, or resume.~%")
+  (format t "  (describe-plan [\"plan-id\"])      Show one plan detail record, defaulting to the active plan.~%")
+  (format t "  (describe-active-plan)            Show the active plan detail record.~%")
+  (format t "  (describe-plan-workflow [\"plan-id\"]) Show the workflow record linked to a plan.~%")
+  (format t "  (describe-orchestration-focus [:plan-id \"...\"] [:workflow-record-id \"...\"] [:work-item-id \"...\"]) Resolve orchestration from plan, workflow, or work-item context.~%")
+  (format t "  (describe-orchestration-snapshot [\"plan-id\"]) Show joined plan/workflow orchestration state.~%")
+  (format t "  (describe-plan-verification [\"plan-id\"]) Show verification and reconciliation state for a plan.~%")
   (format t "  (request-work-item-approval \"work-id\" :policy [:reason \"...\"]) Mark a work-item as waiting for approval.~%")
   (format t "  (quarantine-work-item \"work-id\" \"reason\") Quarantine a work-item for operator review.~%")
   (format t "  (resume-work-item \"work-id\" [:note \"...\"]) Resume a quarantined or waiting work-item.~%")
@@ -406,6 +417,31 @@
                                                    :status status
                                                    :approval-status approval-status
                                                    :latest-only-p latest-only-p)))))
+
+(defun execute-desktop-task-context-chat-context-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Show the explicit project targeting state for Context Chat."
+                                  "desktop-task/context-chat-context"
+                                  :payload '())))
+
+(defun execute-desktop-task-set-context-chat-projects-command (arguments session)
+  (let* ((raw-project-ids (or (getf arguments :project-ids)
+                              (and (listp (first arguments))
+                                   (first arguments))
+                              '()))
+         (project-ids (if (and (consp raw-project-ids)
+                               (eq (first raw-project-ids) 'quote)
+                               (consp (rest raw-project-ids)))
+                          (second raw-project-ids)
+                          raw-project-ids))
+        (primary-project-id (getf arguments :primary-project-id)))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Set explicit project targeting for Context Chat."
+                                    "desktop-task/set-context-chat-projects"
+                                    :payload (list :project-ids project-ids
+                                                   :primary-project-id primary-project-id)))))
 
 (defun execute-desktop-task-editor-pending-mutations-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -1606,6 +1642,39 @@
               command-name
               workflow-or-execution-id)))))
 
+(defun resolve-shell-plan-id (session plan-or-execution-id command-name)
+  (let ((handle (resolve-shell-execution-handle session plan-or-execution-id)))
+    (cond
+      ((null handle) plan-or-execution-id)
+      ((execution-handle-target-value handle :plan-id)
+       (execution-handle-target-value handle :plan-id))
+      ((execution-handle-target-value handle :workflow-record-id)
+       (let* ((workflow-record-id (execution-handle-target-value handle :workflow-record-id))
+              (workflow-record (find-workflow-record session workflow-record-id))
+              (plan-id (and workflow-record
+                            (workflow-record-plan-id workflow-record))))
+         (unless plan-id
+           (error "~A execution ~A does not resolve to a plan"
+                  command-name
+                  plan-or-execution-id))
+         plan-id))
+      ((execution-handle-target-value handle :work-item-id)
+       (let* ((work-item-id (execution-handle-target-value handle :work-item-id))
+              (work-item (find-work-item session work-item-id))
+              (workflow-record (and work-item
+                                    (work-item-workflow-record session work-item)))
+              (plan-id (and workflow-record
+                            (workflow-record-plan-id workflow-record))))
+         (unless plan-id
+           (error "~A execution ~A does not resolve to a plan"
+                  command-name
+                  plan-or-execution-id))
+         plan-id))
+      (t
+       (error "~A execution ~A is not bound to a plan"
+              command-name
+              plan-or-execution-id)))))
+
 (defun resolve-shell-incident-id (session incident-or-execution-id command-name)
   (let ((handle (resolve-shell-execution-handle session incident-or-execution-id)))
     (cond
@@ -2060,6 +2129,112 @@
       (error "DESCRIBE-WORKFLOW-RECORD requires a string workflow record id"))
     (service-response-data
      (query-workflow-record-detail-service session workflow-record-id))))
+
+(defun execute-list-plans-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List durable plans."
+                                  "planning/plans")))
+
+(defun execute-list-orchestrations-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List compact orchestration posture."
+                                  "planning/orchestrations")))
+
+(defun execute-list-orchestration-inbox-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "List actionable orchestration inbox entries."
+                                  "planning/orchestration-inbox")))
+
+(defun execute-describe-orchestration-focus-command (arguments session)
+  (let ((plan-id (getf arguments :plan-id))
+        (workflow-record-id (getf arguments :workflow-record-id))
+        (work-item-id (getf arguments :work-item-id)))
+    (when (and plan-id workflow-record-id)
+      (error "DESCRIBE-ORCHESTRATION-FOCUS accepts only one of :plan-id, :workflow-record-id, or :work-item-id"))
+    (when (and plan-id work-item-id)
+      (error "DESCRIBE-ORCHESTRATION-FOCUS accepts only one of :plan-id, :workflow-record-id, or :work-item-id"))
+    (when (and workflow-record-id work-item-id)
+      (error "DESCRIBE-ORCHESTRATION-FOCUS accepts only one of :plan-id, :workflow-record-id, or :work-item-id"))
+    (when (and plan-id (not (stringp plan-id)))
+      (error "DESCRIBE-ORCHESTRATION-FOCUS requires a string :plan-id when provided"))
+    (when (and workflow-record-id (not (stringp workflow-record-id)))
+      (error "DESCRIBE-ORCHESTRATION-FOCUS requires a string :workflow-record-id when provided"))
+    (when (and work-item-id (not (stringp work-item-id)))
+      (error "DESCRIBE-ORCHESTRATION-FOCUS requires a string :work-item-id when provided"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Resolve orchestration from plan, workflow, or work-item context."
+                                    "planning/orchestration-focus"
+                                    :payload (append (and plan-id (list :plan-id plan-id))
+                                                     (and workflow-record-id
+                                                          (list :workflow-record-id workflow-record-id))
+                                                     (and work-item-id
+                                                          (list :work-item-id work-item-id)))))))
+
+(defun execute-describe-plan-command (arguments session)
+  (let ((plan-id (and (first arguments)
+                      (resolve-shell-plan-id session
+                                             (first arguments)
+                                             "DESCRIBE-PLAN"))))
+    (when (and plan-id (not (stringp plan-id)))
+      (error "DESCRIBE-PLAN requires a string plan id when provided"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Describe a durable plan."
+                                    "planning/plan"
+                                    :payload (and plan-id
+                                                  (list :plan-id plan-id))))))
+
+(defun execute-describe-active-plan-command (session)
+  (service-response-data
+   (command-kernel-invoke-service session
+                                  "Describe the active durable plan."
+                                  "planning/active-plan")))
+
+(defun execute-describe-plan-workflow-command (arguments session)
+  (let ((plan-id (and (first arguments)
+                      (resolve-shell-plan-id session
+                                             (first arguments)
+                                             "DESCRIBE-PLAN-WORKFLOW"))))
+    (when (and plan-id (not (stringp plan-id)))
+      (error "DESCRIBE-PLAN-WORKFLOW requires a string plan id when provided"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Describe the workflow linked to a plan."
+                                    "planning/linked-workflow"
+                                    :payload (and plan-id
+                                                  (list :plan-id plan-id))))))
+
+(defun execute-describe-orchestration-snapshot-command (arguments session)
+  (let ((plan-id (and (first arguments)
+                      (resolve-shell-plan-id session
+                                             (first arguments)
+                                             "DESCRIBE-ORCHESTRATION-SNAPSHOT"))))
+    (when (and plan-id (not (stringp plan-id)))
+      (error "DESCRIBE-ORCHESTRATION-SNAPSHOT requires a string plan id when provided"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Describe joined plan/workflow orchestration state."
+                                    "planning/orchestration-snapshot"
+                                    :payload (and plan-id
+                                                  (list :plan-id plan-id))))))
+
+(defun execute-describe-plan-verification-command (arguments session)
+  (let ((plan-id (and (first arguments)
+                      (resolve-shell-plan-id session
+                                             (first arguments)
+                                             "DESCRIBE-PLAN-VERIFICATION"))))
+    (when (and plan-id (not (stringp plan-id)))
+      (error "DESCRIBE-PLAN-VERIFICATION requires a string plan id when provided"))
+    (service-response-data
+     (command-kernel-invoke-service session
+                                    "Describe plan verification and reconciliation state."
+                                    "planning/verification"
+                                    :payload (and plan-id
+                                                  (list :plan-id plan-id))))))
 (defun execute-request-work-item-approval-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
                                                   (first arguments)
@@ -2459,6 +2634,16 @@
       (:desktop-task-context-chat-mailbox
        (values (execute-desktop-task-context-chat-mailbox-command (command-arguments command) active-session)
                :desktop-task-context-chat-mailbox
+               active-session
+               provider))
+      (:desktop-task-context-chat-context
+       (values (execute-desktop-task-context-chat-context-command active-session)
+               :desktop-task-context-chat-context
+               active-session
+               provider))
+      (:desktop-task-set-context-chat-projects
+       (values (execute-desktop-task-set-context-chat-projects-command (command-arguments command) active-session)
+               :desktop-task-set-context-chat-projects
                active-session
                provider))
       (:desktop-task-context-chat-approval-inbox
@@ -2924,6 +3109,42 @@
       (:describe-workflow-record
        (values (execute-describe-workflow-record-command (command-arguments command) active-session)
                :describe-workflow-record
+               active-session))
+      (:list-plans
+       (values (execute-list-plans-command active-session)
+               :list-plans
+               active-session))
+      (:list-orchestrations
+       (values (execute-list-orchestrations-command active-session)
+               :list-orchestrations
+               active-session))
+      (:list-orchestration-inbox
+       (values (execute-list-orchestration-inbox-command active-session)
+               :list-orchestration-inbox
+               active-session))
+      (:describe-orchestration-focus
+       (values (execute-describe-orchestration-focus-command (command-arguments command) active-session)
+               :describe-orchestration-focus
+               active-session))
+      (:describe-plan
+       (values (execute-describe-plan-command (command-arguments command) active-session)
+               :describe-plan
+               active-session))
+      (:describe-active-plan
+       (values (execute-describe-active-plan-command active-session)
+               :describe-active-plan
+               active-session))
+      (:describe-plan-workflow
+       (values (execute-describe-plan-workflow-command (command-arguments command) active-session)
+               :describe-plan-workflow
+               active-session))
+      (:describe-orchestration-snapshot
+       (values (execute-describe-orchestration-snapshot-command (command-arguments command) active-session)
+               :describe-orchestration-snapshot
+               active-session))
+      (:describe-plan-verification
+       (values (execute-describe-plan-verification-command (command-arguments command) active-session)
+               :describe-plan-verification
                active-session))
       (:request-work-item-approval
        (values (execute-request-work-item-approval-command (command-arguments command) active-session)
@@ -3449,6 +3670,11 @@
      (format t "desktop-task-context-chat-mailbox> session=~A message-count=~D~%"
              (or (getf result :session-id) :none)
              (or (getf result :message-count) 0))
+     (when (listp (getf result :project-selection))
+       (format t "  project-selection=~A primary=~A projects=~S~%"
+               (or (getf (getf result :project-selection) :selection-source) :none)
+               (or (getf (getf result :project-selection) :primary-project-id) :none)
+               (or (getf (getf result :project-selection) :selected-project-ids) '())))
      (dolist (entry (or (getf result :messages) '()))
        (format t "context-chat-message> approval=~A pending-action=~A actor-message=~A target=~A operation=~A status=~A governance=~A approval-status=~A~%"
                (or (getf entry :approval-id) :none)
@@ -3459,6 +3685,28 @@
                (or (getf entry :status) :unknown)
                (or (getf entry :governance-status) :unknown)
                (or (getf entry :approval-status) :unknown)))
+     (finish-output))
+    (:desktop-task-context-chat-context
+     (format t "desktop-task-context-chat-context> session=~A selection=~A project-count=~D primary=~A~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :selection-source) :none)
+             (or (getf result :project-count) 0)
+             (or (getf result :primary-project-id) :none))
+     (dolist (project (or (getf result :selected-projects) '()))
+       (format t "context-chat-project> id=~A title=~A~%"
+               (or (getf project :id) :none)
+               (or (getf project :title) :none)))
+     (finish-output))
+    (:desktop-task-set-context-chat-projects
+     (format t "desktop-task-set-context-chat-projects> session=~A selection=~A project-count=~D primary=~A~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :selection-source) :none)
+             (or (getf result :project-count) 0)
+             (or (getf result :primary-project-id) :none))
+     (dolist (project (or (getf result :selected-projects) '()))
+       (format t "context-chat-project> id=~A title=~A~%"
+               (or (getf project :id) :none)
+               (or (getf project :title) :none)))
      (finish-output))
     (:desktop-task-governance-decisions
      (format t "desktop-task-governance-decisions> session=~A decision-count=~D~%"
@@ -3541,13 +3789,15 @@
              (or (getf result :session-id) :none)
              (or (getf result :incident-count) 0))
      (dolist (incident (or (getf result :incidents) '()))
-       (format t "supervision-incident> id=~A actor=~A parent=~A mailbox=~A mailbox-entry=~A action=~A open=~A~%"
+       (format t "supervision-incident> id=~A actor=~A parent=~A mailbox=~A mailbox-entry=~A action=~A recommended=~A state-class=~A open=~A~%"
                (or (getf incident :incident-id) :none)
                (or (getf incident :actor-id) :none)
                (or (getf incident :parent-actor-id) :none)
                (or (getf incident :mailbox) :none)
                (or (getf incident :mailbox-entry-id) :none)
                (or (getf incident :supervision-action) :none)
+               (or (getf incident :recommended-supervision-action) :none)
+               (or (getf incident :workflow-state-class) :none)
                (not (null (getf incident :open-p)))))
      (finish-output))
     (:desktop-task-fail-mailbox-entry
@@ -3559,8 +3809,9 @@
              (or (getf (getf result :mailbox-entry) :delivery-status) :unknown))
      (finish-output))
     (:desktop-task-apply-supervision-action
-     (format t "desktop-task-apply-supervision-action> incident=~A action=~A mailbox=~A mailbox-entry=~A delivery=~A incident-status=~A~%"
+     (format t "desktop-task-apply-supervision-action> incident=~A requested=~A action=~A mailbox=~A mailbox-entry=~A delivery=~A incident-status=~A~%"
              (or (getf (getf result :incident) :incident-id) :none)
+             (or (getf result :requested-action) :none)
              (or (getf result :action) :none)
              (or (getf result :mailbox) :none)
              (or (getf (getf result :mailbox-entry) :mailbox-entry-id) :none)
@@ -4376,6 +4627,151 @@
                (or (getf (getf result :execution-surface) :status) :unknown)
                (or (getf (getf result :execution-surface) :execution-id) :none)))
      (finish-output))
+    (:describe-plan
+     (format t "plan> ~A status=~A goal=~A steps=~D workflow=~A active=~A~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :status) :unknown)
+             (or (getf result :goal) "<none>")
+             (length (or (getf result :steps) '()))
+             (or (getf result :workflow-record-id) :none)
+             (or (getf result :active-plan-p) nil))
+     (finish-output))
+    (:describe-active-plan
+     (format t "active-plan> ~A status=~A goal=~A steps=~D workflow=~A~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :status) :unknown)
+             (or (getf result :goal) "<none>")
+             (length (or (getf result :steps) '()))
+             (or (getf result :workflow-record-id) :none))
+     (finish-output))
+    (:describe-plan-workflow
+     (format t "plan-workflow> plan=~A workflow=~A status=~A~%"
+             (or (getf result :plan-id) :none)
+             (or (getf result :workflow-record-id) :none)
+             (or (getf (getf result :workflow-record) :status) :unknown))
+     (finish-output))
+    (:describe-orchestration-focus
+     (format t "orchestration-focus> resolved-by=~A plan=~A workflow=~A work-item=~A status=~A active=~A~%"
+             (or (getf result :resolved-by) :none)
+             (or (getf result :id) "<unknown>")
+             (or (getf result :resolved-workflow-record-id)
+                 (getf result :workflow-record-id)
+                 :none)
+             (or (getf result :resolved-work-item-id) :none)
+             (or (getf result :status) :unknown)
+             (or (getf result :active-plan-p) nil))
+     (when (getf result :primary-command)
+       (format t "orchestration-focus-command> primary=~A kind=~A label=~A available=~D~%"
+               (or (getf result :primary-command-operator)
+                   (getf (getf result :primary-command) :operator)
+                   :none)
+               (or (getf result :primary-command-kind)
+                   (getf (getf result :primary-command) :kind)
+                   :none)
+               (or (getf result :primary-command-label)
+                   (getf (getf result :primary-command) :label)
+                   :none)
+               (or (getf result :available-command-count)
+                   (length (or (getf result :available-commands) '())))))
+     (when (getf result :available-command-summaries)
+       (format t "orchestration-focus-actions> ~{~A~^, ~}~%"
+               (mapcar (lambda (command)
+                         (or (getf command :label)
+                             (getf command :operator)
+                             "<unknown>"))
+                       (getf result :available-command-summaries))))
+     (when (getf result :latest-step-summary)
+       (format t "orchestration-focus-step> id=~A verification=~A capability=~A target=~A operation=~A~%"
+               (or (getf (getf result :latest-step-summary) :step-id) :none)
+               (or (getf (getf result :latest-step-summary) :verification-status) :unknown)
+               (or (getf (getf result :latest-step-summary) :capability) :none)
+               (or (getf (getf result :latest-step-summary) :target) :none)
+               (or (getf (getf result :latest-step-summary) :operation) :none)))
+     (finish-output))
+    (:describe-orchestration-snapshot
+     (format t "orchestration> plan=~A status=~A workflow=~A workflow-status=~A active=~A~%"
+             (or (getf result :id) "<unknown>")
+             (or (getf result :status) :unknown)
+             (or (getf (getf result :workflow-record-summary) :id)
+                 (getf result :workflow-record-id)
+                 :none)
+             (or (getf (getf result :workflow-record-summary) :status) :unknown)
+             (or (getf result :active-plan-p) nil))
+     (when (getf result :primary-command)
+       (format t "orchestration-command> primary=~A kind=~A label=~A available=~D~%"
+               (or (getf result :primary-command-operator)
+                   (getf (getf result :primary-command) :operator)
+                   :none)
+               (or (getf result :primary-command-kind)
+                   (getf (getf result :primary-command) :kind)
+                   :none)
+               (or (getf result :primary-command-label)
+                   (getf (getf result :primary-command) :label)
+                   :none)
+               (or (getf result :available-command-count)
+                   (length (or (getf result :available-commands) '())))))
+     (when (getf result :available-command-summaries)
+       (format t "orchestration-actions> ~{~A~^, ~}~%"
+               (mapcar (lambda (command)
+                         (or (getf command :label)
+                             (getf command :operator)
+                             "<unknown>"))
+                       (getf result :available-command-summaries))))
+     (when (getf result :posture-summary)
+       (format t "orchestration-posture> waiting-on=~A approval-required=~A approvals=~D pending-validations=~D next-action=~A~%"
+               (or (getf (getf result :posture-summary) :waiting-on) :none)
+               (or (getf (getf result :posture-summary) :approval-required-p) nil)
+               (or (getf (getf result :posture-summary) :approval-requirement-count) 0)
+               (or (getf (getf result :posture-summary) :pending-validation-count) 0)
+               (or (getf (getf result :posture-summary) :next-action) :none)))
+     (when (getf result :latest-step-summary)
+       (format t "orchestration-step> id=~A status=~A verification=~A capability=~A target=~A operation=~A actor=~A~%"
+               (or (getf (getf result :latest-step-summary) :step-id) :none)
+               (or (getf (getf result :latest-step-summary) :status) :unknown)
+               (or (getf (getf result :latest-step-summary) :verification-status) :unknown)
+               (or (getf (getf result :latest-step-summary) :capability) :none)
+               (or (getf (getf result :latest-step-summary) :target) :none)
+               (or (getf (getf result :latest-step-summary) :operation) :none)
+               (or (getf (getf result :latest-step-summary) :assigned-actor) :none)))
+     (finish-output))
+    (:describe-plan-verification
+     (format t "plan-verification> plan=~A status=~A workflow=~A workflow-status=~A verified=~D failed=~D pending=~D~%"
+             (or (getf result :plan-id) "<unknown>")
+             (or (getf result :plan-status) :unknown)
+             (or (getf result :workflow-record-id) :none)
+             (or (getf result :workflow-status) :unknown)
+             (or (getf result :verified-step-count) 0)
+             (or (getf result :failed-step-count) 0)
+             (or (getf result :pending-step-count) 0))
+     (dolist (step (or (getf result :steps) '()))
+       (format t "plan-step-verification> id=~A status=~A verification=~A reconciliation=~A~%"
+               (or (getf step :step-id) :none)
+               (or (getf step :status) :unknown)
+               (or (getf step :verification-status) :unknown)
+               (or (getf step :reconciliation-status) :none))
+       (let ((runtime-post-state
+               (getf (getf step :evidence-summary) :runtime-post-state)))
+         (when runtime-post-state
+           (format t "plan-step-runtime> package=~A runtime=~A fboundp=~A divergence=~A loaded=~A~%"
+                   (or (getf runtime-post-state :package) :none)
+                   (or (getf runtime-post-state :runtime-id) :none)
+                   (or (getf runtime-post-state :fboundp) :none)
+                   (or (getf runtime-post-state :divergence) :none)
+                   (or (getf runtime-post-state :loaded-system-count) :none))))
+       (when (getf (getf step :evidence-summary) :defined-name)
+         (format t "plan-step-symbol> defined=~A reason=~A~%"
+                 (or (getf (getf step :evidence-summary) :defined-name) :none)
+                 (or (getf (getf step :evidence-summary) :reason) :none)))
+       (when (or (getf (getf step :evidence-summary) :target)
+                 (getf (getf step :evidence-summary) :operation)
+                 (getf (getf step :evidence-summary) :capability))
+         (format t "plan-step-workspace> target=~A operation=~A capability=~A target-observed=~A operation-observed=~A~%"
+                 (or (getf (getf step :evidence-summary) :target) :none)
+                 (or (getf (getf step :evidence-summary) :operation) :none)
+                 (or (getf (getf step :evidence-summary) :capability) :none)
+                 (or (getf (getf step :evidence-summary) :target-observed-p) nil)
+                 (or (getf (getf step :evidence-summary) :operation-observed-p) nil))))
+     (finish-output))
     (:review-mutation
      (format t "mutation-review> turn=~A status=~A operations=~D artifacts=~D incidents=~D~%"
              (or (getf (getf result :turn) :id) "<unknown>")
@@ -4488,7 +4884,71 @@
              (or (getf result :package) :none)
              (or (getf (getf result :object-detail) :kind) :unknown))
      (finish-output))
-    ((:thread-new :thread-list :thread-use :list-work-items :list-workflow-records :quarantine-work-item :resume-work-item :steer-work-item-plan :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approve :integration-rgp-resume)
+    (:list-orchestrations
+     (dolist (entry (or result '()))
+       (format t "orchestration-list> plan=~A status=~A workflow=~A workflow-status=~A waiting-on=~A approval-required=~A verified=~D failed=~D pending=~D~%"
+               (or (getf entry :id) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :workflow-record-id) :none)
+               (or (getf entry :workflow-status) :unknown)
+               (or (getf (getf entry :posture-summary) :waiting-on) :none)
+               (or (getf (getf entry :posture-summary) :approval-required-p) nil)
+               (or (getf (getf entry :verification-summary) :verified-step-count) 0)
+               (or (getf (getf entry :verification-summary) :failed-step-count) 0)
+               (or (getf (getf entry :verification-summary) :pending-step-count) 0))
+       (when (getf entry :latest-step-summary)
+         (format t "orchestration-list-step> step=~A status=~A verification=~A capability=~A target=~A operation=~A~%"
+                 (or (getf (getf entry :latest-step-summary) :step-id) :none)
+                 (or (getf (getf entry :latest-step-summary) :status) :unknown)
+                 (or (getf (getf entry :latest-step-summary) :verification-status) :unknown)
+                 (or (getf (getf entry :latest-step-summary) :capability) :none)
+                 (or (getf (getf entry :latest-step-summary) :target) :none)
+                 (or (getf (getf entry :latest-step-summary) :operation) :none))))
+     (finish-output))
+    (:list-orchestration-inbox
+     (dolist (entry (or result '()))
+       (format t "orchestration-inbox> plan=~A status=~A workflow=~A waiting-on=~A action=~A urgency=~A approval-required=~A failed=~D pending=~D~%"
+               (or (getf entry :id) :none)
+               (or (getf entry :status) :unknown)
+               (or (getf entry :workflow-record-id) :none)
+               (or (getf entry :waiting-on) :none)
+               (or (getf entry :action) :inspect)
+               (or (getf entry :urgency) :low)
+               (or (getf entry :approval-required-p) nil)
+               (or (getf entry :failed-step-count) 0)
+               (or (getf entry :pending-step-count) 0))
+       (when (getf entry :primary-command)
+         (format t "orchestration-inbox-command> primary=~A kind=~A label=~A available=~D~%"
+                 (or (getf entry :primary-command-operator)
+                     (getf (getf entry :primary-command) :operator)
+                     :none)
+                 (or (getf entry :primary-command-kind)
+                     (getf (getf entry :primary-command) :kind)
+                     :none)
+                 (or (getf entry :primary-command-label)
+                     (getf (getf entry :primary-command) :label)
+                     :none)
+                 (or (getf entry :available-command-count)
+                     (length (or (getf entry :available-commands) '())))))
+       (when (getf entry :available-command-summaries)
+         (format t "orchestration-inbox-actions> ~{~A~^, ~}~%"
+                 (mapcar (lambda (command)
+                           (or (getf command :label)
+                               (getf command :operator)
+                               "<unknown>"))
+                         (getf entry :available-command-summaries))))
+       (when (getf entry :next-action)
+         (format t "orchestration-inbox-next> ~S~%" (getf entry :next-action)))
+       (when (getf entry :latest-step-summary)
+         (format t "orchestration-inbox-step> step=~A status=~A verification=~A capability=~A target=~A operation=~A~%"
+                 (or (getf (getf entry :latest-step-summary) :step-id) :none)
+                 (or (getf (getf entry :latest-step-summary) :status) :unknown)
+                 (or (getf (getf entry :latest-step-summary) :verification-status) :unknown)
+                 (or (getf (getf entry :latest-step-summary) :capability) :none)
+                 (or (getf (getf entry :latest-step-summary) :target) :none)
+                 (or (getf (getf entry :latest-step-summary) :operation) :none))))
+     (finish-output))
+    ((:thread-new :thread-list :thread-use :list-work-items :list-workflow-records :list-plans :quarantine-work-item :resume-work-item :steer-work-item-plan :list-replay-groups :list-image-reconciliations :replay-validator-task :replay-validator-set :reconcile-image-only-source :integration-rgp-artifacts :integration-rgp-approve :integration-rgp-resume)
      (format t "tasks> ~S~%" result))
     (:enqueue-task
      (format t "task> id=~A status=~A work-item=~A~%"

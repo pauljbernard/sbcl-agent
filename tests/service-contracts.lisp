@@ -448,6 +448,7 @@
                                                                                :entity-kind :intent
                                                                                :entity-id (getf decision :intent-id)))
                                    :trace-links)))
+    (declare (ignore _intent _environment))
     (assert-equal :alignment
                   (getf response :domain)
                   "reconciliation correction service should report the alignment domain")
@@ -503,6 +504,7 @@
             :status :deprecated
             :linked-event-ids '("event-missing")
             :linked-mutation-ids '("mutation-missing"))))
+    (declare (ignore _intent))
     (sbcl-agent::append-session-event
      session
      :incident-created
@@ -560,6 +562,7 @@
             :status :deprecated
             :linked-event-ids '("event-missing")
             :linked-mutation-ids '("mutation-missing"))))
+    (declare (ignore _intent))
     (sbcl-agent::append-session-event
      session
      :incident-created
@@ -1699,6 +1702,48 @@
       (assert-equal :thread
                     (getf thread-inspect :object-kind)
                     "kernel inspect should resolve thread execution handles through the conversation target model"))
+
+    (let* ((desktop-task-response
+             (sbcl-agent::command-kernel-invoke-service session
+                                                        "Invoke a governed runtime desktop task through the kernel ingress."
+                                                        "desktop-task/invoke"
+                                                        :payload (list :requester :context-chat
+                                                                       :target :runtime
+                                                                       :operation :evaluate-form
+                                                                       :payload '(:form "(+ 11 12)"
+                                                                                  :package-name "SBCL-AGENT-USER"))))
+           (desktop-task-data (sbcl-agent::service-response-data desktop-task-response))
+           (desktop-task-record (getf desktop-task-data :task-record))
+           (desktop-task-result (getf desktop-task-data :result))
+           (desktop-task-execution-id
+             (getf (sbcl-agent::service-response-metadata desktop-task-response)
+                   :execution-id)))
+      (assert-true (stringp desktop-task-execution-id)
+                   "kernel invoke should assign an execution handle to desktop-task invoke commands")
+      (assert-equal :invoke
+                    (getf desktop-task-response :operation)
+                    "desktop-task invoke should identify the invoke operation")
+      (assert-equal :desktop-task
+                    (getf desktop-task-response :domain)
+                    "desktop-task invoke should report the desktop-task domain")
+      (assert-equal :runtime-eval-safe
+                    (getf (getf desktop-task-data :manifest) :capability)
+                    "desktop-task invoke should resolve the governed manifest through the authoritative ingress")
+      (assert-equal :evaluate-form
+                    (getf (getf desktop-task-data :resolution) :operation)
+                    "desktop-task invoke should surface the resolved desktop-task operation")
+      (assert-equal 23
+                    (or (getf desktop-task-result :result)
+                        (first (or (getf desktop-task-result :values) '())))
+                    "desktop-task invoke should execute the governed runtime task successfully")
+      (assert-equal :completed
+                    (getf desktop-task-record :status)
+                    "desktop-task invoke should persist a completed governed desktop-task record")
+      (assert-true (stringp (getf desktop-task-data :actor-execution-job-id))
+                   "desktop-task invoke should surface the native actor execution handle directly")
+      (assert-equal (getf desktop-task-data :actor-execution-job-id)
+                    (getf desktop-task-record :actor-execution-job-id)
+                    "desktop-task invoke should keep the record and response aligned on actor execution identity"))
 
     (let* ((session-save-response
              (sbcl-agent::command-kernel-invoke-service session
@@ -4638,6 +4683,7 @@
          (provider (make-instance 'project-augment-action-provider
                                   :requirement-id "req-thread-authoring"))
          (command (sbcl-agent::normalize-form-command '(say "Expand the selected project with governed specifications, journeys, testing, and quality gates."))))
+    (declare (ignore _selected))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
       (declare (ignore updated-session))

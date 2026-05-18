@@ -600,7 +600,152 @@
                                       :read-model :project-detail-v1
                                       :session session))))
 
-(defun command-project-create-service (session &key title summary constitution requirements
+(defun make-project-control-actor-address (session)
+  (make-standard-actor-address :project
+                               :scope (agent-session-id session)))
+
+(defun actorize-project-command-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (listp data)
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun actorize-project-query-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (and (listp data)
+                   (keywordp (first data)))
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun call-with-project-query-actor (session request thunk capability action
+                                      &key project-id incident-id metadata)
+  (let ((actor-address (make-project-control-actor-address session)))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-project-query-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability capability
+               :authority :operator
+               :target :project
+               :operation action
+               :request-id (desktop-task-request-id request)
+               :metadata (append (when project-id
+                                   (list :project-id project-id))
+                                 (when incident-id
+                                   (list :incident-id incident-id))
+                                 metadata)))))
+
+(defun command-project-list-query-service (session)
+  (call-with-project-query-actor
+   session
+   (make-project-control-request session
+                                 :project-list-query
+                                 :project/list)
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    "Read project list."
+                                    "project/list"
+                                    :authority :operator
+                                    :payload '()))
+   :project/list
+   :project-list-query))
+
+(defun command-project-detail-query-service (session project-id)
+  (call-with-project-query-actor
+   session
+   (make-project-control-request session
+                                 :project-detail-query
+                                 :project/detail
+                                 :payload (list :project-id project-id)
+                                 :project-id project-id)
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    "Read project detail."
+                                    "project/detail"
+                                    :authority :operator
+                                    :payload (list :project-id project-id)))
+   :project/detail
+   :project-detail-query
+   :project-id project-id))
+
+(defun command-project-testing-harness-inventory-query-service (session)
+  (call-with-project-query-actor
+   session
+   (make-project-control-request session
+                                 :project-testing-harness-inventory-query
+                                 :project/testing-harness-inventory)
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    "Read project testing harness inventory."
+                                    "project/testing-harness-inventory"
+                                    :authority :operator
+                                    :payload '()))
+   :project/testing-harness-inventory
+   :project-testing-harness-inventory-query))
+
+(defun make-project-control-request (session action capability
+                                     &key payload metadata project-id work-item-id incident-id)
+  (make-governed-desktop-task-request
+   :requester :context-chat
+   :target :project
+   :operation action
+   :capability capability
+   :payload payload
+   :metadata (append (list :session-id (agent-session-id session)
+                           :actor-slice :project-control-v1)
+                     (when project-id
+                       (list :project-id project-id))
+                     (when work-item-id
+                       (list :work-item-id work-item-id))
+                     (when incident-id
+                       (list :incident-id incident-id))
+                     metadata)))
+
+(defun call-with-project-actor (session request thunk capability action
+                                &key project-id work-item-id incident-id)
+  (let ((actor-address (make-project-control-actor-address session)))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-project-command-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability capability
+               :authority :governance
+               :target :project
+               :operation action
+               :request-id (desktop-task-request-id request)
+               :work-item-id work-item-id
+               :metadata (append (when project-id
+                                   (list :project-id project-id))
+                                 (when incident-id
+                                   (list :incident-id incident-id)))))))
+
+(defun perform-project-create-service (session &key title summary constitution requirements
                                                feature-specifications design-system
                                                style-guide user-journeys
                                                non-functional-requirements
@@ -701,7 +846,46 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-select-service (session project-id)
+(defun command-project-create-service (session &key title summary constitution requirements
+                                               feature-specifications design-system
+                                               style-guide user-journeys
+                                               non-functional-requirements
+                                               architecture-decisions source-roots metadata)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :create
+                                 :project/planning
+                                 :payload (list :title title
+                                                :summary summary
+                                                :constitution constitution
+                                                :requirements requirements
+                                                :feature-specifications feature-specifications
+                                                :design-system design-system
+                                                :style-guide style-guide
+                                                :user-journeys user-journeys
+                                                :non-functional-requirements non-functional-requirements
+                                                :architecture-decisions architecture-decisions
+                                                :source-roots source-roots
+                                                :metadata metadata))
+   (lambda ()
+     (perform-project-create-service session
+                                     :title title
+                                     :summary summary
+                                     :constitution constitution
+                                     :requirements requirements
+                                     :feature-specifications feature-specifications
+                                     :design-system design-system
+                                     :style-guide style-guide
+                                     :user-journeys user-journeys
+                                     :non-functional-requirements non-functional-requirements
+                                     :architecture-decisions architecture-decisions
+                                     :source-roots source-roots
+                                     :metadata metadata))
+   :project/planning
+   :create))
+
+(defun perform-project-select-service (session project-id)
   (let ((project (select-project-record session project-id)))
     (make-service-command-response
      :project
@@ -711,7 +895,21 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-constitution-service (session constitution &key project-id)
+(defun command-project-select-service (session project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :select
+                                 :project/control
+                                 :payload (list :project-id project-id)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-select-service session project-id))
+   :project/control
+   :select
+   :project-id project-id))
+
+(defun perform-project-constitution-service (session constitution &key project-id)
   (let ((project (set-project-constitution session constitution project-id)))
     (make-service-command-response
      :project
@@ -721,7 +919,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-design-system-service (session design-system &key project-id)
+(defun command-project-constitution-service (session constitution &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-constitution
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :constitution constitution)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-constitution-service session constitution :project-id project-id))
+   :project/planning
+   :set-constitution
+   :project-id project-id))
+
+(defun perform-project-design-system-service (session design-system &key project-id)
   (let ((project (set-project-design-system session design-system project-id)))
     (make-service-command-response
      :project
@@ -731,7 +944,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-style-guide-service (session style-guide &key project-id)
+(defun command-project-design-system-service (session design-system &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-design-system
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :design-system design-system)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-design-system-service session design-system :project-id project-id))
+   :project/planning
+   :set-design-system
+   :project-id project-id))
+
+(defun perform-project-style-guide-service (session style-guide &key project-id)
   (let ((project (set-project-style-guide session style-guide project-id)))
     (make-service-command-response
      :project
@@ -741,7 +969,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-testing-strategy-service (session testing-strategy &key project-id)
+(defun command-project-style-guide-service (session style-guide &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-style-guide
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :style-guide style-guide)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-style-guide-service session style-guide :project-id project-id))
+   :project/planning
+   :set-style-guide
+   :project-id project-id))
+
+(defun perform-project-testing-strategy-service (session testing-strategy &key project-id)
   (let ((project (set-project-testing-strategy session testing-strategy project-id)))
     (make-service-command-response
      :project
@@ -751,7 +994,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-release-readiness-service (session release-readiness &key project-id)
+(defun command-project-testing-strategy-service (session testing-strategy &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-testing-strategy
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :testing-strategy testing-strategy)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-testing-strategy-service session testing-strategy :project-id project-id))
+   :project/planning
+   :set-testing-strategy
+   :project-id project-id))
+
+(defun perform-project-release-readiness-service (session release-readiness &key project-id)
   (let ((project (set-project-release-readiness session release-readiness project-id)))
     (make-service-command-response
      :project
@@ -761,7 +1019,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-readiness-obligations-service (session readiness-obligations &key project-id)
+(defun command-project-release-readiness-service (session release-readiness &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-release-readiness
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :release-readiness release-readiness)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-release-readiness-service session release-readiness :project-id project-id))
+   :project/planning
+   :set-release-readiness
+   :project-id project-id))
+
+(defun perform-project-readiness-obligations-service (session readiness-obligations &key project-id)
   (let ((project (set-project-readiness-obligations session readiness-obligations project-id)))
     (make-service-command-response
      :project
@@ -771,7 +1044,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-requirement-service (session &key project-id id title summary scope kind
+(defun command-project-readiness-obligations-service (session readiness-obligations &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :set-readiness-obligations
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :readiness-obligations readiness-obligations)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-readiness-obligations-service session readiness-obligations :project-id project-id))
+   :project/planning
+   :set-readiness-obligations
+   :project-id project-id))
+
+(defun perform-project-requirement-service (session &key project-id id title summary scope kind
                                                     priority status verification-kind
                                                     linked-artifact-ids metadata
                                                     non-functional-p)
@@ -804,7 +1092,47 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-feature-spec-service (session &key project-id id title summary status
+(defun command-project-requirement-service (session &key project-id id title summary scope kind
+                                                    priority status verification-kind
+                                                    linked-artifact-ids metadata
+                                                    non-functional-p)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-requirement
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :id id
+                                                :title title
+                                                :summary summary
+                                                :scope scope
+                                                :kind kind
+                                                :priority priority
+                                                :status status
+                                                :verification-kind verification-kind
+                                                :linked-artifact-ids linked-artifact-ids
+                                                :metadata metadata
+                                                :non-functional-p non-functional-p)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-requirement-service session
+                                          :project-id project-id
+                                          :id id
+                                          :title title
+                                          :summary summary
+                                          :scope scope
+                                          :kind kind
+                                          :priority priority
+                                          :status status
+                                          :verification-kind verification-kind
+                                          :linked-artifact-ids linked-artifact-ids
+                                          :metadata metadata
+                                          :non-functional-p non-functional-p))
+   :project/planning
+   :append-requirement
+   :project-id project-id))
+
+(defun perform-project-feature-spec-service (session &key project-id id title summary status
                                                      acceptance-criteria linked-requirement-ids
                                                      linked-journey-ids metadata)
   (let ((project (append-project-feature-specification
@@ -850,7 +1178,40 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-user-journey-service (session &key project-id id title summary actors
+(defun command-project-feature-spec-service (session &key project-id id title summary status
+                                                     acceptance-criteria linked-requirement-ids
+                                                     linked-journey-ids metadata)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-feature-specification
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :id id
+                                                :title title
+                                                :summary summary
+                                                :status status
+                                                :acceptance-criteria acceptance-criteria
+                                                :linked-requirement-ids linked-requirement-ids
+                                                :linked-journey-ids linked-journey-ids
+                                                :metadata metadata)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-feature-spec-service session
+                                           :project-id project-id
+                                           :id id
+                                           :title title
+                                           :summary summary
+                                           :status status
+                                           :acceptance-criteria acceptance-criteria
+                                           :linked-requirement-ids linked-requirement-ids
+                                           :linked-journey-ids linked-journey-ids
+                                           :metadata metadata))
+   :project/planning
+   :append-feature-specification
+   :project-id project-id))
+
+(defun perform-project-user-journey-service (session &key project-id id title summary actors
                                                      entrypoints steps outcomes edge-cases metadata)
   (let ((project (append-project-user-journey
                   session
@@ -880,7 +1241,41 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-architecture-decision-service (session &key project-id id title status
+(defun command-project-user-journey-service (session &key project-id id title summary actors
+                                                     entrypoints steps outcomes edge-cases metadata)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-user-journey
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :id id
+                                                :title title
+                                                :summary summary
+                                                :actors actors
+                                                :entrypoints entrypoints
+                                                :steps steps
+                                                :outcomes outcomes
+                                                :edge-cases edge-cases
+                                                :metadata metadata)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-user-journey-service session
+                                           :project-id project-id
+                                           :id id
+                                           :title title
+                                           :summary summary
+                                           :actors actors
+                                           :entrypoints entrypoints
+                                           :steps steps
+                                           :outcomes outcomes
+                                           :edge-cases edge-cases
+                                           :metadata metadata))
+   :project/planning
+   :append-user-journey
+   :project-id project-id))
+
+(defun perform-project-architecture-decision-service (session &key project-id id title status
                                                               summary drivers consequences
                                                               stack-choices linked-requirement-ids
                                                               metadata)
@@ -921,7 +1316,43 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-bind-work-item-service (session work-item-id &key project-id)
+(defun command-project-architecture-decision-service (session &key project-id id title status
+                                                              summary drivers consequences
+                                                              stack-choices linked-requirement-ids
+                                                              metadata)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-architecture-decision
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :id id
+                                                :title title
+                                                :status status
+                                                :summary summary
+                                                :drivers drivers
+                                                :consequences consequences
+                                                :stack-choices stack-choices
+                                                :linked-requirement-ids linked-requirement-ids
+                                                :metadata metadata)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-architecture-decision-service session
+                                                    :project-id project-id
+                                                    :id id
+                                                    :title title
+                                                    :status status
+                                                    :summary summary
+                                                    :drivers drivers
+                                                    :consequences consequences
+                                                    :stack-choices stack-choices
+                                                    :linked-requirement-ids linked-requirement-ids
+                                                    :metadata metadata))
+   :project/planning
+   :append-architecture-decision
+   :project-id project-id))
+
+(defun perform-project-bind-work-item-service (session work-item-id &key project-id)
   (unless (find-work-item session work-item-id)
     (error "Unknown work item ~A" work-item-id))
   (let ((project (append-project-work-item-binding session work-item-id project-id)))
@@ -940,7 +1371,24 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-bind-incident-service (session incident-id &key project-id)
+(defun command-project-bind-work-item-service (session work-item-id &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :bind-work-item
+                                 :project/binding
+                                 :payload (list :project-id project-id
+                                                :work-item-id work-item-id)
+                                 :project-id project-id
+                                 :work-item-id work-item-id)
+   (lambda ()
+     (perform-project-bind-work-item-service session work-item-id :project-id project-id))
+   :project/binding
+   :bind-work-item
+   :project-id project-id
+   :work-item-id work-item-id))
+
+(defun perform-project-bind-incident-service (session incident-id &key project-id)
   (unless (find-incident session incident-id)
     (error "Unknown incident ~A" incident-id))
   (let ((project (append-project-incident-binding session incident-id project-id)))
@@ -959,7 +1407,24 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-bind-testing-harness-service (session harness-id &key project-id)
+(defun command-project-bind-incident-service (session incident-id &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :bind-incident
+                                 :project/binding
+                                 :payload (list :project-id project-id
+                                                :incident-id incident-id)
+                                 :project-id project-id
+                                 :incident-id incident-id)
+   (lambda ()
+     (perform-project-bind-incident-service session incident-id :project-id project-id))
+   :project/binding
+   :bind-incident
+   :project-id project-id
+   :incident-id incident-id))
+
+(defun perform-project-bind-testing-harness-service (session harness-id &key project-id)
   (unless (find harness-id (testing-harness-inventory) :key (lambda (entry) (getf entry :id)) :test #'eq)
     (error "Unknown testing harness ~A" harness-id))
   (let ((project (append-project-testing-harness-binding session harness-id project-id)))
@@ -979,7 +1444,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-source-root-service (session source-root &key project-id)
+(defun command-project-bind-testing-harness-service (session harness-id &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :bind-testing-harness
+                                 :project/binding
+                                 :payload (list :project-id project-id
+                                                :harness-id harness-id)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-bind-testing-harness-service session harness-id :project-id project-id))
+   :project/binding
+   :bind-testing-harness
+   :project-id project-id))
+
+(defun perform-project-source-root-service (session source-root &key project-id)
   (let ((project (append-project-source-root session source-root project-id)))
     (create-trace-link session
                        :relation :owns-source-root
@@ -996,7 +1476,22 @@
                                       :command-model :project-command-v1
                                       :session session))))
 
-(defun command-project-quality-gate-service (session &key project-id id title summary status
+(defun command-project-source-root-service (session source-root &key project-id)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-source-root
+                                 :project/binding
+                                 :payload (list :project-id project-id
+                                                :source-root source-root)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-source-root-service session source-root :project-id project-id))
+   :project/binding
+   :append-source-root
+   :project-id project-id))
+
+(defun perform-project-quality-gate-service (session &key project-id id title summary status
                                                      required-harness-ids
                                                      minimum-linked-work-items
                                                      minimum-linked-incidents
@@ -1034,3 +1529,59 @@
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
+
+(defun command-project-quality-gate-service (session &key project-id id title summary status
+                                                     required-harness-ids
+                                                     minimum-linked-work-items
+                                                     minimum-linked-incidents
+                                                     require-source-roots-p
+                                                     required-trace-target-kinds
+                                                     maximum-failed-tests
+                                                     require-coverage-p
+                                                     maximum-say-turn-latency-seconds
+                                                     maximum-environment-save-load-seconds
+                                                     require-recovery-ready-p
+                                                     metadata)
+  (call-with-project-actor
+   session
+   (make-project-control-request session
+                                 :append-quality-gate
+                                 :project/planning
+                                 :payload (list :project-id project-id
+                                                :id id
+                                                :title title
+                                                :summary summary
+                                                :status status
+                                                :required-harness-ids required-harness-ids
+                                                :minimum-linked-work-items minimum-linked-work-items
+                                                :minimum-linked-incidents minimum-linked-incidents
+                                                :require-source-roots-p require-source-roots-p
+                                                :required-trace-target-kinds required-trace-target-kinds
+                                                :maximum-failed-tests maximum-failed-tests
+                                                :require-coverage-p require-coverage-p
+                                                :maximum-say-turn-latency-seconds maximum-say-turn-latency-seconds
+                                                :maximum-environment-save-load-seconds maximum-environment-save-load-seconds
+                                                :require-recovery-ready-p require-recovery-ready-p
+                                                :metadata metadata)
+                                 :project-id project-id)
+   (lambda ()
+     (perform-project-quality-gate-service session
+                                           :project-id project-id
+                                           :id id
+                                           :title title
+                                           :summary summary
+                                           :status status
+                                           :required-harness-ids required-harness-ids
+                                           :minimum-linked-work-items minimum-linked-work-items
+                                           :minimum-linked-incidents minimum-linked-incidents
+                                           :require-source-roots-p require-source-roots-p
+                                           :required-trace-target-kinds required-trace-target-kinds
+                                           :maximum-failed-tests maximum-failed-tests
+                                           :require-coverage-p require-coverage-p
+                                           :maximum-say-turn-latency-seconds maximum-say-turn-latency-seconds
+                                           :maximum-environment-save-load-seconds maximum-environment-save-load-seconds
+                                           :require-recovery-ready-p require-recovery-ready-p
+                                           :metadata metadata))
+   :project/planning
+   :append-quality-gate
+   :project-id project-id))

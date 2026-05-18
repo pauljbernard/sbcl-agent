@@ -31,6 +31,9 @@ When an environment is bound, environment-backed state is the default truth for:
 - task and worker monitoring
 - policy posture
 - event evidence and operator posture summaries
+- system identity and purpose through `agent-constitution`
+- environment capability and dependency posture through `capability-inventory`
+- explicit context-chat project targeting that defines the current project frame of reference
 
 Session-backed state may still be used in two cases:
 
@@ -49,6 +52,13 @@ It currently provides:
 - compatibility with the legacy command surface
 - transient operator context
 - request-local transcript and execution flow while work is being normalized into the environment
+
+The session may still carry transient prompt-local interpretation state, but it should not become the long-term home of:
+
+- system-level constitution
+- environment capability readiness
+- explicit project targeting
+- governed workflow continuation posture
 
 That is a real responsibility, but it is no longer the architectural center.
 
@@ -69,6 +79,13 @@ Mutation paths should follow these write rules:
 1. Durable state changes must terminate in environment-backed structures.
 2. Session mutation helpers should either write through to the environment immediately or exist only as compatibility adapters around environment-owned mutation.
 3. New features should not introduce fresh durable state that lives only on `agent-session`.
+
+That rule now applies directly to context engineering. If a feature affects the environment frame of reference for planning or execution, it should write through into environment-backed structures first. Examples include:
+
+- updating the active provider profile or routing mode
+- changing explicit Context Chat project targeting
+- persisting the system-level agent constitution
+- recording environment capability readiness or dependency anomalies
 
 This lets the shell remain stable while architectural ownership continues to move in one direction.
 
@@ -94,6 +111,8 @@ Public service interfaces should consume:
 - environment-backed read models
 - governed mutation commands
 - policy and approval state derived from the environment
+- environment-scoped context and authority state
+- planner-facing project and capability posture
 
 They should not couple themselves directly to compatibility-session internals.
 

@@ -80,6 +80,21 @@
                                                                 :read-model :work-item-list-v1
                                                                 :session session)))
 
+(defun command-work-item-list-query-service (session)
+  (call-with-workflow-query-actor
+   session
+   (make-workflow-query-request session
+                                :work-item-list-query
+                                :workflow/work-item-list)
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    "Read governed work-item list."
+                                    "workflow/work-item-list"
+                                    :authority :operator
+                                    :payload '()))
+   :workflow/work-item-list
+   :work-item-list-query))
+
 (defun query-work-item-detail-service (session work-item-id)
   (let ((work-item (find-work-item session work-item-id)))
     (unless work-item
@@ -91,6 +106,26 @@
                                                                   :read-model :work-item-detail-v1
                                                                   :session session
                                                                   :work-item-id work-item-id))))
+
+(defun command-work-item-detail-query-service (session work-item-id)
+  (call-with-workflow-query-actor
+   session
+   (make-workflow-query-request session
+                                :work-item-detail-query
+                                :workflow/work-item-detail
+                                :payload (list :work-item-id work-item-id)
+                                :work-item-id work-item-id
+                                :metadata (list :work-item-id work-item-id))
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    (format nil "Read detail for work item ~A." work-item-id)
+                                    "workflow/work-item-detail"
+                                    :authority :operator
+                                    :payload (list :work-item-id work-item-id)))
+   :workflow/work-item-detail
+   :work-item-detail-query
+   :work-item-id work-item-id
+   :metadata (list :work-item-id work-item-id)))
 
 (defun query-work-item-plan-service (session work-item-id)
   (let ((work-item (find-work-item session work-item-id)))
@@ -119,3 +154,23 @@
                                       :read-model :work-item-plan-v1
                                       :session session
                                       :work-item-id work-item-id))))
+
+(defun command-work-item-plan-query-service (session work-item-id)
+  (call-with-workflow-query-actor
+   session
+   (make-workflow-query-request session
+                                :work-item-plan-query
+                                :workflow/work-item-plan
+                                :payload (list :work-item-id work-item-id)
+                                :work-item-id work-item-id
+                                :metadata (list :work-item-id work-item-id))
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    (format nil "Read plan state for work item ~A." work-item-id)
+                                    "workflow/work-item-plan"
+                                    :authority :operator
+                                    :payload (list :work-item-id work-item-id)))
+   :workflow/work-item-plan
+   :work-item-plan-query
+   :work-item-id work-item-id
+   :metadata (list :work-item-id work-item-id)))

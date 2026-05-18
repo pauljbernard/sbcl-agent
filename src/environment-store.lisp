@@ -203,9 +203,30 @@
 
 (defun rehydrate-session-plan-from-environment (session environment)
   (let* ((agent-state (environment-agent-state environment))
-         (plan (and agent-state
-                    (environment-agent-state-plan agent-state))))
-    (setf (agent-session-plan session) plan)
+         (plans (and agent-state
+                     (normalize-plan-set
+                      (environment-agent-state-plans agent-state))))
+         (plan (cond
+                 ((null agent-state) nil)
+                 ((environment-agent-state-active-plan-id agent-state)
+                  (find (environment-agent-state-active-plan-id agent-state)
+                        plans
+                        :key #'plan-record-id
+                        :test #'string=))
+                 (t
+                  (normalize-plan-record
+                   (environment-agent-state-plan agent-state))))))
+    (when agent-state
+      (setf (environment-agent-state-plans agent-state) plans
+            (environment-agent-state-plan agent-state)
+            (or plan
+                (car plans))
+            (environment-agent-state-active-plan-id agent-state)
+            (and (or plan (car plans))
+                 (plan-record-id (or plan (car plans))))
+            (environment-agent-state-plan-summaries agent-state)
+            (mapcar #'plan-record-summary plans)))
+    (set-session-active-plan session plan)
     session))
 
 (defun rehydrate-session-actor-mailboxes-from-environment (session environment)
@@ -214,6 +235,17 @@
                                               (environment-agent-state-actor-mailboxes agent-state))
                                          '()))))
     (setf (agent-session-actor-mailboxes session) actor-mailboxes)
+    session))
+
+(defun rehydrate-session-actor-runtime-from-environment (session environment)
+  (let* ((agent-state (environment-agent-state environment))
+         (runtime-snapshot (copy-tree (or (and agent-state
+                                               (environment-agent-state-actor-runtime agent-state))
+                                          nil))))
+    (setf (agent-session-actor-runtime-state session)
+          (and runtime-snapshot
+               (fboundp 'rehydrate-actor-runtime-state)
+               (rehydrate-actor-runtime-state runtime-snapshot)))
     session))
 
 (defun rehydrate-session-pending-actions-from-environment (session environment)
@@ -292,6 +324,7 @@
                   :events '()
                   :plan nil
                   :capability-grants '()
+                  :actor-runtime-state nil
                   :pending-actions '()
                   :tasks '()
                   :work-items '()
@@ -300,6 +333,7 @@
                   :workers '())))
     (rehydrate-session-plan-from-environment session environment)
     (rehydrate-session-actor-mailboxes-from-environment session environment)
+    (rehydrate-session-actor-runtime-from-environment session environment)
     (rehydrate-session-capability-grants-from-environment session environment)
     (rehydrate-session-events-from-environment session environment)
     (rehydrate-session-pending-actions-from-environment session environment)
@@ -396,12 +430,21 @@
             (length (agent-session-workers session)))
         (/= (or (getf agent-summary :agent-count) 0)
             (length environment-agent-registry))
+        (/= (or (getf agent-summary :plan-count) 0)
+            (length (session-plan-set session)))
+        (not (equal (getf agent-summary :active-plan-id)
+                    (session-active-plan-id session)))
         (not (equal (getf summary :plan)
-                    (agent-session-plan session)))
+                    (session-plan-display-value session)))
         (not (equal environment-agent-registry
                     session-agent-registry))
         (not (equal environment-actor-mailboxes
                     (agent-session-actor-mailboxes session)))
+        (not (equal (and (environment-agent-state environment)
+                         (environment-agent-state-actor-runtime
+                          (environment-agent-state environment)))
+                    (and (fboundp 'serializable-actor-runtime-state)
+                         (serializable-actor-runtime-state session))))
         (/= (length (or (getf (environment-policy-state environment) :capability-grants) '()))
             (length (agent-session-capability-grants session))))))
 

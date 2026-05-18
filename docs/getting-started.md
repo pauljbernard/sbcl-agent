@@ -68,6 +68,7 @@ This creates a durable thread and runs a turn inside it. The system records the 
 Useful early commands:
 
 - `(environment/status)`
+- `(desktop-task/context-chat-context)`
 - `(thread/list)`
 - `(thread/show)`
 - `(turn/status)`
@@ -76,6 +77,30 @@ Useful early commands:
 - `(provider/route)`
 
 Use these to understand what environment is active, which thread is current, whether work is blocked, and what evidence exists.
+
+## Optional Project Targeting For Context Chat
+
+The Context Chat actor can now be given an explicit project frame of reference. This is optional; no selected project is still valid.
+
+Inspect the current targeting state:
+
+```lisp
+(desktop-task/context-chat-context)
+```
+
+Set one or more projects explicitly:
+
+```lisp
+(desktop-task/set-context-chat-projects
+  :project-ids '("project-a" "project-b")
+  :primary-project-id "project-a")
+```
+
+Clear explicit targeting:
+
+```lisp
+(desktop-task/set-context-chat-projects :project-ids '())
+```
 
 ## How to Think About the Current System
 

@@ -4,6 +4,10 @@
   (unless condition
     (error "Test failed: ~A" message)))
 
+(defun assert-false (condition message)
+  (when condition
+    (error "Test failed: ~A" message)))
+
 (defun assert-equal (expected actual message)
   (unless (equal expected actual)
     (error "Test failed: ~A~%Expected: ~S~%Actual: ~S" message expected actual)))

@@ -100,13 +100,35 @@
   (list (list "runtime-smoke-test" #'runtime-smoke-test)
         (list "actor-registry-foundation-test" #'actor-registry-foundation-test)
         (list "actor-thread-pool-runtime-execution-test" #'actor-thread-pool-runtime-execution-test)
+        (list "actor-thread-pool-captures-governed-execution-context-test"
+              #'actor-thread-pool-captures-governed-execution-context-test)
+        (list "actor-thread-pool-enforces-governance-inside-actor-test"
+              #'actor-thread-pool-enforces-governance-inside-actor-test)
+        (list "actor-thread-pool-prepares-resolution-inside-actor-test"
+              #'actor-thread-pool-prepares-resolution-inside-actor-test)
+        (list "kernel-desktop-task-invoke-authoritative-ingress-test"
+              #'kernel-desktop-task-invoke-authoritative-ingress-test)
+        (list "actor-desktop-task-execution-uses-kernelized-command-services-test"
+              #'actor-desktop-task-execution-uses-kernelized-command-services-test)
+        (list "desktop-task-actor-wrapper-services-test"
+              #'desktop-task-actor-wrapper-services-test)
+        (list "approval-continuation-preserves-authority-lineage-test"
+              #'approval-continuation-preserves-authority-lineage-test)
+        (list "turn-governed-desktop-task-resume-authoritative-ingress-test"
+              #'turn-governed-desktop-task-resume-authoritative-ingress-test)
         (list "actor-thread-pool-serializes-per-actor-test" #'actor-thread-pool-serializes-per-actor-test)
         (list "actor-system-panel-query-test" #'actor-system-panel-query-test)
+        (list "workflow-native-topology-includes-governance-and-control-links-test"
+              #'workflow-native-topology-includes-governance-and-control-links-test)
+        (list "workflow-events-carry-actor-origin-metadata-test"
+              #'workflow-events-carry-actor-origin-metadata-test)
         (list "actor-system-panel-persists-through-environment-save-load-test"
               #'actor-system-panel-persists-through-environment-save-load-test)
         (list "actor-supervision-incident-flow-test" #'actor-supervision-incident-flow-test)
         (list "actor-supervision-action-application-test" #'actor-supervision-action-application-test)
         (list "actor-supervision-restart-child-test" #'actor-supervision-restart-child-test)
+        (list "actor-supervision-resume-from-checkpoint-test"
+              #'actor-supervision-resume-from-checkpoint-test)
         (list "common-lisp-package-bootstrap-test" #'common-lisp-package-bootstrap-test)
         (list "direct-sandbox-tool-wrapper-test" #'direct-sandbox-tool-wrapper-test)
         (list "repl-alias-test" #'repl-alias-test)
@@ -130,6 +152,8 @@
         (list "mock-provider-helper-coverage-test" #'mock-provider-helper-coverage-test)
         (list "mock-project-authoring-conversation-approval-test"
               #'mock-project-authoring-conversation-approval-test)
+        (list "mock-project-authoring-conversation-service-stages-governed-actions-test"
+              #'mock-project-authoring-conversation-service-stages-governed-actions-test)
         (list "openai-provider-selection-test" #'openai-provider-selection-test)
         (list "multi-vendor-provider-selection-test" #'multi-vendor-provider-selection-test)
         (list "config-key-file-fallback-test" #'config-key-file-fallback-test)
@@ -170,6 +194,8 @@
         (list "provider-event-normalization-test" #'provider-event-normalization-test)
         (list "event-envelope-correlation-fields-test" #'event-envelope-correlation-fields-test)
         (list "event-family-normalization-coverage-test" #'event-family-normalization-coverage-test)
+        (list "direct-conversation-runtime-eval-invalid-form-does-not-hang-test"
+              #'direct-conversation-runtime-eval-invalid-form-does-not-hang-test)
         (list "openai-stream-line-parser-test" #'openai-stream-line-parser-test)
         (list "openai-stream-response-decode-test" #'openai-stream-response-decode-test)
         (list "streaming-ask-dispatch-test" #'streaming-ask-dispatch-test)
@@ -184,6 +210,64 @@
         (list "conversation-runtime-eval-confirmation-routing-test" #'conversation-runtime-eval-confirmation-routing-test)
         (list "direct-conversation-runtime-eval-canonical-context-test" #'direct-conversation-runtime-eval-canonical-context-test)
         (list "direct-conversation-runtime-eval-actor-flow-test" #'direct-conversation-runtime-eval-actor-flow-test)
+        (list "conversation-execution-service-is-actor-mediated-test"
+              #'conversation-execution-service-is-actor-mediated-test)
+        (list "conversation-thread-services-are-actor-mediated-test"
+              #'conversation-thread-services-are-actor-mediated-test)
+        (list "workflow-ops-services-are-actor-mediated-test"
+              #'workflow-ops-services-are-actor-mediated-test)
+        (list "turn-resume-is-workflow-actor-mediated-test"
+              #'turn-resume-is-workflow-actor-mediated-test)
+        (list "workflow-turn-resume-checkpoint-persists-through-environment-save-load-test"
+              #'workflow-turn-resume-checkpoint-persists-through-environment-save-load-test)
+        (list "workflow-turn-resume-checkpoint-restores-resumability-on-session-load-test"
+              #'workflow-turn-resume-checkpoint-restores-resumability-on-session-load-test)
+        (list "workflow-turn-resume-checkpoint-recovers-live-resume-test"
+              #'workflow-turn-resume-checkpoint-recovers-live-resume-test)
+        (list "actor-supervision-recommended-workflow-recovery-test"
+              #'actor-supervision-recommended-workflow-recovery-test)
+        (list "work-item-control-state-restores-through-session-load-test"
+              #'work-item-control-state-restores-through-session-load-test)
+        (list "work-item-complete-validations-recovers-live-control-state-test"
+              #'work-item-complete-validations-recovers-live-control-state-test)
+        (list "work-item-rollback-recovers-live-control-state-test"
+              #'work-item-rollback-recovers-live-control-state-test)
+        (list "approval-services-are-actor-mediated-test"
+              #'approval-services-are-actor-mediated-test)
+        (list "incident-remediation-service-is-actor-mediated-test"
+              #'incident-remediation-service-is-actor-mediated-test)
+        (list "project-services-are-actor-mediated-test"
+              #'project-services-are-actor-mediated-test)
+        (list "environment-services-are-actor-mediated-test"
+              #'environment-services-are-actor-mediated-test)
+        (list "package-management-services-are-actor-mediated-test"
+              #'package-management-services-are-actor-mediated-test)
+        (list "calculator-services-are-actor-mediated-test"
+              #'calculator-services-are-actor-mediated-test)
+        (list "memory-services-are-actor-mediated-test"
+              #'memory-services-are-actor-mediated-test)
+        (list "intent-services-are-actor-mediated-test"
+              #'intent-services-are-actor-mediated-test)
+        (list "shell-desktop-services-are-actor-mediated-test"
+              #'shell-desktop-services-are-actor-mediated-test)
+        (list "desktop-task-mcp-admin-services-are-actor-mediated-test"
+              #'desktop-task-mcp-admin-services-are-actor-mediated-test)
+        (list "desktop-task-admin-query-services-are-actor-mediated-test"
+              #'desktop-task-admin-query-services-are-actor-mediated-test)
+        (list "inspection-query-services-are-actor-mediated-test"
+              #'inspection-query-services-are-actor-mediated-test)
+        (list "runtime-inspection-query-services-are-actor-mediated-test"
+              #'runtime-inspection-query-services-are-actor-mediated-test)
+        (list "shell-and-environment-query-services-are-actor-mediated-test"
+              #'shell-and-environment-query-services-are-actor-mediated-test)
+        (list "runtime-and-session-summary-query-services-are-actor-mediated-test"
+              #'runtime-and-session-summary-query-services-are-actor-mediated-test)
+        (list "conversation-and-environment-query-services-are-actor-mediated-test"
+              #'conversation-and-environment-query-services-are-actor-mediated-test)
+        (list "workflow-and-planning-query-services-are-actor-mediated-test"
+              #'workflow-and-planning-query-services-are-actor-mediated-test)
+        (list "project-incident-and-rgp-query-services-are-actor-mediated-test"
+              #'project-incident-and-rgp-query-services-are-actor-mediated-test)
         (list "direct-conversation-runtime-definition-actor-state-test" #'direct-conversation-runtime-definition-actor-state-test)
         (list "runtime-actor-state-persists-through-environment-save-load-test"
               #'runtime-actor-state-persists-through-environment-save-load-test)
@@ -199,10 +283,22 @@
         (list "provider-session-summary-compact-test" #'provider-session-summary-compact-test)
         (list "environment-provider-context-precedence-test" #'environment-provider-context-precedence-test)
         (list "provider-request-context-test" #'provider-request-context-test)
+        (list "provider-request-context-chat-project-selection-test"
+              #'provider-request-context-chat-project-selection-test)
+        (list "provider-request-project-specific-selection-test"
+              #'provider-request-project-specific-selection-test)
         (list "provider-request-transcript-memory-context-test" #'provider-request-transcript-memory-context-test)
         (list "provider-request-operator-memory-context-test" #'provider-request-operator-memory-context-test)
         (list "provider-request-cached-conversation-context-test" #'provider-request-cached-conversation-context-test)
         (list "provider-rendering-context-test" #'provider-rendering-context-test)
+        (list "provider-planning-context-packet-directives-test"
+              #'provider-planning-context-packet-directives-test)
+        (list "provider-planning-context-packet-archetype-shaping-test"
+              #'provider-planning-context-packet-archetype-shaping-test)
+        (list "provider-planning-context-packet-advanced-archetype-and-risk-shaping-test"
+              #'provider-planning-context-packet-advanced-archetype-and-risk-shaping-test)
+        (list "provider-request-end-to-end-planning-packet-differential-test"
+              #'provider-request-end-to-end-planning-packet-differential-test)
         (list "provider-rendering-cached-conversation-prompt-test" #'provider-rendering-cached-conversation-prompt-test)
         (list "provider-rendering-governance-ready-test" #'provider-rendering-governance-ready-test)
         (list "provider-request-single-environment-snapshot-test" #'provider-request-single-environment-snapshot-test)
@@ -292,7 +388,11 @@
    (list "retrieval-intent-code-change-test" #'retrieval-intent-code-change-test)
    (list "retrieval-intent-testing-feedback-test" #'retrieval-intent-testing-feedback-test)
    (list "retrieval-intent-project-governance-test" #'retrieval-intent-project-governance-test)
+   (list "retrieval-intent-project-governance-mutation-test" #'retrieval-intent-project-governance-mutation-test)
    (list "retrieval-intent-alignment-analysis-test" #'retrieval-intent-alignment-analysis-test)
+   (list "retrieval-intent-plan-before-change-test" #'retrieval-intent-plan-before-change-test)
+   (list "retrieval-intent-compound-implementation-validation-test"
+         #'retrieval-intent-compound-implementation-validation-test)
    (list "retrieval-plan-compact-first-test" #'retrieval-plan-compact-first-test)
    (list "retrieval-plan-expand-on-gap-test" #'retrieval-plan-expand-on-gap-test)
    (list "retrieval-plan-governance-bias-test" #'retrieval-plan-governance-bias-test)
@@ -315,9 +415,11 @@
    (list "retrieval-ranking-disabled-guardrail-test" #'retrieval-ranking-disabled-guardrail-test)
    (list "evaluation-harness-smoke-test" #'evaluation-harness-smoke-test)
    (list "reasoning-brief-grounding-test" #'reasoning-brief-grounding-test)
+   (list "reasoning-brief-uncertainty-arbitration-test" #'reasoning-brief-uncertainty-arbitration-test)
    (list "planning-brief-grounding-test" #'planning-brief-grounding-test)
    (list "validation-plan-grounding-test" #'validation-plan-grounding-test)
    (list "retrieval-focus-plan-grounding-test" #'retrieval-focus-plan-grounding-test)
+   (list "decisive-context-salience-weighting-test" #'decisive-context-salience-weighting-test)
    (list "action-agenda-grounding-test" #'action-agenda-grounding-test)
    (list "outcome-brief-grounding-test" #'outcome-brief-grounding-test)
    (list "prior-outcome-brief-reuse-test" #'prior-outcome-brief-reuse-test)
@@ -496,6 +598,7 @@
    (list "session-summary-prefers-environment-summary-test" #'session-summary-prefers-environment-summary-test)
    (list "session-summary-prefers-environment-event-summary-test" #'session-summary-prefers-environment-event-summary-test)
    (list "environment-shell-commands-test" #'environment-shell-commands-test)
+   (list "context-chat-project-shell-commands-test" #'context-chat-project-shell-commands-test)
    (list "environment-load-shell-orientation-test" #'environment-load-shell-orientation-test)
    (list "shell-environment-orientation-render-test" #'shell-environment-orientation-render-test)
    (list "environment-load-rendering-test" #'environment-load-rendering-test)

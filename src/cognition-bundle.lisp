@@ -143,17 +143,35 @@
         :governance-bonus (getf candidate :governance-bonus)
         :base-score (getf candidate :base-score)))
 
+(defun decisive-focus-entry (entry)
+  (list :label (getf entry :domain)
+        :score (or (getf entry :score) 0)
+        :priority :high
+        :summary (getf entry :summary)
+        :salience-kind (getf entry :kind)
+        :salience (copy-tree (or (getf entry :salience) '()))
+        :ref (getf entry :ref)))
+
 (defun build-retrieval-focus-plan (retrieval-dossier)
   (let* ((ranking (getf retrieval-dossier :ranking))
-         (candidates (or (getf ranking :top-candidates) '()))
-         (entries (mapcar #'retrieval-focus-entry candidates)))
+         (decisive-core (getf retrieval-dossier :decisive-context-core))
+         (decisive-entries (mapcar #'decisive-focus-entry
+                                   (or (getf decisive-core :entries) '())))
+         (ranked-entries (mapcar #'retrieval-focus-entry
+                                 (or (getf ranking :top-candidates) '())))
+         (entries (append decisive-entries ranked-entries)))
     (list :ranking-enabled-p (getf ranking :enabled-p)
-          :strategy (getf ranking :strategy)
+          :strategy (if decisive-entries
+                        :decisive-context-first
+                        (getf ranking :strategy))
           :entry-count (length entries)
           :entries entries
           :primary-focus (and entries (first entries))
           :focus-labels (mapcar (lambda (entry) (getf entry :label)) entries)
-          :explanation (getf ranking :explanation))))
+          :explanation (if decisive-entries
+                           (or (getf decisive-core :explanation)
+                               (getf ranking :explanation))
+                           (getf ranking :explanation)))))
 
 (defun agenda-step-priority (kind)
   (case kind

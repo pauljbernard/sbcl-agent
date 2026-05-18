@@ -37,6 +37,7 @@ The current provider request path already carries structured context:
 - cognition bundle
 - prior-outcome reuse
 - reasoning, planning, execution, and validation briefs
+- canonical planning-context packet with task frame, authority state, decisive evidence, uncertainty, strategy, and optional support
 
 That is materially better than a plain transcript prompt.
 
@@ -46,6 +47,7 @@ Today the model can receive:
 
 - recent transcript and active turn context
 - query-specific retrieval dossiers assembled over service-native read surfaces
+- explicit project targeting or project-selection posture when the conversation frame has been narrowed
 - governance and operator posture
 - prior outcomes, playbook reuse, and self-improvement guidance
 - post-mutation retrieval in the same environment
@@ -60,19 +62,28 @@ flowchart LR
     Chat["ContextChatActor"]
     Thread["thread / turn / artifact state"]
     Retrieval["retrieval dossier"]
+    Planner["planning-context packet"]
     Runtime["runtime and environment state"]
     Policy["policy and operator posture"]
+    Project["project authority"]
+    Capability["capability inventory"]
     Provider["provider execution"]
 
     UI --> Chat
     Chat --> Thread
     Chat --> Retrieval
+    Chat --> Planner
     Chat --> Runtime
     Chat --> Policy
-    Thread --> Provider
-    Retrieval --> Provider
-    Runtime --> Provider
-    Policy --> Provider
+    Chat --> Project
+    Chat --> Capability
+    Thread --> Planner
+    Retrieval --> Planner
+    Runtime --> Planner
+    Policy --> Planner
+    Project --> Planner
+    Capability --> Planner
+    Planner --> Provider
     Provider --> Thread
 ```
 
@@ -100,8 +111,9 @@ to:
 1. prompt
 2. transcript and active turn history
 3. retrieved environment dossier
-4. policy and operator posture
-5. explicit affordances for more governed reads and mutations
+4. canonical planning-context packet
+5. policy, project, capability, and operator posture
+6. explicit affordances for more governed reads and mutations
 
 ## Not Plain RAG
 
@@ -245,6 +257,7 @@ The current dossier shape should include:
 - policy and operator posture
 - unresolved gaps
 - ranking and provenance metadata
+- decisive context core and uncertainty cues that feed the planning-context packet
 
 The dossier matters because the model should be able to reason about:
 
@@ -252,6 +265,8 @@ The dossier matters because the model should be able to reason about:
 - why it was shown
 - how fresh it is
 - what remains uncertain
+- which project frame of reference is explicit, inferred, or absent
+- what the environment can actually do right now through `capability-inventory`
 
 ## Staged Retrieval
 

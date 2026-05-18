@@ -20,6 +20,7 @@
   cognition-bundle
   reasoning-brief
   planning-brief
+  planning-context-packet
   outcome-brief
   operator-mode
   stream-p)

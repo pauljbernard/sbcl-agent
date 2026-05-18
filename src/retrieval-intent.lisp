@@ -2,6 +2,11 @@
 
 (defstruct retrieval-intent
   category
+  primary-intent
+  secondary-intents
+  task-archetype
+  requested-deliverable
+  phase-intent
   domains
   historical-p
   intent-context-p
@@ -52,8 +57,68 @@
                     (search normalized-needle normalized-prompt :test #'char-equal))))
             needles)))))
 
+(defun prompt-requests-explanation-p (prompt)
+  (prompt-contains-any-needle-p prompt
+                                '("explain" "what is"
+                                  "how does" "why does"
+                                  "assess" "review"
+                                  "clarify" "describe"
+                                  "help me understand"
+                                  "analyze" "analysis"
+                                  "audit")))
+
+(defun prompt-requests-planning-p (prompt)
+  (prompt-contains-any-needle-p prompt
+                                '("what would you change"
+                                  "what should change"
+                                  "what needs to change"
+                                  "what would be required"
+                                  "plan the change"
+                                  "prepare the fix"
+                                  "before changing"
+                                  "before patching"
+                                  "plan"
+                                  "strategy")))
+
+(defun prompt-requests-implementation-p (prompt)
+  (prompt-contains-any-needle-p prompt
+                                '("implement" "fix"
+                                  "patch" "update"
+                                  "refactor" "add"
+                                  "remove" "wire"
+                                  "create the code"
+                                  "make the change")))
+
+(defun prompt-requests-recovery-p (prompt)
+  (prompt-contains-any-needle-p prompt
+                                '("recover" "recovery"
+                                  "resume" "rollback"
+                                  "remediate" "unblock"
+                                  "quarantine")))
+
+(defun prompt-requests-validation-p (prompt)
+  (prompt-contains-any-needle-p prompt
+                                '("validate" "validation"
+                                  "test" "tests"
+                                  "coverage" "benchmark"
+                                  "benchmarking" "smoke test"
+                                  "regression" "verify")))
+
+(defun retrieval-secondary-intents (primary-intent &rest candidates)
+  (remove-duplicates
+   (remove primary-intent
+           (remove nil candidates)
+           :test #'eq)
+   :test #'eq))
+
 (defun classify-retrieval-intent (prompt &key (operator-mode :repl-bridge))
+  (declare (ignore operator-mode))
   (let* ((normalized-prompt (or prompt ""))
+         (explicit-explanation-p (prompt-requests-explanation-p normalized-prompt))
+         (explicit-planning-p (prompt-requests-planning-p normalized-prompt))
+         (explicit-implementation-p (prompt-requests-implementation-p normalized-prompt))
+         (explicit-recovery-p (prompt-requests-recovery-p normalized-prompt))
+         (explicit-validation-p (prompt-requests-validation-p normalized-prompt))
          (intent-p (prompt-contains-any-needle-p normalized-prompt
                                                  '("intent" "alignment" "aligned"
                                                    "misaligned" "divergence"
@@ -114,7 +179,9 @@
          (mutation-p (prompt-contains-any-needle-p normalized-prompt
                                                    '("write" "change" "modify" "mutate" "mutation" "update"
                                                      "patch" "implement" "refactor"
-                                                     "fix" "reload" "eval")))
+                                                     "fix" "reload" "eval"
+                                                     "create" "author" "augment" "append"
+                                                     "revise" "establish" "set" "bind")))
          (conversation-p (or history-p
                              (prompt-contains-any-needle-p normalized-prompt
                                                            '("thread" "turn" "conversation"
@@ -143,9 +210,78 @@
                      (source-p :source-inspection)
                      (history-p :historical-recall)
                      (t :general)))
+         (primary-intent
+           (cond
+             (explicit-recovery-p
+              (if (and runtime-p incident-p)
+                  :runtime-debugging
+                  :incident-follow-up))
+             ((and explicit-implementation-p source-p)
+              :code-change)
+             ((and explicit-implementation-p runtime-p)
+              :runtime-mutation)
+             ((and explicit-planning-p project-p)
+              :project-governance)
+             ((and explicit-planning-p source-p)
+              :code-change)
+             ((and explicit-validation-p testing-p)
+              (if explicit-implementation-p
+                  :code-change
+                  :testing-feedback))
+             (t
+              category)))
+         (secondary-intents
+           (retrieval-secondary-intents
+            primary-intent
+            (when intent-p :alignment-analysis)
+            (when project-p :project-governance)
+            (when testing-p :testing-feedback)
+            (when (and incident-p runtime-p) :runtime-debugging)
+            (when (and source-p mutation-p) :code-change)
+            (when incident-p :incident-follow-up)
+            (when workflow-p :workflow-supervision)
+            (when (and runtime-p mutation-p) :runtime-mutation)
+            (when runtime-p :runtime-inspection)
+            (when source-p :source-inspection)
+            (when history-p :historical-recall)))
+         (task-archetype
+           (cond
+             (explicit-recovery-p :recover-remediate)
+             ((and explicit-implementation-p explicit-validation-p) :implement-and-validate)
+             (explicit-planning-p :plan-before-change)
+             ((and source-p mutation-p) :implement-change)
+             ((and runtime-p incident-p) :investigate-runtime-failure)
+             ((and project-p explicit-explanation-p) :architecture-review)
+             (testing-p :validate-quality)
+             (workflow-p :workflow-supervision)
+             (history-p :historical-analysis)
+             (explicit-explanation-p :explain-or-assess)
+             (t :general-inquiry)))
+         (requested-deliverable
+           (cond
+             (explicit-recovery-p :recovery-decision)
+             ((and explicit-implementation-p explicit-validation-p) :code-change-with-validation)
+             (explicit-implementation-p :code-change)
+             (explicit-planning-p :change-plan)
+             (explicit-validation-p :validation-report)
+             (explicit-explanation-p :analysis)
+             (history-p :historical-summary)
+             (t :reply)))
+         (phase-intent
+           (cond
+             (explicit-recovery-p :recover)
+             (explicit-planning-p :plan)
+             (explicit-implementation-p :mutate)
+             (explicit-validation-p :validate)
+             (t :inspect)))
          (resolved-domains (or domains '(:conversation :workspace))))
     (make-retrieval-intent
      :category category
+     :primary-intent primary-intent
+     :secondary-intents secondary-intents
+     :task-archetype task-archetype
+     :requested-deliverable requested-deliverable
+     :phase-intent phase-intent
      :domains resolved-domains
      :historical-p history-p
      :intent-context-p intent-p
@@ -156,27 +292,33 @@
      :project-context-p project-p
      :source-context-p source-p
      :mutation-likely-p mutation-p
-     :explanation (cond
-                    (intent-p
-                     "Prompt indicates durable intent, alignment, divergence, or reconciliation reasoning.")
-                    (project-p
-                     "Prompt indicates project governance, requirements, journeys, architecture, or design-system reasoning.")
-                    (testing-p
-                     "Prompt indicates testing, coverage, benchmark, or validation-feedback reasoning.")
-                    (observability-p
-                     "Prompt indicates runtime observability, telemetry, console, or diagnostics reasoning.")
-                    (incident-p
-                     "Prompt indicates incident or recovery reasoning.")
-                    (workflow-p
-                     "Prompt indicates workflow, approval, or validation reasoning.")
-                    (runtime-p
-                     "Prompt indicates live runtime inspection or mutation.")
-                    (source-p
-                     "Prompt indicates source or workspace reasoning.")
-                    (history-p
-                     "Prompt indicates historical recall across prior turns or artifacts.")
-                    (t
-                     "Prompt does not strongly select a single retrieval domain.")))))
+     :explanation
+     (format nil
+             "~A Task archetype ~S targets deliverable ~S in phase ~S."
+             (cond
+               (intent-p
+                "Prompt indicates durable intent, alignment, divergence, or reconciliation reasoning.")
+               (project-p
+                "Prompt indicates project governance, requirements, journeys, architecture, or design-system reasoning.")
+               (testing-p
+                "Prompt indicates testing, coverage, benchmark, or validation-feedback reasoning.")
+               (observability-p
+                "Prompt indicates runtime observability, telemetry, console, or diagnostics reasoning.")
+               (incident-p
+                "Prompt indicates incident or recovery reasoning.")
+               (workflow-p
+                "Prompt indicates workflow, approval, or validation reasoning.")
+               (runtime-p
+                "Prompt indicates live runtime inspection or mutation.")
+               (source-p
+                "Prompt indicates source or workspace reasoning.")
+               (history-p
+                "Prompt indicates historical recall across prior turns or artifacts.")
+               (t
+                "Prompt does not strongly select a single retrieval domain."))
+             task-archetype
+             requested-deliverable
+             phase-intent))))
 
 (defun classify-interaction-decision (prompt &key (operator-mode :conversation))
   (declare (ignore operator-mode))

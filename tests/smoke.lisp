@@ -83,34 +83,2449 @@
                             :manifest manifest)))
     (declare (ignore ignore))
     (unwind-protect
-         (let* ((result-envelope (sbcl-agent::invoke-governed-desktop-task-request
-                                  prepared-request
-                                  session
-                                  :manifest manifest))
-                (result (getf result-envelope :result))
-                (summary (sbcl-agent::actor-runtime-state-summary session)))
-           (assert-equal 5
-                         (or (getf result :result)
-                             (first (or (getf result :values) '())))
-                         "runtime request should execute successfully through the actor thread pool")
-           (assert-true (getf summary :running-p)
-                        "actor thread pool should be running after actor-backed execution")
-           (assert-true (> (getf summary :worker-count) 0)
-                        "actor thread pool should retain at least one worker")
-           (assert-equal 1
-                         (getf summary :submitted-job-count)
-                         "actor thread pool should record the submitted actor job")
-           (assert-equal 1
-                         (getf summary :completed-job-count)
-                         "actor thread pool should record the completed actor job")
-           (assert-equal 0
-                         (getf summary :busy-worker-count)
-                         "actor worker should be returned to the pool once processing completes")
-           (assert-true
-            (every (lambda (worker)
-                     (null (getf worker :leased-actor-id)))
-                   (or (getf summary :workers) '()))
-            "idle actor workers should not retain leased actor assignments after completion"))
+        (let* ((result-envelope (sbcl-agent::invoke-governed-desktop-task-request
+                                 prepared-request
+                                 session
+                                 :manifest manifest))
+               (result (getf result-envelope :result))
+               (summary (sbcl-agent::actor-runtime-state-summary session)))
+          (assert-equal 5
+                        (or (getf result :result)
+                            (first (or (getf result :values) '())))
+                        "runtime request should execute successfully through the actor thread pool")
+          (assert-true (getf summary :running-p)
+                       "actor thread pool should be running after actor-backed execution")
+          (assert-true (> (getf summary :worker-count) 0)
+                       "actor thread pool should retain at least one worker")
+          (assert-equal 1
+                        (getf summary :submitted-job-count)
+                        "actor thread pool should record the submitted actor job")
+          (assert-equal 1
+                        (getf summary :completed-job-count)
+                        "actor thread pool should record the completed actor job")
+          (assert-equal 0
+                        (getf summary :busy-worker-count)
+                        "actor worker should be returned to the pool once processing completes")
+          (assert-true
+           (every (lambda (worker)
+                    (null (getf worker :leased-actor-id)))
+                  (or (getf summary :workers) '()))
+           "idle actor workers should not retain leased actor assignments after completion"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun actor-thread-pool-captures-governed-execution-context-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (request (sbcl-agent::make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :runtime
+                   :operation :evaluate-form
+                   :payload '(:form "(+ 3 4)" :package-name "SBCL-AGENT-USER")))
+         (manifest (sbcl-agent::find-desktop-task-manifest :runtime :evaluate-form))
+         (prepared-request (sbcl-agent::ensure-governed-desktop-task-request-state
+                            request
+                            :session-id (sbcl-agent::agent-session-id session)
+                            :manifest manifest)))
+    (declare (ignore ignore))
+    (unwind-protect
+        (let* ((ignore-result
+                 (sbcl-agent::invoke-governed-desktop-task-request
+                  prepared-request
+                  session
+                  :manifest manifest))
+               (events (sbcl-agent::agent-session-events session))
+               (actor-events
+                 (remove-if-not
+                  (lambda (event)
+                    (member (sbcl-agent::event-kind event)
+                            '(:actor-execution-submitted
+                              :actor-execution-started
+                              :actor-execution-completed)
+                            :test #'eq))
+                  events))
+               (submitted (find :actor-execution-submitted actor-events
+                                :key #'sbcl-agent::event-kind
+                                :test #'eq))
+               (started (find :actor-execution-started actor-events
+                              :key #'sbcl-agent::event-kind
+                              :test #'eq))
+               (completed (find :actor-execution-completed actor-events
+                                :key #'sbcl-agent::event-kind
+                                :test #'eq))
+               (submitted-payload (and submitted (sbcl-agent::event-payload submitted)))
+               (context (and submitted-payload
+                             (getf submitted-payload :context))))
+          (declare (ignore ignore-result))
+          (assert-true submitted
+                       "actor execution should emit a submitted event")
+          (assert-true started
+                       "actor execution should emit a started event")
+          (assert-true completed
+                       "actor execution should emit a completed event")
+          (assert-equal :runtime-eval-safe
+                        (getf context :capability)
+                        "actor execution context should retain the manifest capability")
+          (assert-equal :governed-desktop-task
+                        (getf context :authority)
+                        "actor execution context should record governed desktop-task authority")
+          (assert-equal (sbcl-agent::desktop-task-request-id prepared-request)
+                        (getf context :request-id)
+                        "actor execution context should retain the request id")
+          (assert-equal :runtime
+                        (getf context :target)
+                        "actor execution context should retain the target")
+          (assert-equal :evaluate-form
+                        (getf context :operation)
+                        "actor execution context should retain the operation"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun actor-thread-pool-enforces-governance-inside-actor-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (manifest (sbcl-agent::find-desktop-task-manifest :editor :append-text))
+         (request (sbcl-agent::make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :editor
+                   :operation :append-text
+                   :payload '(:text "(+ 8 9)")))
+         (prepared-request (sbcl-agent::ensure-governed-desktop-task-request-state
+                            request
+                            :session-id (sbcl-agent::agent-session-id session)
+                            :manifest manifest))
+         (failure-message nil))
+    (declare (ignore ignore))
+    (unwind-protect
+        (progn
+          (handler-case
+              (sbcl-agent::invoke-governed-desktop-task-request
+               prepared-request
+               session
+               :manifest manifest)
+            (error (condition)
+              (setf failure-message (princ-to-string condition))))
+          (let* ((events (sbcl-agent::agent-session-events session))
+                 (governance-event
+                   (find :desktop-task-actor-governance-enforcement
+                         events
+                         :key #'sbcl-agent::event-kind
+                         :test #'eq))
+                 (started
+                   (find :actor-execution-started
+                         events
+                         :key #'sbcl-agent::event-kind
+                         :test #'eq))
+                 (failed
+                   (find :actor-execution-failed
+                         events
+                         :key #'sbcl-agent::event-kind
+                         :test #'eq)))
+            (assert-true failure-message
+                         "governed editor execution without approval should fail")
+            (assert-true governance-event
+                         "actor-owned governed execution should emit a governance enforcement event")
+            (assert-true started
+                         "governed execution should enter actor-owned execution before failing")
+            (assert-true failed
+                         "governance denial should fail from inside the actor execution path")))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun actor-thread-pool-prepares-resolution-inside-actor-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (manifest (sbcl-agent::find-desktop-task-manifest :runtime :evaluate-form))
+         (request (sbcl-agent::make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :runtime
+                   :operation :evaluate-form
+                   :payload '(:form "(+ 10 20)" :package-name "SBCL-AGENT-USER")))
+         (prepared-request (sbcl-agent::ensure-governed-desktop-task-request-state
+                            request
+                            :session-id (sbcl-agent::agent-session-id session)
+                            :manifest manifest)))
+    (declare (ignore ignore))
+    (unwind-protect
+        (let* ((result-envelope
+                 (sbcl-agent::invoke-governed-desktop-task-request
+                  prepared-request
+                  session))
+               (events (sbcl-agent::agent-session-events session))
+               (started-index
+                 (position :actor-execution-started
+                           events
+                           :key #'sbcl-agent::event-kind
+                           :test #'eq))
+               (preparation-index
+                 (position :desktop-task-actor-resolution-preparation
+                           events
+                           :key #'sbcl-agent::event-kind
+                           :test #'eq))
+               (preparation-event
+                 (and preparation-index (nth preparation-index events)))
+               (preparation-payload
+                 (and preparation-event
+                      (sbcl-agent::event-payload preparation-event)))
+               (completed-event
+                 (find :actor-execution-completed
+                       events
+                       :key #'sbcl-agent::event-kind
+                       :test #'eq))
+               (completed-payload
+                 (and completed-event
+                      (sbcl-agent::event-payload completed-event)))
+               (completed-context
+                 (and completed-payload
+                      (getf completed-payload :context)))
+               (completed-context-metadata
+                 (and completed-context
+                      (getf completed-context :metadata)))
+               (record (sbcl-agent::find-desktop-task-record-by-request-id
+                        session
+                        (sbcl-agent::desktop-task-request-id prepared-request)))
+               (record-metadata
+                 (and record (sbcl-agent::desktop-task-record-metadata record)))
+               (record-actor-job-id
+                 (and record-metadata
+                      (getf record-metadata :actor-execution-job-id)))
+               (request-metadata
+                 (sbcl-agent::desktop-task-request-metadata prepared-request))
+               (request-actor-job-id
+                 (and request-metadata
+                      (getf request-metadata :actor-execution-job-id)))
+               (completed-context-job-id
+                 (and completed-context-metadata
+                      (getf completed-context-metadata :actor-execution-job-id)))
+               (completed-job-id
+                 (and completed-payload
+                      (getf completed-payload :job-id))))
+          (assert-true (getf result-envelope :manifest)
+                       "actor-owned preparation should still return the effective manifest")
+          (assert-true (getf result-envelope :resolution)
+                       "actor-owned preparation should still return the effective resolution")
+          (assert-true (numberp started-index)
+                       "actor execution should emit a started event")
+          (assert-true (numberp preparation-index)
+                       "actor execution should emit a resolution-preparation event")
+          (assert-true (> preparation-index started-index)
+                       "resolution preparation should happen after actor execution starts")
+          (assert-equal :runtime-eval-safe
+                        (getf preparation-payload :policy-id)
+                        "actor-owned preparation should recover the effective policy id")
+          (assert-equal :runtime
+                        (getf preparation-payload :target)
+                        "actor-owned preparation should retain the request target")
+          (assert-true (getf preparation-payload :resolution)
+                       "actor-owned preparation should record the effective resolution")
+          (assert-equal :runtime-eval-safe
+                        (getf completed-context :capability)
+                        "completed actor execution should retain the resolved capability after deferred preparation")
+          (assert-true (or record-actor-job-id
+                           request-actor-job-id
+                           completed-context-job-id)
+                       "governed execution should retain the native actor execution job id in request, record, or actor context metadata")
+          (assert-equal completed-job-id
+                        (or record-actor-job-id
+                            request-actor-job-id
+                            completed-context-job-id)
+                        "retained actor execution job id should match the completed actor execution job id"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun kernel-desktop-task-invoke-authoritative-ingress-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (response
+           (sbcl-agent::command-kernel-invoke-service
+            session
+            "Invoke a governed runtime desktop task through the kernel ingress."
+            "desktop-task/invoke"
+            :payload (list :requester :context-chat
+                           :target :runtime
+                           :operation :evaluate-form
+                           :payload '(:form "(+ 11 12)"
+                                      :package-name "SBCL-AGENT-USER"))))
+         (data (sbcl-agent::service-response-data response))
+         (task-record (getf data :task-record))
+         (result (getf data :result)))
+    (declare (ignore ignore))
+    (assert-true (stringp (getf (sbcl-agent::service-response-metadata response) :execution-id))
+                 "kernel desktop-task invoke should assign an execution handle")
+    (assert-equal :desktop-task
+                  (getf response :domain)
+                  "kernel desktop-task invoke should report the desktop-task domain")
+    (assert-equal :invoke
+                  (getf response :operation)
+                  "kernel desktop-task invoke should identify the invoke operation")
+    (assert-equal :runtime-eval-safe
+                  (getf (getf data :manifest) :capability)
+                  "kernel desktop-task invoke should resolve the governed manifest")
+    (assert-equal :evaluate-form
+                  (getf (getf data :resolution) :operation)
+                  "kernel desktop-task invoke should surface the resolved operation")
+    (assert-equal 23
+                  (or (getf result :result)
+                      (first (or (getf result :values) '())))
+                  "kernel desktop-task invoke should execute the governed runtime task")
+    (assert-equal :completed
+                  (getf task-record :status)
+                  "kernel desktop-task invoke should persist a completed governed record")
+    (assert-true (stringp (getf data :actor-execution-job-id))
+                 "kernel desktop-task invoke should expose the native actor execution handle")
+    (assert-equal (getf data :actor-execution-job-id)
+                  (getf task-record :actor-execution-job-id)
+                  "kernel desktop-task invoke should keep record and response actor identity aligned")))
+
+(defun actor-desktop-task-execution-uses-kernelized-command-services-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (runtime-response
+           (sbcl-agent::command-desktop-task-invoke-service
+            session
+            :requester :context-chat
+            :target :runtime
+            :operation :evaluate-form
+            :payload '(:form "(+ 30 12)"
+                       :package-name "SBCL-AGENT-USER")))
+         (runtime-result (getf (sbcl-agent::service-response-data runtime-response) :result))
+         (workspace-path "/private/tmp/sbcl-agent-phase2-kernelized.txt"))
+    (declare (ignore ignore))
+    (assert-true (stringp (getf runtime-result :kernel-execution-id))
+                 "actor-owned runtime desktop task execution should retain the kernel execution handle")
+    (assert-true (listp (getf runtime-result :kernel-governance-preflight))
+                 "actor-owned runtime desktop task execution should invoke the kernel path and retain governance preflight metadata")
+    (sbcl-agent::approve-policy session :workspace-write)
+    (let* ((workspace-response
+             (sbcl-agent::command-desktop-task-invoke-service
+              session
+              :requester :context-chat
+              :target :workspace
+              :operation :apply-patch
+              :payload (list :operations
+                             (list (list :write
+                                         workspace-path
+                                         "phase2 kernelized workspace mutation")))))
+           (workspace-result (getf (sbcl-agent::service-response-data workspace-response) :result)))
+      (assert-true (stringp (getf workspace-result :kernel-execution-id))
+                   "actor-owned workspace desktop task execution should retain the kernel execution handle")
+      (assert-true (listp (getf workspace-result :kernel-governance-preflight))
+                   "actor-owned workspace desktop task execution should invoke the kernel path and retain governance preflight metadata"))
+    (let* ((editor-response
+             (sbcl-agent::command-desktop-task-invoke-service
+              session
+              :requester :context-chat
+              :target :editor
+              :operation :append-text
+              :payload '(:text "phase2 editor kernelized mutation")
+              :surface-context '(:editor (:scope-id "scope-1"
+                                  :buffer-id "buffer-1"
+                                  :package-name "SBCL-AGENT-USER"))
+              :metadata '(:pending-action-id "pending-1")))
+           (editor-result (getf (sbcl-agent::service-response-data editor-response) :result)))
+      (assert-true (stringp (getf editor-result :kernel-execution-id))
+                   "actor-owned editor desktop task execution should retain the kernel execution handle")
+      (assert-true (listp (getf editor-result :kernel-governance-preflight))
+                   "actor-owned editor desktop task execution should invoke the kernel path and retain governance preflight metadata"))))
+
+(defun desktop-task-actor-wrapper-services-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (runtime-response
+           (sbcl-agent::command-desktop-task-runtime-eval-service
+            session
+            "(+ 7 8)"
+            :package "SBCL-AGENT-USER"))
+         (runtime-data (sbcl-agent::service-response-data runtime-response))
+         (workspace-path "/Volumes/data/development/sbcl-agent/phase2-wrapper-smoke.txt"))
+    (declare (ignore ignore))
+    (assert-true (stringp (getf runtime-data :kernel-execution-id))
+                 "actor-facing runtime wrapper should retain the kernel execution handle")
+    (assert-true (stringp (getf runtime-data :actor-execution-job-id))
+                 "actor-facing runtime wrapper should retain the actor execution handle")
+    (sbcl-agent::approve-policy session :runtime-reload)
+    (let ((reload-response
+            (sbcl-agent::command-desktop-task-runtime-reload-file-service
+             session
+             "/Volumes/data/development/sbcl-agent/src/package.lisp")))
+      (let ((reload-data (sbcl-agent::service-response-data reload-response)))
+        (assert-true (stringp (getf reload-data :kernel-execution-id))
+                     "actor-facing runtime reload wrapper should retain the kernel execution handle")
+        (assert-true (stringp (getf reload-data :actor-execution-job-id))
+                     "actor-facing runtime reload wrapper should retain the actor execution handle")))
+    (sbcl-agent::approve-policy session :workspace-write)
+    (let ((source-response
+            (sbcl-agent::command-desktop-task-stage-source-change-service
+             session
+             workspace-path
+             "phase2 actor wrapper mutation")))
+      (let ((source-data (sbcl-agent::service-response-data source-response)))
+        (assert-true (stringp (getf source-data :kernel-execution-id))
+                     "actor-facing source wrapper should retain the kernel execution handle")
+        (assert-true (stringp (getf source-data :actor-execution-job-id))
+                     "actor-facing source wrapper should retain the actor execution handle")
+        (assert-equal workspace-path
+                      (getf source-data :path)
+                      "actor-facing source wrapper should preserve the staged path")))))
+
+(defun approval-continuation-preserves-authority-lineage-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((path "/private/tmp/sbcl-agent-phase2-approved.txt")
+                 (invoke-response
+                   (sbcl-agent::command-desktop-task-invoke-service
+                    session
+                    :requester :context-chat
+                    :target :workspace
+                    :operation :apply-patch
+                    :payload (list :operations
+                                   (list (list :write path "phase2 approved mutation")))))
+                 (invoke-data (sbcl-agent::service-response-data invoke-response))
+                 (task-record (getf invoke-data :task-record))
+                 (approval-id (getf task-record :approval-id)))
+            (assert-equal :awaiting-approval
+                          (getf task-record :status)
+                          "workspace patch should stage awaiting approval before continuation")
+            (assert-true (stringp approval-id)
+                         "workspace patch should surface an approval id for continuation")
+            (let* ((approval-response
+                     (sbcl-agent::command-desktop-task-approve-approval-service
+                      session
+                      nil
+                      approval-id
+                      :session-id (sbcl-agent::agent-session-id session)))
+                   (approval-metadata (sbcl-agent::service-response-metadata approval-response))
+                   (approval-data (sbcl-agent::service-response-data approval-response))
+                   (approval-actor-job-id (or (getf approval-data :actor-execution-job-id)
+                                              (getf approval-metadata :actor-execution-job-id)))
+                   (desktop-task-results (getf approval-data :desktop-task-results))
+                   (first-result (first desktop-task-results))
+                   (actor-job-ids (getf approval-data :actor-execution-job-ids))
+                   (kernel-execution-ids (getf approval-data :kernel-execution-ids))
+                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                   (approval-history-entry
+                     (find approval-actor-job-id history
+                           :key (lambda (entry) (getf entry :job-id))
+                           :test #'string=))
+                   (governance-actor-id
+                     (sbcl-agent::actor-address-id
+                      (sbcl-agent::make-standard-actor-address
+                       :governance
+                       :scope (sbcl-agent::agent-session-id session)))))
+              (assert-true (stringp approval-actor-job-id)
+                           "public approval continuation should expose the governance actor execution handle")
+              (assert-true approval-history-entry
+                           "public approval continuation should be recorded in native actor runtime history")
+              (assert-equal governance-actor-id
+                            (getf approval-history-entry :actor-id)
+                            "public approval continuation should execute under the governance actor")
+              (assert-true (and (listp actor-job-ids)
+                                (stringp (first actor-job-ids)))
+                           "approval continuation should surface actor execution lineage")
+              (assert-true (and (listp kernel-execution-ids)
+                                (stringp (first kernel-execution-ids)))
+                           "approval continuation should surface kernel execution lineage")
+              (assert-true (stringp (getf first-result :actor-execution-job-id))
+                           "approval continuation task results should carry actor execution identity")
+              (assert-true (stringp (getf first-result :kernel-execution-id))
+                           "approval continuation task results should carry kernel execution identity"))))
+          (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun workflow-ops-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((work-item (sbcl-agent::create-work-item session "Workflow actor mediation"))
+                 (work-item-id (sbcl-agent::work-item-id work-item))
+                 (quarantine-response
+                   (sbcl-agent::command-work-item-quarantine-service
+                    session
+                    work-item-id
+                    "Need workflow review"))
+                 (quarantine-data (sbcl-agent::service-response-data quarantine-response))
+                 (quarantine-metadata (sbcl-agent::service-response-metadata quarantine-response))
+                 (quarantine-job-id (or (getf quarantine-data :actor-execution-job-id)
+                                        (getf quarantine-metadata :actor-execution-job-id)))
+                 (resume-response
+                   (sbcl-agent::command-work-item-resume-service
+                    session
+                    work-item-id
+                    :note "Resume workflow"))
+                 (resume-data (sbcl-agent::service-response-data resume-response))
+                 (resume-metadata (sbcl-agent::service-response-metadata resume-response))
+                 (resume-job-id (or (getf resume-data :actor-execution-job-id)
+                                    (getf resume-metadata :actor-execution-job-id)))
+                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                 (workflow-actor-id
+                   (sbcl-agent::actor-address-id
+                    (sbcl-agent::make-standard-actor-address
+                     :workflow
+                     :scope (sbcl-agent::agent-session-id session))))
+                 (quarantine-entry
+                   (find quarantine-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=))
+                 (resume-entry
+                   (find resume-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=)))
+            (assert-true (stringp quarantine-job-id)
+                         "workflow quarantine service should expose an actor execution job id")
+            (assert-true (stringp resume-job-id)
+                         "workflow resume service should expose an actor execution job id")
+            (assert-true quarantine-entry
+                         "workflow quarantine actor execution should be recorded in actor runtime history")
+            (assert-true resume-entry
+                         "workflow resume actor execution should be recorded in actor runtime history")
+            (assert-equal workflow-actor-id
+                          (getf quarantine-entry :actor-id)
+                          "workflow quarantine service should execute under the session-scoped workflow actor")
+            (assert-equal workflow-actor-id
+                          (getf resume-entry :actor-id)
+                          "workflow resume service should execute under the session-scoped workflow actor")
+            (assert-equal work-item-id
+                          (getf quarantine-entry :work-item-id)
+                          "workflow quarantine actor execution should retain the work-item id")
+            (assert-equal work-item-id
+                          (getf resume-entry :work-item-id)
+                          "workflow resume actor execution should retain the work-item id")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun approval-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((authority-response
+                   (sbcl-agent::command-approve-policy-service session :process-run))
+                 (authority-data (sbcl-agent::service-response-data authority-response))
+                 (authority-metadata (sbcl-agent::service-response-metadata authority-response))
+                 (authority-job-id (or (getf authority-data :actor-execution-job-id)
+                                       (getf authority-metadata :actor-execution-job-id)))
+                 (work-item (sbcl-agent::create-work-item session "Governance actor mediation"))
+                 (work-item-id (sbcl-agent::work-item-id work-item))
+                 (approval-response
+                   (sbcl-agent::command-request-work-item-approval-service
+                    session
+                    work-item-id
+                    :process-run
+                    :reason "Need governance approval"))
+                 (approval-data (sbcl-agent::service-response-data approval-response))
+                 (approval-metadata (sbcl-agent::service-response-metadata approval-response))
+                 (approval-job-id (or (getf approval-data :actor-execution-job-id)
+                                      (getf approval-metadata :actor-execution-job-id)))
+                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                 (governance-actor-id
+                   (sbcl-agent::actor-address-id
+                    (sbcl-agent::make-standard-actor-address
+                     :governance
+                     :scope (sbcl-agent::agent-session-id session))))
+                 (authority-entry
+                   (find authority-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=))
+                 (approval-entry
+                   (find approval-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=)))
+            (assert-true (stringp authority-job-id)
+                         "approve-policy service should expose a governance actor execution job id")
+            (assert-true (stringp approval-job-id)
+                         "request-work-item-approval service should expose a governance actor execution job id")
+            (assert-true authority-entry
+                         "approve-policy service should be recorded in actor runtime history")
+            (assert-true approval-entry
+                         "request-work-item-approval service should be recorded in actor runtime history")
+            (assert-equal governance-actor-id
+                          (getf authority-entry :actor-id)
+                          "approve-policy service should execute under the governance actor")
+            (assert-equal governance-actor-id
+                          (getf approval-entry :actor-id)
+                          "request-work-item-approval service should execute under the governance actor")
+            (assert-equal work-item-id
+                          (getf approval-entry :work-item-id)
+                          "request-work-item-approval actor execution should retain the work-item id")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun incident-remediation-service-is-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((thread (sbcl-agent::current-thread session))
+                 (incident (sbcl-agent::create-incident session
+                                                        :runtime-error
+                                                        "Incident actor mediation"
+                                                        "Need remediation"
+                                                        :thread thread))
+                 (incident-id (sbcl-agent::incident-id incident))
+                 (response
+                   (sbcl-agent::command-incident-remediation-plan-service
+                    session
+                    incident-id
+                    '(:plan "Capture root cause" :owner "operator")))
+                 (data (sbcl-agent::service-response-data response))
+                 (metadata (sbcl-agent::service-response-metadata response))
+                 (job-id (or (getf data :actor-execution-job-id)
+                             (getf metadata :actor-execution-job-id)))
+                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                 (entry (find job-id history
+                              :key (lambda (item) (getf item :job-id))
+                              :test #'string=))
+                 (incident-actor-id
+                   (sbcl-agent::actor-address-id
+                    (sbcl-agent::make-standard-actor-address
+                     :incident
+                     :scope (sbcl-agent::agent-session-id session))))
+                 (context-metadata (and entry
+                                        (getf (getf entry :context) :metadata))))
+            (assert-true (stringp job-id)
+                         "incident remediation service should expose an actor execution job id")
+            (assert-true entry
+                         "incident remediation service should be recorded in actor runtime history")
+            (assert-equal incident-actor-id
+                          (getf entry :actor-id)
+                          "incident remediation service should execute under the incident actor")
+            (assert-equal incident-id
+                          (getf context-metadata :incident-id)
+                          "incident remediation actor execution should retain the incident id in context metadata")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun project-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((create-response
+                   (sbcl-agent::command-project-create-service
+                    session
+                    :title "Project actor mediation"
+                    :summary "Verify project actor ingress."))
+                 (create-data (sbcl-agent::service-response-data create-response))
+                 (create-metadata (sbcl-agent::service-response-metadata create-response))
+                 (create-job-id (or (getf create-data :actor-execution-job-id)
+                                    (getf create-metadata :actor-execution-job-id)))
+                 (project-id (getf create-data :id))
+                 (thread (sbcl-agent::current-thread session))
+                 (incident (sbcl-agent::create-incident session
+                                                        :runtime-error
+                                                        "Project binding incident"
+                                                        "Need project linkage"
+                                                        :thread thread))
+                 (incident-id (sbcl-agent::incident-id incident))
+                 (bind-response
+                   (sbcl-agent::command-project-bind-incident-service
+                    session
+                    incident-id
+                    :project-id project-id))
+                 (bind-data (sbcl-agent::service-response-data bind-response))
+                 (bind-metadata (sbcl-agent::service-response-metadata bind-response))
+                 (bind-job-id (or (getf bind-data :actor-execution-job-id)
+                                  (getf bind-metadata :actor-execution-job-id)))
+                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                 (project-actor-id
+                   (sbcl-agent::actor-address-id
+                    (sbcl-agent::make-standard-actor-address
+                     :project
+                     :scope (sbcl-agent::agent-session-id session))))
+                 (create-entry
+                   (find create-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=))
+                 (bind-entry
+                   (find bind-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=))
+                 (bind-context-metadata
+                   (and bind-entry
+                        (getf (getf bind-entry :context) :metadata))))
+            (assert-true (stringp create-job-id)
+                         "project create service should expose a project actor execution job id")
+            (assert-true (stringp bind-job-id)
+                         "project bind incident service should expose a project actor execution job id")
+            (assert-true create-entry
+                         "project create service should be recorded in actor runtime history")
+            (assert-true bind-entry
+                         "project bind incident service should be recorded in actor runtime history")
+            (assert-equal project-actor-id
+                          (getf create-entry :actor-id)
+                          "project create service should execute under the project actor")
+            (assert-equal project-actor-id
+                          (getf bind-entry :actor-id)
+                          "project bind incident service should execute under the project actor")
+            (assert-equal project-id
+                          (getf bind-context-metadata :project-id)
+                          "project actor execution should retain the project id in context metadata")
+            (assert-equal incident-id
+                          (getf bind-context-metadata :incident-id)
+                          "project binding actor execution should retain the incident id in context metadata")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun environment-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+        (progn
+          (sbcl-agent::bind-session-to-environment session environment)
+          (let* ((preferences-response
+                   (sbcl-agent::command-environment-set-desktop-preferences-service
+                    '(:theme-preference :system
+                      :sidebar-pinned t)
+                    environment))
+                 (preferences-data (sbcl-agent::service-response-data preferences-response))
+                 (preferences-metadata (sbcl-agent::service-response-metadata preferences-response))
+                 (preferences-job-id (or (getf preferences-data :actor-execution-job-id)
+                                         (getf preferences-metadata :actor-execution-job-id)))
+                 (preferences-kernel-id (or (getf preferences-data :kernel-execution-id)
+                                            (getf preferences-metadata :kernel-execution-id)
+                                            (getf preferences-data :execution-id)
+                                            (getf preferences-metadata :execution-id)))
+                 (image-response
+                   (sbcl-agent::command-environment-save-image-service
+                    (format nil "actor-env-test-~D" (get-universal-time))
+                    :overwrite t
+                    :environment environment))
+                 (image-data (sbcl-agent::service-response-data image-response))
+                 (image-metadata (sbcl-agent::service-response-metadata image-response))
+                 (image-job-id (or (getf image-data :actor-execution-job-id)
+                                   (getf image-metadata :actor-execution-job-id)))
+                 (image-kernel-id (or (getf image-data :kernel-execution-id)
+                                      (getf image-metadata :kernel-execution-id)
+                                      (getf image-data :execution-id)
+                                      (getf image-metadata :execution-id)))
+                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                 (environment-actor-id
+                   (sbcl-agent::actor-address-id
+                    (sbcl-agent::make-standard-actor-address
+                     :environment
+                     :scope (sbcl-agent::agent-session-id session))))
+                 (preferences-entry
+                   (find preferences-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=))
+                 (image-entry
+                   (find image-job-id history
+                         :key (lambda (entry) (getf entry :job-id))
+                         :test #'string=)))
+            (assert-true (stringp preferences-job-id)
+                         "environment desktop preferences service should expose an environment actor execution job id")
+            (assert-true (stringp image-job-id)
+                         "environment save-image service should expose an environment actor execution job id")
+            (assert-true (stringp preferences-kernel-id)
+                         "environment desktop preferences service should retain kernel execution identity")
+            (assert-true (stringp image-kernel-id)
+                         "environment save-image service should retain kernel execution identity")
+            (assert-true preferences-entry
+                         "environment desktop preferences service should be recorded in actor runtime history")
+            (assert-true image-entry
+                         "environment save-image service should be recorded in actor runtime history")
+            (assert-equal environment-actor-id
+                          (getf preferences-entry :actor-id)
+                          "environment desktop preferences service should execute under the environment actor")
+            (assert-equal environment-actor-id
+                          (getf image-entry :actor-id)
+                          "environment save-image service should execute under the environment actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun package-management-services-are-actor-mediated-test ()
+  (let* ((root (make-temporary-directory "/tmp/sbcl-agent-package-actor-XXXXXX"))
+         (project-root (ensure-directories-exist (merge-pathnames "project/" root)))
+         (session (sbcl-agent::make-default-session :cwd (namestring project-root))))
+    (unwind-protect
+         (let* ((project-path (namestring project-root))
+                (project-name "actor-package-project")
+                (add-response
+                  (sbcl-agent::command-package-management-add-local-project-service
+                   session
+                   project-path
+                   :name project-name))
+                (add-data (sbcl-agent::service-response-data add-response))
+                (add-metadata (sbcl-agent::service-response-metadata add-response))
+                (add-job-id (or (getf add-data :actor-execution-job-id)
+                                (getf add-metadata :actor-execution-job-id)))
+                (remove-response
+                  (sbcl-agent::command-package-management-remove-local-project-service
+                   session
+                   project-name))
+                (remove-data (sbcl-agent::service-response-data remove-response))
+                (remove-metadata (sbcl-agent::service-response-metadata remove-response))
+                (remove-job-id (or (getf remove-data :actor-execution-job-id)
+                                   (getf remove-metadata :actor-execution-job-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (package-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :package-management
+                    :scope (sbcl-agent::agent-session-id session))))
+                (add-entry
+                  (find add-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (remove-entry
+                  (find remove-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=)))
+           (assert-true (stringp add-job-id)
+                        "package-management add-local-project service should expose an actor execution job id")
+           (assert-true (stringp remove-job-id)
+                        "package-management remove-local-project service should expose an actor execution job id")
+           (assert-true add-entry
+                        "package-management add-local-project service should be recorded in actor runtime history")
+           (assert-true remove-entry
+                        "package-management remove-local-project service should be recorded in actor runtime history")
+           (assert-equal package-actor-id
+                         (getf add-entry :actor-id)
+                         "package-management add-local-project service should execute under the package-management actor")
+           (assert-equal package-actor-id
+                         (getf remove-entry :actor-id)
+                         "package-management remove-local-project service should execute under the package-management actor"))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun calculator-services-are-actor-mediated-test ()
+  (let ((session (sbcl-agent::make-default-session :cwd "/private/tmp/")))
+    (unwind-protect
+         (let* ((set-response
+                  (sbcl-agent::command-calculator-set-expression-service
+                   session
+                   "40+2"))
+                (set-data (sbcl-agent::service-response-data set-response))
+                (set-metadata (sbcl-agent::service-response-metadata set-response))
+                (set-job-id (or (getf set-data :actor-execution-job-id)
+                                (getf set-metadata :actor-execution-job-id)))
+                (set-kernel-id (or (getf set-data :kernel-execution-id)
+                                   (getf set-metadata :kernel-execution-id)
+                                   (getf set-data :execution-id)
+                                   (getf set-metadata :execution-id)))
+                (eval-response
+                  (sbcl-agent::command-calculator-evaluate-service
+                   session
+                   "40+2"))
+                (eval-data (sbcl-agent::service-response-data eval-response))
+                (eval-metadata (sbcl-agent::service-response-metadata eval-response))
+                (eval-job-id (or (getf eval-data :actor-execution-job-id)
+                                 (getf eval-metadata :actor-execution-job-id)))
+                (eval-kernel-id (or (getf eval-data :kernel-execution-id)
+                                    (getf eval-metadata :kernel-execution-id)
+                                    (getf eval-data :execution-id)
+                                    (getf eval-metadata :execution-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (calculator-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :calculator
+                    :scope (sbcl-agent::agent-session-id session))))
+                (set-entry
+                  (find set-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (eval-entry
+                  (find eval-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=)))
+           (assert-true (stringp set-job-id)
+                        "calculator set-expression service should expose an actor execution job id")
+           (assert-true (stringp eval-job-id)
+                        "calculator evaluate service should expose an actor execution job id")
+           (assert-true (stringp set-kernel-id)
+                        "calculator set-expression service should retain kernel execution identity")
+           (assert-true set-entry
+                        "calculator set-expression service should be recorded in actor runtime history")
+           (assert-true eval-entry
+                        "calculator evaluate service should be recorded in actor runtime history")
+           (assert-equal calculator-actor-id
+                         (getf set-entry :actor-id)
+                         "calculator set-expression service should execute under the calculator actor")
+           (assert-equal calculator-actor-id
+                         (getf eval-entry :actor-id)
+                         "calculator evaluate service should execute under the calculator actor")
+           (assert-true (stringp eval-kernel-id)
+                        "calculator evaluate service should retain kernel execution identity"))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun memory-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((thread (sbcl-agent::current-thread session))
+                  (memory-id "operator-memory-preference-layering-focus")
+                  (_seeded
+                    (sbcl-agent::remember-operator-memory-candidates
+                     session
+                     thread
+                     nil
+                     (list (list :category :preference
+                                 :attribute "layering-focus"
+                                 :value "actor-first"
+                                 :summary "Seed operator memory for actor mediation smoke"
+                                 :confidence 0.8d0))))
+                  (update-response
+                  (sbcl-agent::command-memory-update-service
+                   session
+                   memory-id
+                   :category :preference
+                   :attribute "layering-focus"
+                   :value "actor-first"
+                   :summary "Phase 3 actor mediation preference"
+                   :confidence 0.9d0))
+                (update-data (sbcl-agent::service-response-data update-response))
+                (update-metadata (sbcl-agent::service-response-metadata update-response))
+                (update-job-id (or (getf update-data :actor-execution-job-id)
+                                   (getf update-metadata :actor-execution-job-id)))
+                (update-kernel-id (or (getf update-data :kernel-execution-id)
+                                      (getf update-metadata :kernel-execution-id)
+                                      (getf update-data :execution-id)
+                                      (getf update-metadata :execution-id)))
+                (delete-response
+                  (sbcl-agent::command-memory-delete-service
+                   session
+                   memory-id))
+                (delete-data (sbcl-agent::service-response-data delete-response))
+                (delete-metadata (sbcl-agent::service-response-metadata delete-response))
+                (delete-job-id (or (getf delete-data :actor-execution-job-id)
+                                   (getf delete-metadata :actor-execution-job-id)))
+                (delete-kernel-id (or (getf delete-data :kernel-execution-id)
+                                      (getf delete-metadata :kernel-execution-id)
+                                      (getf delete-data :execution-id)
+                                      (getf delete-metadata :execution-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (memory-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :memory
+                    :scope (sbcl-agent::agent-session-id session))))
+                (update-entry
+                  (find update-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (delete-entry
+                  (find delete-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=)))
+           (assert-true (stringp update-job-id)
+                        "memory update service should expose an actor execution job id")
+           (assert-true (stringp delete-job-id)
+                        "memory delete service should expose an actor execution job id")
+           (assert-true (stringp update-kernel-id)
+                        "memory update service should retain a kernel execution id")
+           (assert-true (stringp delete-kernel-id)
+                        "memory delete service should retain a kernel execution id")
+           (assert-true update-entry
+                        "memory update service should be recorded in actor runtime history")
+           (assert-true delete-entry
+                        "memory delete service should be recorded in actor runtime history")
+           (assert-equal memory-actor-id
+                         (getf update-entry :actor-id)
+                         "memory update service should execute under the memory actor")
+           (assert-equal memory-actor-id
+                         (getf delete-entry :actor-id)
+                         "memory delete service should execute under the memory actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun intent-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((create-response
+                  (sbcl-agent::command-intent-create-service
+                   session
+                   :description "Phase 3 actor mediation intent"
+                   :scope '(:symbols ("SBCL-AGENT::COMMAND-INTENT-CREATE-SERVICE"))
+                   :constraints '((:policy "actor-first"))
+                   :expected-behaviors '("Preserve actor mediation")
+                   :priority :high))
+                (create-data (sbcl-agent::service-response-data create-response))
+                (create-metadata (sbcl-agent::service-response-metadata create-response))
+                (create-job-id (or (getf create-data :actor-execution-job-id)
+                                   (getf create-metadata :actor-execution-job-id)))
+                (create-kernel-id (or (getf create-data :kernel-execution-id)
+                                      (getf create-metadata :kernel-execution-id)
+                                      (getf create-data :execution-id)
+                                      (getf create-metadata :execution-id)))
+                (intent-id (getf create-data :id))
+                (select-response
+                  (sbcl-agent::command-intent-select-service
+                   session
+                   intent-id))
+                (select-data (sbcl-agent::service-response-data select-response))
+                (select-metadata (sbcl-agent::service-response-metadata select-response))
+                (select-job-id (or (getf select-data :actor-execution-job-id)
+                                   (getf select-metadata :actor-execution-job-id)))
+                (select-kernel-id (or (getf select-data :kernel-execution-id)
+                                      (getf select-metadata :kernel-execution-id)
+                                      (getf select-data :execution-id)
+                                      (getf select-metadata :execution-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (intent-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :intent
+                    :scope (sbcl-agent::agent-session-id session))))
+                (create-entry
+                  (find create-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (select-entry
+                  (find select-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (select-context-metadata
+                  (and select-entry
+                       (getf (getf select-entry :context) :metadata))))
+           (assert-true (stringp create-job-id)
+                        "intent create service should expose an actor execution job id")
+           (assert-true (stringp select-job-id)
+                        "intent select service should expose an actor execution job id")
+           (assert-true (stringp create-kernel-id)
+                        "intent create service should retain kernel execution identity")
+           (assert-true (stringp select-kernel-id)
+                        "intent select service should retain kernel execution identity")
+           (assert-true create-entry
+                        "intent create service should be recorded in actor runtime history")
+           (assert-true select-entry
+                        "intent select service should be recorded in actor runtime history")
+           (assert-equal intent-actor-id
+                         (getf create-entry :actor-id)
+                         "intent create service should execute under the intent actor")
+           (assert-equal intent-actor-id
+                         (getf select-entry :actor-id)
+                         "intent select service should execute under the intent actor")
+           (assert-equal intent-id
+                         (getf select-context-metadata :intent-id)
+                         "intent select actor execution should retain the intent id in context")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun shell-desktop-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((desktop-model
+                    (progn
+                      (sbcl-agent::command-runtime-eval-service
+                       session
+                       "(+ 1 1)"
+                       :package "SBCL-AGENT-USER")
+                      (sbcl-agent::service-response-data
+                       (sbcl-agent::query-shell-desktop-model-service
+                        session
+                        :environment environment))))
+                  (available-panels
+                    (loop for (panel-id panel-data) on (getf desktop-model :panels) by #'cddr
+                          when panel-data collect panel-id))
+                  (panel-id (or (first available-panels)
+                                :workspace))
+                  (panel-response
+                    (sbcl-agent::command-shell-desktop-panel-service
+                     session
+                     panel-id
+                     :environment environment))
+                  (panel-data (sbcl-agent::service-response-data panel-response))
+                  (panel-metadata (sbcl-agent::service-response-metadata panel-response))
+                  (panel-job-id (or (getf panel-data :actor-execution-job-id)
+                                    (getf panel-metadata :actor-execution-job-id)))
+                  (panel-kernel-id (or (getf panel-data :kernel-execution-id)
+                                       (getf panel-metadata :kernel-execution-id)
+                                       (getf panel-data :execution-id)
+                                       (getf panel-metadata :execution-id)))
+                  (restore-response
+                    (sbcl-agent::command-shell-desktop-restore-service
+                     session
+                     :panel-state (list :panel-id panel-id)
+                     :environment environment))
+                  (restore-data (sbcl-agent::service-response-data restore-response))
+                  (restore-metadata (sbcl-agent::service-response-metadata restore-response))
+                  (restore-job-id (or (getf restore-data :actor-execution-job-id)
+                                      (getf restore-metadata :actor-execution-job-id)))
+                  (restore-kernel-id (or (getf restore-data :kernel-execution-id)
+                                         (getf restore-metadata :kernel-execution-id)
+                                         (getf restore-data :execution-id)
+                                         (getf restore-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (shell-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :shell
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (panel-entry
+                    (find panel-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (restore-entry
+                    (find restore-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (assert-true (stringp panel-job-id)
+                          "shell desktop panel service should expose an actor execution job id")
+             (assert-true (stringp restore-job-id)
+                          "shell desktop restore service should expose an actor execution job id")
+             (assert-true (stringp panel-kernel-id)
+                          "shell desktop panel service should retain kernel execution identity")
+             (assert-true (stringp restore-kernel-id)
+                          "shell desktop restore service should retain kernel execution identity")
+             (assert-true panel-entry
+                          "shell desktop panel service should be recorded in actor runtime history")
+             (assert-true restore-entry
+                          "shell desktop restore service should be recorded in actor runtime history")
+             (assert-equal panel-id
+                           (getf panel-data :active-panel)
+                           "shell desktop panel service should activate the requested panel")
+             (assert-equal shell-actor-id
+                           (getf panel-entry :actor-id)
+                           "shell desktop panel service should execute under the shell actor")
+             (assert-equal shell-actor-id
+                           (getf restore-entry :actor-id)
+                           "shell desktop restore service should execute under the shell actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun desktop-task-mcp-admin-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((server-id "actorized-smoke-mcp-server")
+                  (configure-response
+                    (sbcl-agent::command-desktop-task-configure-mcp-server-service
+                     session
+                     :server-id server-id
+                     :name "Actorized MCP"
+                     :transport :stdio
+                     :command "echo"
+                     :arguments '("hello")))
+                  (configure-data (sbcl-agent::service-response-data configure-response))
+                  (configure-metadata (sbcl-agent::service-response-metadata configure-response))
+                  (configure-job-id (or (getf configure-data :actor-execution-job-id)
+                                        (getf configure-metadata :actor-execution-job-id)))
+                  (configure-kernel-id (or (getf configure-data :kernel-execution-id)
+                                           (getf configure-metadata :kernel-execution-id)
+                                           (getf configure-data :execution-id)
+                                           (getf configure-metadata :execution-id)))
+                  (remove-response
+                    (sbcl-agent::command-desktop-task-remove-mcp-server-service
+                     session
+                     server-id))
+                  (remove-data (sbcl-agent::service-response-data remove-response))
+                  (remove-metadata (sbcl-agent::service-response-metadata remove-response))
+                  (remove-job-id (or (getf remove-data :actor-execution-job-id)
+                                     (getf remove-metadata :actor-execution-job-id)))
+                  (remove-kernel-id (or (getf remove-data :kernel-execution-id)
+                                        (getf remove-metadata :kernel-execution-id)
+                                        (getf remove-data :execution-id)
+                                        (getf remove-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (admin-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :desktop-task-admin
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (configure-entry
+                    (find configure-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (remove-entry
+                    (find remove-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (assert-true (stringp configure-job-id)
+                          "desktop-task configure-mcp-server service should expose an actor execution job id")
+             (assert-true (stringp remove-job-id)
+                          "desktop-task remove-mcp-server service should expose an actor execution job id")
+             (assert-true (stringp configure-kernel-id)
+                          "desktop-task configure-mcp-server service should retain kernel execution identity")
+             (assert-true (stringp remove-kernel-id)
+                          "desktop-task remove-mcp-server service should retain kernel execution identity")
+             (assert-true configure-entry
+                          "desktop-task configure-mcp-server service should be recorded in actor runtime history")
+             (assert-true remove-entry
+                          "desktop-task remove-mcp-server service should be recorded in actor runtime history")
+             (assert-equal admin-actor-id
+                           (getf configure-entry :actor-id)
+                           "desktop-task configure-mcp-server service should execute under the desktop-task-admin actor")
+             (assert-equal admin-actor-id
+                           (getf remove-entry :actor-id)
+                           "desktop-task remove-mcp-server service should execute under the desktop-task-admin actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun inspection-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (flet ((history-entry-for-job (job-id)
+                    (find job-id
+                          (sbcl-agent::actor-runtime-state-execution-history
+                           (sbcl-agent::ensure-actor-thread-pool session))
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (let* ((thread (sbcl-agent::current-thread session))
+                    (memory-id "operator-memory-preference-inspection-focus")
+                    (_seeded
+                      (sbcl-agent::remember-operator-memory-candidates
+                       session
+                       thread
+                       nil
+                       (list (list :category :preference
+                                   :attribute "inspection-focus"
+                                   :value "actor-kernel"
+                                   :summary "Seed operator memory for inspection query smoke"
+                                   :confidence 0.8d0))))
+                    (_event
+                      (sbcl-agent::append-session-event
+                       session
+                       :inspection-query-smoke
+                       '(:ok t)
+                       :family :runtime))
+                    (server-id "inspection-query-smoke-mcp-server")
+                    (_configured
+                      (sbcl-agent::command-desktop-task-configure-mcp-server-service
+                       session
+                       :server-id server-id
+                       :name "Inspection Query MCP"
+                       :transport :stdio
+                       :command "echo"
+                       :arguments '("hello")))
+                    (work-item (sbcl-agent::create-work-item session
+                                                             "Inspection query approval smoke"
+                                                             :transaction-scope :test))
+                    (_approval
+                      (sbcl-agent::request-work-item-approval
+                       session
+                       work-item
+                       :process-run
+                       :reason "Need approval for inspection query smoke"))
+                    (memory-list-response
+                      (sbcl-agent::command-memory-list-query-service session))
+                    (memory-list-metadata (sbcl-agent::service-response-metadata memory-list-response))
+                    (memory-list-job-id (getf memory-list-metadata :actor-execution-job-id))
+                    (memory-list-kernel-id (or (getf memory-list-metadata :kernel-execution-id)
+                                               (getf memory-list-metadata :execution-id)))
+                    (memory-list-entry (history-entry-for-job memory-list-job-id))
+                    (memory-detail-response
+                      (sbcl-agent::command-memory-detail-query-service session memory-id))
+                    (memory-detail-data (sbcl-agent::service-response-data memory-detail-response))
+                    (memory-detail-metadata (sbcl-agent::service-response-metadata memory-detail-response))
+                    (memory-detail-job-id (or (getf memory-detail-data :actor-execution-job-id)
+                                              (getf memory-detail-metadata :actor-execution-job-id)))
+                    (memory-detail-kernel-id (or (getf memory-detail-data :kernel-execution-id)
+                                                 (getf memory-detail-metadata :kernel-execution-id)
+                                                 (getf memory-detail-data :execution-id)
+                                                 (getf memory-detail-metadata :execution-id)))
+                    (memory-detail-entry (history-entry-for-job memory-detail-job-id))
+                    (events-response
+                      (sbcl-agent::command-environment-events-query-service
+                       :tail 5
+                       :environment environment))
+                    (events-metadata (sbcl-agent::service-response-metadata events-response))
+                    (events-job-id (getf events-metadata :actor-execution-job-id))
+                    (events-kernel-id (or (getf events-metadata :kernel-execution-id)
+                                          (getf events-metadata :execution-id)))
+                    (events-entry (history-entry-for-job events-job-id))
+                    (console-response
+                      (sbcl-agent::command-console-log-stream-query-service
+                       :environment environment
+                       :limit 5
+                       :type nil
+                       :source nil))
+                    (console-metadata (sbcl-agent::service-response-metadata console-response))
+                    (console-job-id (getf console-metadata :actor-execution-job-id))
+                    (console-kernel-id (or (getf console-metadata :kernel-execution-id)
+                                           (getf console-metadata :execution-id)))
+                    (console-entry (history-entry-for-job console-job-id))
+                    (manifest-response
+                      (sbcl-agent::command-desktop-task-manifest-list-query-service session))
+                    (manifest-metadata (sbcl-agent::service-response-metadata manifest-response))
+                    (manifest-job-id (getf manifest-metadata :actor-execution-job-id))
+                    (manifest-kernel-id (or (getf manifest-metadata :kernel-execution-id)
+                                            (getf manifest-metadata :execution-id)))
+                    (manifest-entry (history-entry-for-job manifest-job-id))
+                    (pending-response
+                      (sbcl-agent::command-desktop-task-pending-approval-query-service session))
+                    (pending-data (sbcl-agent::service-response-data pending-response))
+                    (pending-metadata (sbcl-agent::service-response-metadata pending-response))
+                    (pending-job-id (or (getf pending-data :actor-execution-job-id)
+                                        (getf pending-metadata :actor-execution-job-id)))
+                    (pending-kernel-id (or (getf pending-data :kernel-execution-id)
+                                           (getf pending-metadata :kernel-execution-id)
+                                           (getf pending-data :execution-id)
+                                           (getf pending-metadata :execution-id)))
+                    (pending-entry (history-entry-for-job pending-job-id))
+                    (actor-flow-response
+                      (sbcl-agent::command-desktop-task-actor-flow-query-service
+                       session
+                       :latest-only-p t))
+                    (actor-flow-data (sbcl-agent::service-response-data actor-flow-response))
+                    (actor-flow-metadata (sbcl-agent::service-response-metadata actor-flow-response))
+                    (actor-flow-job-id (or (getf actor-flow-data :actor-execution-job-id)
+                                           (getf actor-flow-metadata :actor-execution-job-id)))
+                    (actor-flow-kernel-id (or (getf actor-flow-data :kernel-execution-id)
+                                              (getf actor-flow-metadata :kernel-execution-id)
+                                              (getf actor-flow-data :execution-id)
+                                              (getf actor-flow-metadata :execution-id)))
+                    (actor-flow-entry (history-entry-for-job actor-flow-job-id))
+                    (mcp-list-response
+                      (sbcl-agent::command-desktop-task-mcp-server-list-query-service session))
+                    (mcp-list-metadata (sbcl-agent::service-response-metadata mcp-list-response))
+                    (mcp-list-job-id (getf mcp-list-metadata :actor-execution-job-id))
+                    (mcp-list-kernel-id (or (getf mcp-list-metadata :kernel-execution-id)
+                                            (getf mcp-list-metadata :execution-id)))
+                    (mcp-list-entry (history-entry-for-job mcp-list-job-id))
+                    (mcp-detail-response
+                      (sbcl-agent::command-desktop-task-mcp-server-detail-query-service
+                       session
+                       server-id))
+                    (mcp-detail-data (sbcl-agent::service-response-data mcp-detail-response))
+                    (mcp-detail-metadata (sbcl-agent::service-response-metadata mcp-detail-response))
+                    (mcp-detail-job-id (or (getf mcp-detail-data :actor-execution-job-id)
+                                           (getf mcp-detail-metadata :actor-execution-job-id)))
+                    (mcp-detail-kernel-id (or (getf mcp-detail-data :kernel-execution-id)
+                                              (getf mcp-detail-metadata :kernel-execution-id)
+                                              (getf mcp-detail-data :execution-id)
+                                              (getf mcp-detail-metadata :execution-id)))
+                    (mcp-detail-entry (history-entry-for-job mcp-detail-job-id))
+                    (memory-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :memory
+                        :scope (sbcl-agent::agent-session-id session))))
+                    (environment-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :environment
+                        :scope (sbcl-agent::agent-session-id session))))
+                    (desktop-task-admin-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :desktop-task-admin
+                        :scope (sbcl-agent::agent-session-id session)))))
+               (declare (ignore _seeded _event _configured _approval))
+               (dolist (job-id (list memory-list-job-id memory-detail-job-id
+                                     events-job-id console-job-id
+                                     manifest-job-id pending-job-id actor-flow-job-id
+                                     mcp-list-job-id mcp-detail-job-id))
+                 (assert-true (stringp job-id)
+                              "inspection query wrapper should expose an actor execution job id"))
+               (dolist (kernel-id (list memory-list-kernel-id memory-detail-kernel-id
+                                        events-kernel-id console-kernel-id
+                                        manifest-kernel-id pending-kernel-id actor-flow-kernel-id
+                                        mcp-list-kernel-id mcp-detail-kernel-id))
+                 (assert-true (stringp kernel-id)
+                              "inspection query wrapper should retain kernel execution identity"))
+               (assert-equal memory-actor-id
+                             (getf memory-list-entry :actor-id)
+                             "memory list query should execute under the memory actor")
+               (assert-equal memory-actor-id
+                             (getf memory-detail-entry :actor-id)
+                             "memory detail query should execute under the memory actor")
+               (assert-equal environment-actor-id
+                             (getf events-entry :actor-id)
+                             "environment events query should execute under the environment actor")
+               (assert-equal environment-actor-id
+                             (getf console-entry :actor-id)
+                             "console stream query should execute under the environment actor")
+               (assert-equal desktop-task-admin-actor-id
+                             (getf manifest-entry :actor-id)
+                             "desktop-task manifest list query should execute under the desktop-task-admin actor")
+               (assert-equal desktop-task-admin-actor-id
+                             (getf pending-entry :actor-id)
+                             "desktop-task pending approval query should execute under the desktop-task-admin actor")
+               (assert-equal desktop-task-admin-actor-id
+                             (getf actor-flow-entry :actor-id)
+                             "desktop-task actor flow query should execute under the desktop-task-admin actor")
+               (assert-equal desktop-task-admin-actor-id
+                             (getf mcp-list-entry :actor-id)
+                             "desktop-task mcp list query should execute under the desktop-task-admin actor")
+               (assert-equal desktop-task-admin-actor-id
+                             (getf mcp-detail-entry :actor-id)
+                             "desktop-task mcp detail query should execute under the desktop-task-admin actor"))))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun runtime-inspection-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (flet ((history-entry-for-job (job-id)
+                    (find job-id
+                          (sbcl-agent::actor-runtime-state-execution-history
+                           (sbcl-agent::ensure-actor-thread-pool session))
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (let* ((package-response
+                      (sbcl-agent::command-runtime-package-browser-query-service
+                       session
+                       :package-name "COMMON-LISP"))
+                    (package-metadata (sbcl-agent::service-response-metadata package-response))
+                    (package-job-id (getf package-metadata :actor-execution-job-id))
+                    (package-kernel-id (or (getf package-metadata :kernel-execution-id)
+                                           (getf package-metadata :execution-id)))
+                    (package-entry (history-entry-for-job package-job-id))
+                    (symbol-page-response
+                      (sbcl-agent::command-runtime-symbol-page-query-service
+                       session
+                       :package-scope "COMMON-LISP"
+                       :visibility :all
+                       :offset 0
+                       :limit 10))
+                    (symbol-page-metadata (sbcl-agent::service-response-metadata symbol-page-response))
+                    (symbol-page-job-id (getf symbol-page-metadata :actor-execution-job-id))
+                    (symbol-page-kernel-id (or (getf symbol-page-metadata :kernel-execution-id)
+                                               (getf symbol-page-metadata :execution-id)))
+                    (symbol-page-entry (history-entry-for-job symbol-page-job-id))
+                    (inspect-response
+                      (sbcl-agent::command-runtime-inspect-symbol-query-service
+                       session
+                       "CAR"
+                       :package "COMMON-LISP"
+                       :mode "describe"))
+                    (inspect-data (sbcl-agent::service-response-data inspect-response))
+                    (inspect-metadata (sbcl-agent::service-response-metadata inspect-response))
+                    (inspect-job-id (or (getf inspect-data :actor-execution-job-id)
+                                        (getf inspect-metadata :actor-execution-job-id)))
+                    (inspect-kernel-id (or (getf inspect-data :kernel-execution-id)
+                                           (getf inspect-metadata :kernel-execution-id)
+                                           (getf inspect-data :execution-id)
+                                           (getf inspect-metadata :execution-id)))
+                    (inspect-entry (history-entry-for-job inspect-job-id))
+                    (entity-detail-response
+                      (sbcl-agent::command-runtime-entity-detail-query-service
+                       session
+                       "CAR"
+                       :package "COMMON-LISP"))
+                    (entity-detail-data (sbcl-agent::service-response-data entity-detail-response))
+                    (entity-detail-metadata (sbcl-agent::service-response-metadata entity-detail-response))
+                    (entity-detail-job-id (or (getf entity-detail-data :actor-execution-job-id)
+                                              (getf entity-detail-metadata :actor-execution-job-id)))
+                    (entity-detail-kernel-id (or (getf entity-detail-data :kernel-execution-id)
+                                                 (getf entity-detail-metadata :kernel-execution-id)
+                                                 (getf entity-detail-data :execution-id)
+                                                 (getf entity-detail-metadata :execution-id)))
+                    (entity-detail-entry (history-entry-for-job entity-detail-job-id))
+                    (runtime-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :runtime
+                        :scope (sbcl-agent::agent-session-id session)))))
+               (dolist (job-id (list package-job-id symbol-page-job-id inspect-job-id entity-detail-job-id))
+                 (assert-true (stringp job-id)
+                              "runtime inspection query wrapper should expose an actor execution job id"))
+               (dolist (kernel-id (list package-kernel-id symbol-page-kernel-id inspect-kernel-id entity-detail-kernel-id))
+                 (assert-true (stringp kernel-id)
+                              "runtime inspection query wrapper should retain kernel execution identity"))
+               (assert-equal runtime-actor-id
+                             (getf package-entry :actor-id)
+                             "runtime package-browser query should execute under the runtime actor")
+               (assert-equal runtime-actor-id
+                             (getf symbol-page-entry :actor-id)
+                             "runtime symbol-page query should execute under the runtime actor")
+               (assert-equal runtime-actor-id
+                             (getf inspect-entry :actor-id)
+                             "runtime inspect-symbol query should execute under the runtime actor")
+               (assert-equal runtime-actor-id
+                             (getf entity-detail-entry :actor-id)
+                             "runtime entity-detail query should execute under the runtime actor"))))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun desktop-task-admin-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (sbcl-agent::command-runtime-eval-service
+            session
+            "(defparameter *actor-read-model-smoke* 42)"
+            :package "SBCL-AGENT-USER")
+           (let* ((panel-response
+                    (sbcl-agent::command-desktop-task-actor-system-panel-service
+                     session
+                     :session-id (sbcl-agent::agent-session-id session)))
+                  (panel-data (sbcl-agent::service-response-data panel-response))
+                  (panel-metadata (sbcl-agent::service-response-metadata panel-response))
+                  (panel-job-id (or (getf panel-data :actor-execution-job-id)
+                                    (getf panel-metadata :actor-execution-job-id)))
+                  (panel-kernel-id (or (getf panel-data :kernel-execution-id)
+                                       (getf panel-metadata :kernel-execution-id)
+                                       (getf panel-data :execution-id)
+                                       (getf panel-metadata :execution-id)))
+                  (runtime-response
+                    (sbcl-agent::command-desktop-task-runtime-state-service
+                     session
+                     :session-id (sbcl-agent::agent-session-id session)))
+                  (runtime-data (sbcl-agent::service-response-data runtime-response))
+                  (runtime-metadata (sbcl-agent::service-response-metadata runtime-response))
+                  (runtime-job-id (or (getf runtime-data :actor-execution-job-id)
+                                      (getf runtime-metadata :actor-execution-job-id)))
+                  (runtime-kernel-id (or (getf runtime-data :kernel-execution-id)
+                                         (getf runtime-metadata :kernel-execution-id)
+                                         (getf runtime-data :execution-id)
+                                         (getf runtime-metadata :execution-id)))
+                  (trace-response
+                    (sbcl-agent::command-desktop-task-actor-trace-service
+                     session
+                     :latest-only-p t))
+                  (trace-data (sbcl-agent::service-response-data trace-response))
+                  (trace-metadata (sbcl-agent::service-response-metadata trace-response))
+                  (trace-job-id (or (getf trace-data :actor-execution-job-id)
+                                    (getf trace-metadata :actor-execution-job-id)))
+                  (trace-kernel-id (or (getf trace-data :kernel-execution-id)
+                                       (getf trace-metadata :kernel-execution-id)
+                                       (getf trace-data :execution-id)
+                                       (getf trace-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (admin-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :desktop-task-admin
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (panel-entry
+                    (find panel-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (runtime-entry
+                    (find runtime-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (trace-entry
+                    (find trace-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (assert-true (stringp panel-job-id)
+                          "desktop-task actor-system-panel service should expose an actor execution job id")
+             (assert-true (stringp runtime-job-id)
+                          "desktop-task runtime-state service should expose an actor execution job id")
+             (assert-true (stringp trace-job-id)
+                          "desktop-task actor-trace service should expose an actor execution job id")
+             (assert-true (stringp panel-kernel-id)
+                          "desktop-task actor-system-panel service should retain kernel execution identity")
+             (assert-true (stringp runtime-kernel-id)
+                          "desktop-task runtime-state service should retain kernel execution identity")
+             (assert-true (stringp trace-kernel-id)
+                          "desktop-task actor-trace service should retain kernel execution identity")
+             (assert-true panel-entry
+                          "desktop-task actor-system-panel service should be recorded in actor runtime history")
+             (assert-true runtime-entry
+                          "desktop-task runtime-state service should be recorded in actor runtime history")
+             (assert-true trace-entry
+                          "desktop-task actor-trace service should be recorded in actor runtime history")
+             (assert-equal admin-actor-id
+                           (getf panel-entry :actor-id)
+                           "desktop-task actor-system-panel service should execute under the desktop-task-admin actor")
+             (assert-equal admin-actor-id
+                           (getf runtime-entry :actor-id)
+                           "desktop-task runtime-state service should execute under the desktop-task-admin actor")
+             (assert-equal admin-actor-id
+                           (getf trace-entry :actor-id)
+                           "desktop-task actor-trace service should execute under the desktop-task-admin actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun shell-and-environment-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (sbcl-agent::command-runtime-eval-service
+            session
+            "(defparameter *shell-query-smoke* 99)"
+            :package "SBCL-AGENT-USER")
+           (let* ((desktop-response
+                    (sbcl-agent::command-shell-desktop-model-service
+                     session
+                     :environment environment))
+                  (desktop-data (sbcl-agent::service-response-data desktop-response))
+                  (desktop-metadata (sbcl-agent::service-response-metadata desktop-response))
+                  (desktop-job-id (or (getf desktop-data :actor-execution-job-id)
+                                      (getf desktop-metadata :actor-execution-job-id)))
+                  (desktop-kernel-id (or (getf desktop-data :kernel-execution-id)
+                                         (getf desktop-metadata :kernel-execution-id)
+                                         (getf desktop-data :execution-id)
+                                         (getf desktop-metadata :execution-id)))
+                  (preferences-response
+                    (sbcl-agent::command-environment-desktop-preferences-query-service
+                     environment))
+                  (preferences-data (sbcl-agent::service-response-data preferences-response))
+                  (preferences-metadata (sbcl-agent::service-response-metadata preferences-response))
+                  (preferences-job-id (or (getf preferences-data :actor-execution-job-id)
+                                          (getf preferences-metadata :actor-execution-job-id)))
+                  (preferences-kernel-id (or (getf preferences-data :kernel-execution-id)
+                                             (getf preferences-metadata :kernel-execution-id)
+                                             (getf preferences-data :execution-id)
+                                             (getf preferences-metadata :execution-id)))
+                  (provider-response
+                    (sbcl-agent::command-environment-provider-query-service
+                     environment))
+                  (provider-data (sbcl-agent::service-response-data provider-response))
+                  (provider-metadata (sbcl-agent::service-response-metadata provider-response))
+                  (provider-job-id (or (getf provider-data :actor-execution-job-id)
+                                       (getf provider-metadata :actor-execution-job-id)))
+                  (provider-kernel-id (or (getf provider-data :kernel-execution-id)
+                                          (getf provider-metadata :kernel-execution-id)
+                                          (getf provider-data :execution-id)
+                                          (getf provider-metadata :execution-id)))
+                  (images-response
+                    (sbcl-agent::command-environment-image-registry-query-service
+                     environment))
+                  (images-data (sbcl-agent::service-response-data images-response))
+                  (images-metadata (sbcl-agent::service-response-metadata images-response))
+                  (images-job-id (or (getf images-data :actor-execution-job-id)
+                                     (getf images-metadata :actor-execution-job-id)))
+                  (images-kernel-id (or (getf images-data :kernel-execution-id)
+                                        (getf images-metadata :kernel-execution-id)
+                                        (getf images-data :execution-id)
+                                        (getf images-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (shell-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :shell
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (environment-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :environment
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (desktop-entry
+                    (find desktop-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (preferences-entry
+                    (find preferences-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (provider-entry
+                    (find provider-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (images-entry
+                    (find images-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (assert-true (stringp desktop-job-id)
+                          "shell desktop-model service should expose an actor execution job id")
+             (assert-true (stringp preferences-job-id)
+                          "environment desktop-preferences query should expose an actor execution job id")
+             (assert-true (stringp provider-job-id)
+                          "environment provider query should expose an actor execution job id")
+             (assert-true (stringp images-job-id)
+                          "environment image-registry query should expose an actor execution job id")
+             (assert-true (stringp desktop-kernel-id)
+                          "shell desktop-model service should retain kernel execution identity")
+             (assert-true (stringp preferences-kernel-id)
+                          "environment desktop-preferences query should retain kernel execution identity")
+             (assert-true (stringp provider-kernel-id)
+                          "environment provider query should retain kernel execution identity")
+             (assert-true (stringp images-kernel-id)
+                          "environment image-registry query should retain kernel execution identity")
+             (assert-equal shell-actor-id
+                           (getf desktop-entry :actor-id)
+                           "shell desktop-model service should execute under the shell actor")
+             (assert-equal environment-actor-id
+                           (getf preferences-entry :actor-id)
+                           "environment desktop-preferences query should execute under the environment actor")
+             (assert-equal environment-actor-id
+                           (getf provider-entry :actor-id)
+                           "environment provider query should execute under the environment actor")
+             (assert-equal environment-actor-id
+                           (getf images-entry :actor-id)
+                           "environment image-registry query should execute under the environment actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun runtime-and-session-summary-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (sbcl-agent::command-runtime-eval-service
+            session
+            "(defparameter *runtime-summary-query-smoke* 7)"
+            :package "SBCL-AGENT-USER")
+           (let* ((runtime-summary-response
+                    (sbcl-agent::command-runtime-summary-query-service session))
+                  (runtime-summary-data (sbcl-agent::service-response-data runtime-summary-response))
+                  (runtime-summary-metadata (sbcl-agent::service-response-metadata runtime-summary-response))
+                  (runtime-summary-job-id (or (getf runtime-summary-data :actor-execution-job-id)
+                                              (getf runtime-summary-metadata :actor-execution-job-id)))
+                  (runtime-summary-kernel-id (or (getf runtime-summary-data :kernel-execution-id)
+                                                 (getf runtime-summary-metadata :kernel-execution-id)
+                                                 (getf runtime-summary-data :execution-id)
+                                                 (getf runtime-summary-metadata :execution-id)))
+                  (runtime-telemetry-response
+                    (sbcl-agent::command-runtime-telemetry-query-service session))
+                  (runtime-telemetry-data (sbcl-agent::service-response-data runtime-telemetry-response))
+                  (runtime-telemetry-metadata (sbcl-agent::service-response-metadata runtime-telemetry-response))
+                  (runtime-telemetry-job-id (or (getf runtime-telemetry-data :actor-execution-job-id)
+                                                (getf runtime-telemetry-metadata :actor-execution-job-id)))
+                  (runtime-telemetry-kernel-id (or (getf runtime-telemetry-data :kernel-execution-id)
+                                                   (getf runtime-telemetry-metadata :kernel-execution-id)
+                                                   (getf runtime-telemetry-data :execution-id)
+                                                   (getf runtime-telemetry-metadata :execution-id)))
+                  (calculator-response
+                    (sbcl-agent::command-calculator-summary-query-service session))
+                  (calculator-data (sbcl-agent::service-response-data calculator-response))
+                  (calculator-metadata (sbcl-agent::service-response-metadata calculator-response))
+                  (calculator-job-id (or (getf calculator-data :actor-execution-job-id)
+                                         (getf calculator-metadata :actor-execution-job-id)))
+                  (calculator-kernel-id (or (getf calculator-data :kernel-execution-id)
+                                            (getf calculator-metadata :kernel-execution-id)
+                                            (getf calculator-data :execution-id)
+                                            (getf calculator-metadata :execution-id)))
+                  (package-response
+                    (sbcl-agent::command-package-management-summary-query-service session))
+                  (package-data (sbcl-agent::service-response-data package-response))
+                  (package-metadata (sbcl-agent::service-response-metadata package-response))
+                  (package-job-id (or (getf package-data :actor-execution-job-id)
+                                      (getf package-metadata :actor-execution-job-id)))
+                  (package-kernel-id (or (getf package-data :kernel-execution-id)
+                                         (getf package-metadata :kernel-execution-id)
+                                         (getf package-data :execution-id)
+                                         (getf package-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (runtime-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :runtime
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (calculator-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :calculator
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (package-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :package-management
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (runtime-summary-entry
+                    (find runtime-summary-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (runtime-telemetry-entry
+                    (find runtime-telemetry-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (calculator-entry
+                    (find calculator-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=))
+                  (package-entry
+                    (find package-job-id history
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (assert-true (stringp runtime-summary-job-id)
+                          "runtime summary query should expose an actor execution job id")
+             (assert-true (stringp runtime-telemetry-job-id)
+                          "runtime telemetry query should expose an actor execution job id")
+             (assert-true (stringp calculator-job-id)
+                          "calculator summary query should expose an actor execution job id")
+             (assert-true (stringp package-job-id)
+                          "package-management summary query should expose an actor execution job id")
+             (assert-true (stringp runtime-summary-kernel-id)
+                          "runtime summary query should retain kernel execution identity")
+             (assert-true (stringp runtime-telemetry-kernel-id)
+                          "runtime telemetry query should retain kernel execution identity")
+             (assert-true (stringp calculator-kernel-id)
+                          "calculator summary query should retain kernel execution identity")
+             (assert-true (stringp package-kernel-id)
+                          "package-management summary query should retain kernel execution identity")
+             (assert-equal runtime-actor-id
+                           (getf runtime-summary-entry :actor-id)
+                           "runtime summary query should execute under the runtime actor")
+             (assert-equal runtime-actor-id
+                           (getf runtime-telemetry-entry :actor-id)
+                           "runtime telemetry query should execute under the runtime actor")
+             (assert-equal calculator-actor-id
+                           (getf calculator-entry :actor-id)
+                           "calculator summary query should execute under the calculator actor")
+             (assert-equal package-actor-id
+                           (getf package-entry :actor-id)
+                           "package-management summary query should execute under the package-management actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun conversation-and-environment-query-services-are-actor-mediated-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((thread-response
+                    (sbcl-agent::command-conversation-create-thread-service
+                     session
+                     :title "Actor Query Smoke"
+                     :summary "Validate actorized conversation query reads."))
+                  (thread-id (getf (sbcl-agent::service-response-data thread-response) :id)))
+             (sbcl-agent::command-conversation-use-thread-service session thread-id)
+             (sbcl-agent::execute-command
+              (sbcl-agent::normalize-form-command '(say "record a queryable turn"))
+              provider
+              session)
+             (let* ((turn (sbcl-agent::most-recent-thread-turn session))
+                    (turn-id (and turn (sbcl-agent::turn-id turn)))
+                    (thread-list-response
+                      (sbcl-agent::command-conversation-thread-list-query-service session))
+                    (thread-list-data (sbcl-agent::service-response-data thread-list-response))
+                    (thread-list-metadata (sbcl-agent::service-response-metadata thread-list-response))
+                    (thread-list-job-id (or (getf thread-list-data :actor-execution-job-id)
+                                            (getf thread-list-metadata :actor-execution-job-id)))
+                    (thread-list-kernel-id (or (getf thread-list-data :kernel-execution-id)
+                                               (getf thread-list-metadata :kernel-execution-id)
+                                               (getf thread-list-data :execution-id)
+                                               (getf thread-list-metadata :execution-id)))
+                    (thread-detail-response
+                      (sbcl-agent::command-conversation-thread-detail-query-service session thread-id))
+                    (thread-detail-data (sbcl-agent::service-response-data thread-detail-response))
+                    (thread-detail-metadata (sbcl-agent::service-response-metadata thread-detail-response))
+                    (thread-detail-job-id (or (getf thread-detail-data :actor-execution-job-id)
+                                              (getf thread-detail-metadata :actor-execution-job-id)))
+                    (thread-detail-kernel-id (or (getf thread-detail-data :kernel-execution-id)
+                                                 (getf thread-detail-metadata :kernel-execution-id)
+                                                 (getf thread-detail-data :execution-id)
+                                                 (getf thread-detail-metadata :execution-id)))
+                    (turn-detail-response
+                      (sbcl-agent::command-conversation-turn-detail-query-service session turn-id))
+                    (turn-detail-data (sbcl-agent::service-response-data turn-detail-response))
+                    (turn-detail-metadata (sbcl-agent::service-response-metadata turn-detail-response))
+                    (turn-detail-job-id (or (getf turn-detail-data :actor-execution-job-id)
+                                            (getf turn-detail-metadata :actor-execution-job-id)))
+                    (turn-detail-kernel-id (or (getf turn-detail-data :kernel-execution-id)
+                                               (getf turn-detail-metadata :kernel-execution-id)
+                                               (getf turn-detail-data :execution-id)
+                                               (getf turn-detail-metadata :execution-id)))
+                    (latency-response
+                      (sbcl-agent::command-conversation-latency-query-service session turn-id))
+                    (latency-data (sbcl-agent::service-response-data latency-response))
+                    (latency-metadata (sbcl-agent::service-response-metadata latency-response))
+                    (latency-job-id (or (getf latency-data :actor-execution-job-id)
+                                        (getf latency-metadata :actor-execution-job-id)))
+                    (latency-kernel-id (or (getf latency-data :kernel-execution-id)
+                                           (getf latency-metadata :kernel-execution-id)
+                                           (getf latency-data :execution-id)
+                                           (getf latency-metadata :execution-id)))
+                    (summary-response
+                      (sbcl-agent::command-environment-summary-query-service environment))
+                    (summary-data (sbcl-agent::service-response-data summary-response))
+                    (summary-metadata (sbcl-agent::service-response-metadata summary-response))
+                    (summary-job-id (or (getf summary-data :actor-execution-job-id)
+                                        (getf summary-metadata :actor-execution-job-id)))
+                    (summary-kernel-id (or (getf summary-data :kernel-execution-id)
+                                           (getf summary-metadata :kernel-execution-id)
+                                           (getf summary-data :execution-id)
+                                           (getf summary-metadata :execution-id)))
+                    (status-response
+                      (sbcl-agent::command-environment-status-query-service environment))
+                    (status-data (sbcl-agent::service-response-data status-response))
+                    (status-metadata (sbcl-agent::service-response-metadata status-response))
+                    (status-job-id (or (getf status-data :actor-execution-job-id)
+                                       (getf status-metadata :actor-execution-job-id)))
+                    (status-kernel-id (or (getf status-data :kernel-execution-id)
+                                          (getf status-metadata :kernel-execution-id)
+                                          (getf status-data :execution-id)
+                                          (getf status-metadata :execution-id)))
+                    (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                    (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                    (conversation-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :context-chat
+                        :scope (sbcl-agent::agent-session-id session))))
+                    (environment-actor-id
+                      (sbcl-agent::actor-address-id
+                       (sbcl-agent::make-standard-actor-address
+                        :environment
+                        :scope (sbcl-agent::agent-session-id session))))
+                    (thread-list-entry
+                      (find thread-list-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                    (thread-detail-entry
+                      (find thread-detail-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                    (turn-detail-entry
+                      (find turn-detail-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                    (latency-entry
+                      (find latency-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                    (summary-entry
+                      (find summary-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                    (status-entry
+                      (find status-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=)))
+               (assert-true (stringp thread-list-job-id)
+                            "conversation thread-list query should expose an actor execution job id")
+               (assert-true (stringp thread-detail-job-id)
+                            "conversation thread-detail query should expose an actor execution job id")
+               (assert-true (stringp turn-detail-job-id)
+                            "conversation turn-detail query should expose an actor execution job id")
+               (assert-true (stringp latency-job-id)
+                            "conversation latency query should expose an actor execution job id")
+               (assert-true (stringp summary-job-id)
+                            "environment summary query should expose an actor execution job id")
+               (assert-true (stringp status-job-id)
+                            "environment status query should expose an actor execution job id")
+               (assert-true (stringp thread-list-kernel-id)
+                            "conversation thread-list query should retain kernel execution identity")
+               (assert-true (stringp thread-detail-kernel-id)
+                            "conversation thread-detail query should retain kernel execution identity")
+               (assert-true (stringp turn-detail-kernel-id)
+                            "conversation turn-detail query should retain kernel execution identity")
+               (assert-true (stringp latency-kernel-id)
+                            "conversation latency query should retain kernel execution identity")
+               (assert-true (stringp summary-kernel-id)
+                            "environment summary query should retain kernel execution identity")
+               (assert-true (stringp status-kernel-id)
+                            "environment status query should retain kernel execution identity")
+               (assert-equal conversation-actor-id
+                             (getf thread-list-entry :actor-id)
+                             "conversation thread-list query should execute under the context-chat actor")
+               (assert-equal conversation-actor-id
+                             (getf thread-detail-entry :actor-id)
+                             "conversation thread-detail query should execute under the context-chat actor")
+               (assert-equal conversation-actor-id
+                             (getf turn-detail-entry :actor-id)
+                             "conversation turn-detail query should execute under the context-chat actor")
+               (assert-equal conversation-actor-id
+                             (getf latency-entry :actor-id)
+                             "conversation latency query should execute under the context-chat actor")
+               (assert-equal environment-actor-id
+                             (getf summary-entry :actor-id)
+                             "environment summary query should execute under the environment actor")
+               (assert-equal environment-actor-id
+                             (getf status-entry :actor-id)
+                             "environment status query should execute under the environment actor"))))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun workflow-and-planning-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (let* ((work-item (sbcl-agent::create-work-item session "Workflow query smoke"))
+                  (plan (sbcl-agent::create-plan-record "Workflow query smoke"
+                                                        :work-item-id (sbcl-agent::work-item-id work-item)))
+                  (_active (sbcl-agent::set-session-active-plan session plan))
+                  (plan-workflow (sbcl-agent::ensure-plan-workflow-record session plan))
+                  (work-item-id (sbcl-agent::work-item-id work-item))
+                  (workflow-record-id (sbcl-agent::workflow-record-id plan-workflow))
+                  (_linked
+                    (setf (sbcl-agent::work-item-workflow-record-ref work-item)
+                          workflow-record-id))
+                  (work-item-list-response
+                    (sbcl-agent::command-work-item-list-query-service session))
+                  (work-item-list-data (sbcl-agent::service-response-data work-item-list-response))
+                  (work-item-list-metadata (sbcl-agent::service-response-metadata work-item-list-response))
+                  (work-item-list-job-id (getf work-item-list-metadata :actor-execution-job-id))
+                  (work-item-list-kernel-id (or (getf work-item-list-metadata :kernel-execution-id)
+                                                (getf work-item-list-metadata :execution-id)))
+                  (work-item-detail-response
+                    (sbcl-agent::command-work-item-detail-query-service session work-item-id))
+                  (work-item-detail-data (sbcl-agent::service-response-data work-item-detail-response))
+                  (work-item-detail-metadata (sbcl-agent::service-response-metadata work-item-detail-response))
+                  (work-item-detail-job-id (or (getf work-item-detail-data :actor-execution-job-id)
+                                               (getf work-item-detail-metadata :actor-execution-job-id)))
+                  (work-item-detail-kernel-id (or (getf work-item-detail-data :kernel-execution-id)
+                                                  (getf work-item-detail-metadata :kernel-execution-id)
+                                                  (getf work-item-detail-data :execution-id)
+                                                  (getf work-item-detail-metadata :execution-id)))
+                  (workflow-detail-response
+                    (sbcl-agent::command-workflow-record-detail-query-service session workflow-record-id))
+                  (workflow-detail-data (sbcl-agent::service-response-data workflow-detail-response))
+                  (workflow-detail-metadata (sbcl-agent::service-response-metadata workflow-detail-response))
+                  (workflow-detail-job-id (or (getf workflow-detail-data :actor-execution-job-id)
+                                              (getf workflow-detail-metadata :actor-execution-job-id)))
+                  (workflow-detail-kernel-id (or (getf workflow-detail-data :kernel-execution-id)
+                                                 (getf workflow-detail-metadata :kernel-execution-id)
+                                                 (getf workflow-detail-data :execution-id)
+                                                 (getf workflow-detail-metadata :execution-id)))
+                  (focus-response
+                    (sbcl-agent::command-orchestration-focus-query-service
+                     session
+                     :work-item-id work-item-id))
+                  (focus-data (sbcl-agent::service-response-data focus-response))
+                  (focus-metadata (sbcl-agent::service-response-metadata focus-response))
+                  (focus-job-id (or (getf focus-data :actor-execution-job-id)
+                                    (getf focus-metadata :actor-execution-job-id)))
+                  (focus-kernel-id (or (getf focus-data :kernel-execution-id)
+                                       (getf focus-metadata :kernel-execution-id)
+                                       (getf focus-data :execution-id)
+                                       (getf focus-metadata :execution-id)))
+                  (verification-response
+                    (sbcl-agent::command-plan-verification-query-service
+                     session
+                     (sbcl-agent::plan-record-id plan)))
+                  (verification-data (sbcl-agent::service-response-data verification-response))
+                  (verification-metadata (sbcl-agent::service-response-metadata verification-response))
+                  (verification-job-id (or (getf verification-data :actor-execution-job-id)
+                                           (getf verification-metadata :actor-execution-job-id)))
+                  (verification-kernel-id (or (getf verification-data :kernel-execution-id)
+                                              (getf verification-metadata :kernel-execution-id)
+                                              (getf verification-data :execution-id)
+                                              (getf verification-metadata :execution-id)))
+                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                  (workflow-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :workflow
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (work-item-list-entry (find work-item-list-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                  (work-item-detail-entry (find work-item-detail-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                  (workflow-detail-entry (find workflow-detail-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                  (focus-entry (find focus-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=))
+                  (verification-entry (find verification-job-id history :key (lambda (entry) (getf entry :job-id)) :test #'string=)))
+             (declare (ignore _active _linked))
+             (assert-true (stringp work-item-list-job-id)
+                          "work-item list query should expose an actor execution job id")
+             (assert-true (stringp work-item-detail-job-id)
+                          "work-item detail query should expose an actor execution job id")
+             (assert-true (stringp workflow-detail-job-id)
+                          "workflow record detail query should expose an actor execution job id")
+             (assert-true (stringp focus-job-id)
+                          "orchestration focus query should expose an actor execution job id")
+             (assert-true (stringp verification-job-id)
+                          "plan verification query should expose an actor execution job id")
+             (assert-true (stringp work-item-list-kernel-id)
+                          "work-item list query should retain kernel execution identity")
+             (assert-true (stringp work-item-detail-kernel-id)
+                          "work-item detail query should retain kernel execution identity")
+             (assert-true (stringp workflow-detail-kernel-id)
+                          "workflow record detail query should retain kernel execution identity")
+             (assert-true (stringp focus-kernel-id)
+                          "orchestration focus query should retain kernel execution identity")
+             (assert-true (stringp verification-kernel-id)
+                          "plan verification query should retain kernel execution identity")
+             (assert-equal workflow-actor-id (getf work-item-list-entry :actor-id)
+                           "work-item list query should execute under the workflow actor")
+             (assert-equal workflow-actor-id (getf work-item-detail-entry :actor-id)
+                           "work-item detail query should execute under the workflow actor")
+             (assert-equal workflow-actor-id (getf workflow-detail-entry :actor-id)
+                           "workflow record detail query should execute under the workflow actor")
+             (assert-equal workflow-actor-id (getf focus-entry :actor-id)
+                           "orchestration focus query should execute under the workflow actor")
+             (assert-equal workflow-actor-id (getf verification-entry :actor-id)
+                           "plan verification query should execute under the workflow actor")))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun project-incident-and-rgp-query-services-are-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session)))
+    (unwind-protect
+         (progn
+           (sbcl-agent::bind-session-to-environment session environment)
+           (sbcl-agent::command-rgp-bind-service
+            session
+            :request-id "rgp-query-smoke-request"
+            :agent-session-id "rgp-query-smoke-agent-session"
+            :rgp-agent-id "rgp-query-agent"
+            :operator-id "operator-smoke"
+            :environment environment)
+           (flet ((history-entry-for-job (job-id)
+                    (find job-id
+                          (sbcl-agent::actor-runtime-state-execution-history
+                           (sbcl-agent::ensure-actor-thread-pool session))
+                          :key (lambda (entry) (getf entry :job-id))
+                          :test #'string=)))
+             (let* ((project-create-response
+                    (sbcl-agent::command-project-create-service
+                     session
+                     :title "Query actor mediation project"
+                     :summary "Verify project query mediation."))
+                  (project-id (getf (sbcl-agent::service-response-data project-create-response) :id))
+                  (incident
+                    (sbcl-agent::create-incident session
+                                                 :runtime-error
+                                                 "Query actor mediation incident"
+                                                 "Verify incident query mediation."
+                                                 :thread (sbcl-agent::current-thread session)))
+                  (incident-id (sbcl-agent::incident-id incident))
+                  (work-item (sbcl-agent::create-work-item session
+                                                           "RGP query approval smoke"
+                                                           :transaction-scope :test))
+                  (_approval
+                    (sbcl-agent::request-work-item-approval session
+                                                            work-item
+                                                            :process-run
+                                                            :reason "Need approval for RGP query smoke"))
+                  (artifact
+                    (sbcl-agent::create-environment-artifact session
+                                                             :report
+                                                             "/private/tmp/rgp-query-artifact.json"
+                                                             :title "RGP query artifact"
+                                                             :summary "Artifact detail query smoke"))
+                  (artifact-id (sbcl-agent::artifact-id artifact))
+                  (project-list-response
+                    (sbcl-agent::command-project-list-query-service session))
+                  (project-list-metadata (sbcl-agent::service-response-metadata project-list-response))
+                  (project-list-job-id (getf project-list-metadata :actor-execution-job-id))
+                  (project-list-kernel-id (or (getf project-list-metadata :kernel-execution-id)
+                                              (getf project-list-metadata :execution-id)))
+                  (project-list-entry (history-entry-for-job project-list-job-id))
+                  (project-detail-response
+                    (sbcl-agent::command-project-detail-query-service session project-id))
+                  (project-detail-data (sbcl-agent::service-response-data project-detail-response))
+                  (project-detail-metadata (sbcl-agent::service-response-metadata project-detail-response))
+                  (project-detail-job-id (or (getf project-detail-data :actor-execution-job-id)
+                                             (getf project-detail-metadata :actor-execution-job-id)))
+                  (project-detail-kernel-id (or (getf project-detail-data :kernel-execution-id)
+                                                (getf project-detail-metadata :kernel-execution-id)
+                                                (getf project-detail-data :execution-id)
+                                                (getf project-detail-metadata :execution-id)))
+                  (project-detail-entry (history-entry-for-job project-detail-job-id))
+                  (harness-response
+                    (sbcl-agent::command-project-testing-harness-inventory-query-service session))
+                  (harness-metadata (sbcl-agent::service-response-metadata harness-response))
+                  (harness-job-id (getf harness-metadata :actor-execution-job-id))
+                  (harness-kernel-id (or (getf harness-metadata :kernel-execution-id)
+                                         (getf harness-metadata :execution-id)))
+                  (harness-entry (history-entry-for-job harness-job-id))
+                  (incident-list-response
+                    (sbcl-agent::command-incident-list-query-service session))
+                  (incident-list-metadata (sbcl-agent::service-response-metadata incident-list-response))
+                  (incident-list-job-id (getf incident-list-metadata :actor-execution-job-id))
+                  (incident-list-kernel-id (or (getf incident-list-metadata :kernel-execution-id)
+                                               (getf incident-list-metadata :execution-id)))
+                  (incident-list-entry (history-entry-for-job incident-list-job-id))
+                  (incident-detail-response
+                    (sbcl-agent::command-incident-detail-query-service session incident-id))
+                  (incident-detail-data (sbcl-agent::service-response-data incident-detail-response))
+                  (incident-detail-metadata (sbcl-agent::service-response-metadata incident-detail-response))
+                  (incident-detail-job-id (or (getf incident-detail-data :actor-execution-job-id)
+                                              (getf incident-detail-metadata :actor-execution-job-id)))
+                  (incident-detail-kernel-id (or (getf incident-detail-data :kernel-execution-id)
+                                                 (getf incident-detail-metadata :kernel-execution-id)
+                                                 (getf incident-detail-data :execution-id)
+                                                 (getf incident-detail-metadata :execution-id)))
+                  (incident-detail-entry (history-entry-for-job incident-detail-job-id))
+                  (workspace-response
+                    (sbcl-agent::command-rgp-workspace-query-service session environment))
+                  (workspace-data (sbcl-agent::service-response-data workspace-response))
+                  (workspace-metadata (sbcl-agent::service-response-metadata workspace-response))
+                  (workspace-job-id (or (getf workspace-data :actor-execution-job-id)
+                                        (getf workspace-metadata :actor-execution-job-id)))
+                  (workspace-kernel-id (or (getf workspace-data :kernel-execution-id)
+                                           (getf workspace-metadata :kernel-execution-id)
+                                           (getf workspace-data :execution-id)
+                                           (getf workspace-metadata :execution-id)))
+                  (workspace-entry (history-entry-for-job workspace-job-id))
+                  (artifacts-response
+                    (sbcl-agent::command-rgp-artifacts-query-service session environment))
+                  (artifacts-metadata (sbcl-agent::service-response-metadata artifacts-response))
+                  (artifacts-job-id (getf artifacts-metadata :actor-execution-job-id))
+                  (artifacts-kernel-id (or (getf artifacts-metadata :kernel-execution-id)
+                                           (getf artifacts-metadata :execution-id)))
+                  (artifacts-entry (history-entry-for-job artifacts-job-id))
+                  (artifact-detail-response
+                    (sbcl-agent::command-rgp-artifact-detail-query-service session artifact-id environment))
+                  (artifact-detail-data (sbcl-agent::service-response-data artifact-detail-response))
+                  (artifact-detail-metadata (sbcl-agent::service-response-metadata artifact-detail-response))
+                  (artifact-detail-job-id (or (getf artifact-detail-data :actor-execution-job-id)
+                                              (getf artifact-detail-metadata :actor-execution-job-id)))
+                  (artifact-detail-kernel-id (or (getf artifact-detail-data :kernel-execution-id)
+                                                 (getf artifact-detail-metadata :kernel-execution-id)
+                                                 (getf artifact-detail-data :execution-id)
+                                                 (getf artifact-detail-metadata :execution-id)))
+                  (artifact-detail-entry (history-entry-for-job artifact-detail-job-id))
+                  (approvals-response
+                    (sbcl-agent::command-rgp-approvals-query-service session environment))
+                  (approvals-metadata (sbcl-agent::service-response-metadata approvals-response))
+                  (approvals-job-id (getf approvals-metadata :actor-execution-job-id))
+                  (approvals-kernel-id (or (getf approvals-metadata :kernel-execution-id)
+                                           (getf approvals-metadata :execution-id)))
+                  (approvals-entry (history-entry-for-job approvals-job-id))
+                  (project-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :project
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (incident-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :incident
+                      :scope (sbcl-agent::agent-session-id session))))
+                  (environment-actor-id
+                    (sbcl-agent::actor-address-id
+                     (sbcl-agent::make-standard-actor-address
+                      :environment
+                      :scope (sbcl-agent::agent-session-id session)))))
+             (declare (ignore _approval))
+             (dolist (job-id (list project-list-job-id project-detail-job-id harness-job-id
+                                   incident-list-job-id incident-detail-job-id
+                                   workspace-job-id artifacts-job-id artifact-detail-job-id approvals-job-id))
+               (assert-true (stringp job-id)
+                            "query wrapper should expose an actor execution job id"))
+             (dolist (kernel-id (list project-list-kernel-id project-detail-kernel-id harness-kernel-id
+                                      incident-list-kernel-id incident-detail-kernel-id
+                                      workspace-kernel-id artifacts-kernel-id
+                                      artifact-detail-kernel-id approvals-kernel-id))
+               (assert-true (stringp kernel-id)
+                            "query wrapper should retain kernel execution identity"))
+             (assert-equal project-actor-id (getf project-list-entry :actor-id)
+                           "project list query should execute under the project actor")
+             (assert-equal project-actor-id (getf project-detail-entry :actor-id)
+                           "project detail query should execute under the project actor")
+             (assert-equal project-actor-id (getf harness-entry :actor-id)
+                           "project testing-harness inventory query should execute under the project actor")
+             (assert-equal incident-actor-id (getf incident-list-entry :actor-id)
+                           "incident list query should execute under the incident actor")
+             (assert-equal incident-actor-id (getf incident-detail-entry :actor-id)
+                           "incident detail query should execute under the incident actor")
+             (assert-equal environment-actor-id (getf workspace-entry :actor-id)
+                           "RGP workspace query should execute under the environment actor")
+             (assert-equal environment-actor-id (getf artifacts-entry :actor-id)
+                           "RGP artifacts query should execute under the environment actor")
+             (assert-equal environment-actor-id (getf artifact-detail-entry :actor-id)
+                           "RGP artifact detail query should execute under the environment actor")
+             (assert-equal environment-actor-id (getf approvals-entry :actor-id)
+                           "RGP approvals query should execute under the environment actor"))))
+      (when session
+        (sbcl-agent::stop-actor-thread-pool session)))))
+
+(defun turn-governed-desktop-task-resume-authoritative-ingress-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (request (sbcl-agent::make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :runtime
+                   :operation :evaluate-form
+                   :payload '(:form "(+ 20 22)"
+                              :package-name "SBCL-AGENT-USER")))
+         (manifest (sbcl-agent::find-desktop-task-manifest :runtime :evaluate-form))
+         (prepared-request (sbcl-agent::ensure-governed-desktop-task-request-state
+                            request
+                            :session-id (sbcl-agent::agent-session-id session)
+                            :manifest manifest))
+         (record (sbcl-agent::register-desktop-task-record
+                  session
+                  (sbcl-agent::make-desktop-task-record-for-request
+                   prepared-request
+                   manifest
+                   :session-id (sbcl-agent::agent-session-id session)))))
+    (declare (ignore ignore))
+    (setf (sbcl-agent::desktop-task-record-status record) :awaiting-approval
+          (sbcl-agent::desktop-task-record-approval-status record) :awaiting-approval
+          (sbcl-agent::desktop-task-record-governance-status record) :awaiting-approval)
+    (let* ((results (sbcl-agent::execute-turn-governed-desktop-task-records
+                     session
+                     (list record)))
+           (updated (sbcl-agent::find-desktop-task-record session
+                                                          (sbcl-agent::desktop-task-record-id record)))
+           (result (first results)))
+      (assert-equal :completed
+                    (getf result :status)
+                    "resumed governed desktop-task execution should complete through the authoritative ingress")
+      (assert-equal :completed
+                    (sbcl-agent::desktop-task-record-status updated)
+                    "resumed governed desktop-task record should finish completed")
+      (assert-true (stringp (getf result :actor-execution-job-id))
+                   "resumed governed desktop-task execution should expose the native actor execution handle")
+      (assert-equal (getf result :actor-execution-job-id)
+                    (getf (sbcl-agent::desktop-task-record-metadata updated) :actor-execution-job-id)
+                    "resumed governed desktop-task execution should keep record and result actor identity aligned"))))
+
+(defun turn-resume-is-workflow-actor-mediated-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (thread (sbcl-agent::create-thread session :title "Resume Smoke"))
+         (user-message (sbcl-agent::create-message session thread :user "resume this"))
+         (turn (sbcl-agent::start-turn session
+                                       thread
+                                       user-message
+                                       :metadata '(:work-item-id "work-item-resume-smoke")))
+         (workflow-record (sbcl-agent::create-workflow-record
+                           session
+                           "Resume smoke workflow"
+                           :work-item-id "work-item-resume-smoke"))
+         (work-item (sbcl-agent::make-work-item
+                     :id "work-item-resume-smoke"
+                     :goal "Resume smoke"
+                     :status :created
+                     :created-at (get-universal-time)
+                     :updated-at (get-universal-time)
+                     :workflow-record-ref (sbcl-agent::workflow-record-id workflow-record)))
+         (action (sbcl-agent::make-assistant-action :type :eval :payload "(+ 2 3)"))
+         (operation (sbcl-agent::start-operation
+                     session
+                     thread
+                     turn
+                     :assistant-action
+                     "resume eval"
+                     (sbcl-agent::assistant-action-payload action)
+                     :policy-decision '(:decision :approved)
+                     :metadata (list :assistant-action action))))
+    (declare (ignore ignore))
+    (setf (sbcl-agent::agent-session-work-items session)
+          (list work-item)
+          (sbcl-agent::turn-status turn) :awaiting-approval
+          (sbcl-agent::operation-status operation) :awaiting-approval)
+    (let* ((result (sbcl-agent::resume-conversation-turn nil session turn))
+           (job-id (getf result :actor-execution-job-id))
+           (action-results (getf result :action-results))
+           (action-result (first action-results))
+         (updated-workflow-record
+             (sbcl-agent::find-workflow-record session
+                                              (sbcl-agent::workflow-record-id workflow-record)))
+           (continuation-checkpoint
+             (sbcl-agent::latest-workflow-record-continuation-checkpoint
+              updated-workflow-record))
+           (history (getf (sbcl-agent::actor-runtime-state-summary session) :recent-executions))
+           (resume-entry (find job-id history
+                               :key (lambda (entry) (getf entry :job-id))
+                               :test #'string=))
+           (workflow-entry-kinds
+             (mapcar #'sbcl-agent::workflow-entry-kind
+                     (sbcl-agent::workflow-record-entries updated-workflow-record))))
+      (assert-true (stringp job-id)
+                   "turn resume should expose a native actor execution handle")
+      (assert-equal :completed
+                    (sbcl-agent::turn-status turn)
+                    "turn resume should complete the approval-gated turn")
+      (assert-true (stringp (getf action-result :kernel-execution-id))
+                   "resumed assistant actions should execute through kernelized command services")
+      (assert-true resume-entry
+                   "turn resume should be recorded in actor runtime history")
+      (assert-equal (format nil "actor/workflow/~A" (sbcl-agent::agent-session-id session))
+                    (getf resume-entry :actor-id)
+                    "turn resume should execute under the session-scoped workflow actor")
+      (assert-equal :resumed
+                    (sbcl-agent::workflow-record-status updated-workflow-record)
+                    "turn resume should update workflow state natively under the workflow actor")
+      (assert-true (member :turn-resume-started workflow-entry-kinds :test #'eq)
+                   "workflow record should contain a native turn-resume-started entry")
+      (assert-true (member :turn-resume-completed workflow-entry-kinds :test #'eq)
+                   "workflow record should contain a native turn-resume-completed entry")
+      (assert-equal job-id
+                    (sbcl-agent::workflow-record-latest-actor-execution-job-id updated-workflow-record)
+                    "workflow record should retain the workflow actor execution handle for the resumed turn")
+      (assert-true continuation-checkpoint
+                   "turn resume should capture a native workflow continuation checkpoint")
+      (assert-equal :completed
+                    (getf continuation-checkpoint :status)
+                    "completed turn resume should finalize the continuation checkpoint")
+      (assert-equal (sbcl-agent::turn-id turn)
+                    (getf continuation-checkpoint :turn-id)
+                    "continuation checkpoint should preserve the resumed turn id")
+      (assert-equal job-id
+                    (getf continuation-checkpoint :actor-execution-job-id)
+                    "continuation checkpoint should preserve workflow actor execution lineage")
+      (assert-equal "work-item-resume-smoke"
+                    (getf (getf resume-entry :context) :work-item-id)
+                    "turn resume actor execution should retain the bound work-item id"))
+    (sbcl-agent::stop-actor-thread-pool session)))
+
+(defun workflow-turn-resume-checkpoint-persists-through-environment-save-load-test ()
+  (let* ((path #P"/tmp/sbcl-agent-workflow-turn-resume-checkpoint.sexp")
+         (session (sbcl-agent::make-default-session :cwd "/tmp/workflow-turn-resume-checkpoint/"))
+         (environment (sbcl-agent::make-default-environment
+                       :storage-root "/tmp/workflow-turn-resume-checkpoint/"
+                       :session session))
+         (thread (sbcl-agent::create-thread session :title "Resume Checkpoint Persist"))
+         (user-message (sbcl-agent::create-message session thread :user "resume and persist"))
+         (turn (sbcl-agent::start-turn session
+                                       thread
+                                       user-message
+                                       :metadata '(:work-item-id "work-item-resume-checkpoint")))
+         (workflow-record (sbcl-agent::create-workflow-record
+                           session
+                           "Resume checkpoint persistence workflow"
+                           :work-item-id "work-item-resume-checkpoint"))
+         (work-item (sbcl-agent::make-work-item
+                     :id "work-item-resume-checkpoint"
+                     :goal "Resume checkpoint persistence"
+                     :status :created
+                     :created-at (get-universal-time)
+                     :updated-at (get-universal-time)
+                     :workflow-record-ref (sbcl-agent::workflow-record-id workflow-record)))
+         (action (sbcl-agent::make-assistant-action :type :eval :payload "(+ 40 2)"))
+         (operation (sbcl-agent::start-operation
+                     session
+                     thread
+                     turn
+                     :assistant-action
+                     "resume eval persistence"
+                     (sbcl-agent::assistant-action-payload action)
+                     :policy-decision '(:decision :approved)
+                     :metadata (list :assistant-action action))))
+    (sbcl-agent::bind-session-to-environment session environment)
+    (setf (sbcl-agent::agent-session-work-items session)
+          (list work-item)
+          (sbcl-agent::turn-status turn) :awaiting-approval
+          (sbcl-agent::operation-status operation) :awaiting-approval)
+    (unwind-protect
+         (progn
+           (sbcl-agent::resume-conversation-turn nil session turn)
+           (sbcl-agent::save-environment environment path)
+           (let* ((loaded-environment (sbcl-agent::load-environment path))
+                  (loaded-session (sbcl-agent::environment-session loaded-environment))
+                  (loaded-record (sbcl-agent::find-workflow-record
+                                  loaded-session
+                                  (sbcl-agent::workflow-record-id workflow-record)))
+                  (checkpoint (and loaded-record
+                                   (sbcl-agent::latest-workflow-record-continuation-checkpoint
+                                    loaded-record))))
+             (assert-true checkpoint
+                          "environment load should preserve workflow turn-resume continuation checkpoints")
+             (assert-equal :completed
+                           (getf checkpoint :status)
+                           "rehydrated turn-resume continuation checkpoint should preserve completion status")
+             (assert-equal (sbcl-agent::turn-id turn)
+                           (getf checkpoint :turn-id)
+                           "rehydrated turn-resume continuation checkpoint should preserve turn identity")
+             (assert-true (search "actor/workflow"
+                                  (or (getf checkpoint :actor-id) ""))
+                          "rehydrated turn-resume continuation checkpoint should preserve actor lineage")
+             (assert-equal 1
+                           (getf checkpoint :pending-action-count)
+                           "rehydrated turn-resume continuation checkpoint should preserve staged operation count")))
+      (ignore-errors
+        (delete-file path))
       (sbcl-agent::stop-actor-thread-pool session))))
 
 (defun actor-thread-pool-serializes-per-actor-test ()
@@ -3018,6 +5433,27 @@ fi
         (assert-equal "Complete operator release signoff"
                       (getf (first readiness-obligations) :title)
                       "mock readiness obligations revision resume should persist obligation titles")))))
+
+(defun mock-project-authoring-conversation-service-stages-governed-actions-test ()
+  (let* ((provider (make-instance 'sbcl-agent::mock-provider :model "gpt-5"))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (result (sbcl-agent::service-response-data
+                  (sbcl-agent::command-conversation-execution-service
+                   session
+                   provider
+                   "please create governed project artifacts"
+                   '()
+                   :source :say
+                   :operator-mode :conversation))))
+    (assert-equal :awaiting-approval
+                  (getf (getf result :turn) :status)
+                  "conversation execution service should leave governed project authoring awaiting approval")
+    (assert-equal 1
+                  (length (sbcl-agent::agent-session-pending-actions session))
+                  "conversation execution service should stage the governed project action")
+    (assert-equal 1
+                  (length (sbcl-agent::agent-session-work-items session))
+                  "conversation execution service should create a governed work item for project authoring")))
 
 (defun openai-provider-selection-test ()
   (let ((config (sbcl-agent::make-config :provider "openai-compatible"
@@ -6092,6 +8528,104 @@ fi
                     (getf (sbcl-agent::event-metadata close-event) :workflow-record-id)
                     "workflow closure events should carry workflow-record correlation metadata"))))
 
+(defun workflow-events-carry-actor-origin-metadata-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (workflow-record (sbcl-agent::create-workflow-record
+                           session
+                           "Workflow event origin"
+                           :work-item-id "work-item-event-origin"))
+         (session-id (sbcl-agent::agent-session-id session))
+         (governance-actor-id (format nil "actor/governance/~A" session-id))
+         (workflow-actor-id (format nil "actor/workflow/~A" session-id))
+         (ignore-approval
+           (sbcl-agent::call-with-actor-worker-for-request
+            session
+            (sbcl-agent::make-governed-desktop-task-request
+             :requester :context-chat
+             :target :governance
+             :operation :request-workflow-approval
+             :capability :workflow/request-approval
+             :metadata (list :session-id session-id
+                             :work-item-id "work-item-event-origin"
+                             :workflow-record-id (sbcl-agent::workflow-record-id workflow-record)))
+            (lambda ()
+              (sbcl-agent::mark-workflow-record-awaiting-approval
+               session
+               workflow-record
+               "policy/workflow-event-origin"
+               :reason "Need actor-origin event"))
+            :context (sbcl-agent::make-actor-execution-context
+                      :actor-id governance-actor-id
+                      :capability :workflow/request-approval
+                      :authority :governance
+                      :target :governance
+                      :operation :request-workflow-approval
+                      :work-item-id "work-item-event-origin"
+                      :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+         (ignore-resume
+           (sbcl-agent::call-with-actor-worker-for-request
+            session
+            (sbcl-agent::make-governed-desktop-task-request
+             :requester :context-chat
+             :target :workflow
+             :operation :resume-workflow
+             :capability :workflow/resume
+             :metadata (list :session-id session-id
+                             :work-item-id "work-item-event-origin"
+                             :workflow-record-id (sbcl-agent::workflow-record-id workflow-record)))
+            (lambda ()
+              (sbcl-agent::resume-workflow-record
+               session
+               workflow-record
+               :note "Resume with actor-origin event"))
+            :context (sbcl-agent::make-actor-execution-context
+                      :actor-id workflow-actor-id
+                      :capability :workflow/resume
+                      :authority :operator
+                      :target :workflow
+                      :operation :resume-workflow
+                      :work-item-id "work-item-event-origin"
+                      :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+         (stream
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-service-event-stream :environment environment
+                                                    :family :workflow
+                                                    :limit 20)))
+         (events (getf stream :events))
+         (approval-event
+           (find :workflow-record-created events
+                 :key (lambda (entry) (getf entry :kind))
+                 :test #'eq))
+         (resume-event
+           (find :workflow-record-resumed events
+                 :key (lambda (entry) (getf entry :kind))
+                 :test #'eq)))
+    (declare (ignore ignore ignore-approval ignore-resume approval-event))
+    (assert-true resume-event
+                 "workflow event stream should include workflow-record-resumed")
+    (assert-true (getf resume-event :actor-origin-p)
+                 "workflow event stream entries should expose actor-origin truth directly")
+    (assert-equal :workflow
+                  (getf resume-event :actor-event-stream)
+                  "workflow event stream entries should declare the actor event stream")
+    (assert-equal :actor-runtime
+                  (getf resume-event :event-origin)
+                  "workflow event stream entries should declare actor-runtime event origin")
+    (assert-equal workflow-actor-id
+                  (getf resume-event :actor-id)
+                  "workflow resumed events should retain the workflow actor id")
+    (assert-equal :workflow/resume
+                  (getf resume-event :actor-capability)
+                  "workflow resumed events should retain the actor capability")
+    (assert-equal :operator
+                  (getf resume-event :actor-authority)
+                  "workflow resumed events should retain the actor authority")
+    (assert-true (stringp (getf resume-event :actor-execution-job-id))
+                 "workflow resumed events should retain the actor execution job id")
+    (sbcl-agent::stop-actor-thread-pool session)))
+
 (defun workflow-record-operator-shell-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
@@ -6823,6 +9357,29 @@ fi
                        :key (lambda (entry) (getf entry :role)))
                  "direct runtime eval should still append an assistant transcript entry")))
 
+(defun direct-conversation-runtime-eval-invalid-form-does-not-hang-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session))
+         (completed-p nil)
+         (result
+           (handler-case
+               (sb-ext:with-timeout 2
+                 (prog1
+                     (sbcl-agent::command-conversation-execution-service session
+                                                                         provider
+                                                                         "evaluate (defun x (+ 1 x))"
+                                                                         '()
+                                                                         :source :say
+                                                                         :operator-mode :conversation)
+                   (setf completed-p t)))
+             (error (condition)
+               (setf completed-p t)
+               condition))))
+    (assert-true completed-p
+                 "invalid direct runtime eval should return or signal, not hang")
+    (assert-true (typep result '(or list error))
+                 "invalid direct runtime eval should produce a response or an error condition")))
+
 (defun conversation-runtime-eval-confirmation-routing-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
@@ -6986,6 +9543,106 @@ fi
     (assert-true (equal (getf reply :receiver) (getf entry :reply-to))
                  "runtime outbox reply should be addressed back to the original reply-to actor")))
 
+(defun conversation-execution-service-is-actor-mediated-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session)))
+    (unwind-protect
+         (let* ((response (sbcl-agent::command-conversation-execution-service session
+                                                                              provider
+                                                                              "(+ 5 8)"
+                                                                              '()
+                                                                              :source :say
+                                                                              :operator-mode :conversation))
+                (metadata (sbcl-agent::service-response-metadata response))
+                (result (sbcl-agent::service-response-data response))
+                (actor-job-id (or (getf result :actor-execution-job-id)
+                                  (getf metadata :actor-execution-job-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (matching-entry (find actor-job-id history
+                                      :key (lambda (entry) (getf entry :job-id))
+                                      :test #'string=))
+                (context-chat-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :context-chat
+                    :scope (sbcl-agent::agent-session-id session)))))
+           (assert-true (stringp actor-job-id)
+                        "conversation execution should expose the native actor execution job id")
+           (assert-equal actor-job-id
+                         (getf metadata :actor-execution-job-id)
+                         "conversation execution metadata should retain the native actor execution job id")
+           (assert-true matching-entry
+                        "conversation execution should record the actor job in native runtime history")
+           (assert-equal context-chat-actor-id
+                         (getf matching-entry :actor-id)
+                         "conversation execution should execute under the context-chat actor"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
+(defun conversation-thread-services-are-actor-mediated-test ()
+  (let ((session (sbcl-agent::make-default-session)))
+    (unwind-protect
+         (let* ((create-response
+                  (sbcl-agent::command-conversation-create-thread-service
+                   session
+                   :title "Actorized Thread"
+                   :summary "Thread control should be actor-mediated."))
+                (create-data (sbcl-agent::service-response-data create-response))
+                (create-metadata (sbcl-agent::service-response-metadata create-response))
+                (create-job-id (or (getf create-data :actor-execution-job-id)
+                                   (getf create-metadata :actor-execution-job-id)))
+                (create-kernel-id (or (getf create-data :kernel-execution-id)
+                                      (getf create-metadata :kernel-execution-id)
+                                      (getf create-data :execution-id)
+                                      (getf create-metadata :execution-id)))
+                (thread-id (getf create-data :id))
+                (use-response
+                  (sbcl-agent::command-conversation-use-thread-service
+                   session
+                   thread-id))
+                (use-data (sbcl-agent::service-response-data use-response))
+                (use-metadata (sbcl-agent::service-response-metadata use-response))
+                (use-job-id (or (getf use-data :actor-execution-job-id)
+                                (getf use-metadata :actor-execution-job-id)))
+                (use-kernel-id (or (getf use-data :kernel-execution-id)
+                                   (getf use-metadata :kernel-execution-id)
+                                   (getf use-data :execution-id)
+                                   (getf use-metadata :execution-id)))
+                (runtime (sbcl-agent::ensure-actor-thread-pool session))
+                (history (sbcl-agent::actor-runtime-state-execution-history runtime))
+                (context-chat-actor-id
+                  (sbcl-agent::actor-address-id
+                   (sbcl-agent::make-standard-actor-address
+                    :context-chat
+                    :scope (sbcl-agent::agent-session-id session))))
+                (create-entry
+                  (find create-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=))
+                (use-entry
+                  (find use-job-id history
+                        :key (lambda (entry) (getf entry :job-id))
+                        :test #'string=)))
+           (assert-true (stringp create-job-id)
+                        "conversation create-thread should expose an actor execution job id")
+           (assert-true (stringp use-job-id)
+                        "conversation use-thread should expose an actor execution job id")
+           (assert-true (stringp create-kernel-id)
+                        "conversation create-thread should retain a kernel execution id")
+           (assert-true (stringp use-kernel-id)
+                        "conversation use-thread should retain a kernel execution id")
+           (assert-true create-entry
+                        "conversation create-thread should be recorded in actor runtime history")
+           (assert-true use-entry
+                        "conversation use-thread should be recorded in actor runtime history")
+           (assert-equal context-chat-actor-id
+                         (getf create-entry :actor-id)
+                         "conversation create-thread should execute under the context-chat actor")
+           (assert-equal context-chat-actor-id
+                         (getf use-entry :actor-id)
+                         "conversation use-thread should execute under the context-chat actor"))
+      (sbcl-agent::stop-actor-thread-pool session))))
+
 (defun actor-system-panel-query-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
@@ -6998,13 +9655,51 @@ fi
                                                                 '()
                                                                 :source :say
                                                                 :operator-mode :conversation)))
+         (thread (sbcl-agent::create-thread session :title "Panel Resume"))
+         (user-message (sbcl-agent::create-message session thread :user "resume this"))
+         (turn (sbcl-agent::start-turn session
+                                       thread
+                                       user-message
+                                       :metadata '(:work-item-id "work-item-panel-resume")))
+         (workflow-record (sbcl-agent::create-workflow-record
+                           session
+                           "Panel resume workflow"
+                           :work-item-id "work-item-panel-resume"))
+         (work-item (sbcl-agent::make-work-item
+                     :id "work-item-panel-resume"
+                     :goal "Panel resume"
+                     :status :created
+                     :created-at (get-universal-time)
+                     :updated-at (get-universal-time)
+                     :workflow-record-ref (sbcl-agent::workflow-record-id workflow-record)))
+         (action (sbcl-agent::make-assistant-action :type :eval :payload "(+ 7 8)"))
+         (operation (sbcl-agent::start-operation
+                     session
+                     thread
+                     turn
+                     :assistant-action
+                     "panel resume eval"
+                     (sbcl-agent::assistant-action-payload action)
+                     :policy-decision '(:decision :approved)
+                     :metadata (list :assistant-action action)))
+         (ignore-resume
+           (progn
+             (setf (sbcl-agent::agent-session-work-items session)
+                   (list work-item)
+                   (sbcl-agent::turn-status turn) :awaiting-approval
+                   (sbcl-agent::operation-status operation) :awaiting-approval)
+             (sbcl-agent::resume-conversation-turn nil session turn)))
          (panel
            (sbcl-agent::service-response-data
             (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
          (actors (getf panel :actors))
          (hierarchy-edges (getf panel :hierarchy-edges))
          (workflow-edges (getf panel :workflow-edges))
+         (native-workflow-topology (getf panel :native-workflow-topology))
+         (projected-workflow-topology (getf panel :projected-workflow-topology))
+         (topology-provenance (getf panel :topology-provenance))
          (runtime-execution (getf panel :runtime-execution))
+         (native-runtime-execution (getf panel :native-runtime-execution))
          (root-actor
            (find "actor/actor-system"
                  actors
@@ -7034,10 +9729,25 @@ fi
            (find :runtime workflow-edges
                  :key (lambda (entry) (getf entry :to-role))
                  :test #'eq))
+         (native-resume-edge
+           (find :resume-turn native-workflow-topology
+                 :key (lambda (entry) (getf entry :operation))
+                 :test #'eq))
          (runtime-execution-summary
            (and runtime-actor
-                (getf runtime-actor :runtime-execution))))
-    (declare (ignore ignore))
+                (getf runtime-actor :runtime-execution)))
+         (runtime-actor-provenance
+           (and runtime-actor
+                (getf runtime-actor :provenance)))
+         (recent-executions
+           (and runtime-execution
+                (getf runtime-execution :recent-executions)))
+         (latest-execution
+           (or (find :runtime-eval-safe recent-executions
+                     :key (lambda (entry) (getf entry :capability))
+                     :test #'eq)
+               (first recent-executions))))
+    (declare (ignore ignore ignore-resume))
     (assert-equal "actor/actor-system"
                   (getf panel :root-actor-id)
                   "actor-system panel should identify the actor-system root actor")
@@ -7056,22 +9766,200 @@ fi
     (assert-equal (format nil "actor/runtime/~A" session-id)
                   (getf runtime-actor :id)
                   "runtime actor should use the canonical session-scoped actor id")
+    (assert-equal :actor-registry+mailbox-projection
+                  (getf topology-provenance :actors)
+                  "actor-system panel should declare actor summaries as registry/mailbox projections")
+    (assert-equal :native+desktop-task-record-projection
+                  (getf topology-provenance :workflow-edges)
+                  "actor-system panel should declare workflow edges as mixed native and projected topology")
+    (assert-equal :workflow-record
+                  (getf topology-provenance :native-workflow-edges)
+                  "actor-system panel should declare native workflow edges as workflow-record truth")
+    (assert-equal :desktop-task-record-projection
+                  (getf topology-provenance :projected-workflow-edges)
+                  "actor-system panel should declare projected workflow edges explicitly")
+    (assert-equal :native-actor-runtime
+                  (getf topology-provenance :runtime-execution)
+                  "actor-system panel should declare runtime execution as native actor-runtime state")
+    (assert-equal :actor-registry
+                  runtime-actor-provenance
+                  "runtime actor summary should expose registry provenance explicitly")
     (assert-true (> (or (getf panel :actor-count) 0) 0)
                  "actor-system panel should report actors")
     (assert-true runtime-hierarchy-edge
                  "actor-system panel should include a hierarchy edge for the runtime actor")
     (assert-true runtime-workflow-edge
                  "actor-system panel should include a workflow edge targeting the runtime actor")
+    (assert-true native-resume-edge
+                 "actor-system panel should include a native workflow edge for actor-owned turn resume")
+    (assert-equal :workflow-record
+                  (getf native-resume-edge :provenance)
+                  "native workflow topology should expose workflow-record provenance")
+    (assert-equal :context-chat
+                  (getf native-resume-edge :from-role)
+                  "native workflow resume topology should originate from the context-chat actor")
+    (assert-equal :workflow
+                  (getf native-resume-edge :to-role)
+                  "native workflow resume topology should target the workflow actor")
     (assert-true (> (or (getf panel :workflow-edge-count) 0) 0)
                  "actor-system panel should report workflow edges")
+    (assert-true (> (length projected-workflow-topology) 0)
+                 "actor-system panel should still expose projected workflow topology for compatibility")
+    (assert-true (> (length native-workflow-topology) 0)
+                 "actor-system panel should expose native workflow topology explicitly")
     (assert-true runtime-execution
                  "actor-system panel should expose runtime thread-pool execution summary")
+    (assert-true native-runtime-execution
+                 "actor-system panel should expose native runtime execution explicitly")
     (assert-true runtime-execution-summary
                  "runtime actor should expose runtime execution detail in its actor summary")
+    (assert-true (equal runtime-execution native-runtime-execution)
+                 "native runtime execution alias should match the runtime execution summary")
     (assert-true (> (or (getf runtime-execution :worker-count) 0) 0)
                  "runtime execution summary should report pooled workers")
     (assert-true (> (or (getf runtime-execution-summary :submitted-job-count) 0) 0)
-                 "runtime actor summary should report submitted actor jobs")))
+                 "runtime actor summary should report submitted actor jobs")
+    (assert-true recent-executions
+                 "actor-system panel should expose recent native actor-runtime executions")
+    (assert-equal :runtime-eval-safe
+                  (getf latest-execution :capability)
+                  "recent actor-runtime executions should retain the governed runtime capability")
+    (assert-equal :runtime
+                  (getf latest-execution :target)
+                  "recent actor-runtime execution should retain the target actor domain")))
+
+(defun workflow-native-topology-includes-governance-and-control-links-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (workflow-record (sbcl-agent::create-workflow-record
+                           session
+                           "Native topology workflow"
+                           :work-item-id "work-item-native-topology"))
+         (session-id (sbcl-agent::agent-session-id session))
+         (governance-actor-id (format nil "actor/governance/~A" session-id))
+         (workflow-actor-id (format nil "actor/workflow/~A" session-id))
+         (ignore-approval
+           (sbcl-agent::call-with-actor-worker-for-request
+            session
+            (sbcl-agent::make-governed-desktop-task-request
+             :requester :context-chat
+             :target :governance
+             :operation :request-workflow-approval
+             :capability :workflow/request-approval
+             :metadata (list :session-id session-id
+                             :work-item-id "work-item-native-topology"
+                             :workflow-record-id (sbcl-agent::workflow-record-id workflow-record)))
+            (lambda ()
+              (sbcl-agent::mark-workflow-record-awaiting-approval
+               session
+               workflow-record
+               "policy/native-topology"
+               :reason "Need governance actor linkage"))
+            :context (sbcl-agent::make-actor-execution-context
+                      :actor-id governance-actor-id
+                      :capability :workflow/request-approval
+                      :authority :governance
+                      :target :governance
+                      :operation :request-workflow-approval
+                      :work-item-id "work-item-native-topology"
+                      :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+         (ignore-quarantine
+           (sbcl-agent::call-with-actor-worker-for-request
+            session
+            (sbcl-agent::make-governed-desktop-task-request
+             :requester :context-chat
+             :target :workflow
+             :operation :quarantine-workflow
+             :capability :workflow/quarantine
+             :metadata (list :session-id session-id
+                             :work-item-id "work-item-native-topology"
+                             :workflow-record-id (sbcl-agent::workflow-record-id workflow-record)))
+            (lambda ()
+              (sbcl-agent::quarantine-workflow-record
+               session
+               workflow-record
+               "Need operator review"))
+            :context (sbcl-agent::make-actor-execution-context
+                      :actor-id workflow-actor-id
+                      :capability :workflow/quarantine
+                      :authority :operator
+                      :target :workflow
+                      :operation :quarantine-workflow
+                      :work-item-id "work-item-native-topology"
+                      :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+         (ignore-resume
+           (sbcl-agent::call-with-actor-worker-for-request
+            session
+            (sbcl-agent::make-governed-desktop-task-request
+             :requester :context-chat
+             :target :workflow
+             :operation :resume-workflow
+             :capability :workflow/resume
+             :metadata (list :session-id session-id
+                             :work-item-id "work-item-native-topology"
+                             :workflow-record-id (sbcl-agent::workflow-record-id workflow-record)))
+            (lambda ()
+              (sbcl-agent::resume-workflow-record
+               session
+               workflow-record
+               :note "Resume after review"))
+            :context (sbcl-agent::make-actor-execution-context
+                      :actor-id workflow-actor-id
+                      :capability :workflow/resume
+                      :authority :operator
+                      :target :workflow
+                      :operation :resume-workflow
+                      :work-item-id "work-item-native-topology"
+                      :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+         (panel
+           (sbcl-agent::service-response-data
+            (sbcl-agent::query-desktop-task-actor-system-panel-service session)))
+         (native-workflow-topology (getf panel :native-workflow-topology))
+         (approval-edge
+           (find :request-approval native-workflow-topology
+                 :key (lambda (entry) (getf entry :operation))
+                 :test #'eq))
+         (quarantine-edge
+           (find :quarantine-workflow native-workflow-topology
+                 :key (lambda (entry) (getf entry :operation))
+                 :test #'eq))
+         (resume-edge
+           (find :resume-workflow native-workflow-topology
+                 :key (lambda (entry) (getf entry :operation))
+                 :test #'eq)))
+    (declare (ignore ignore ignore-approval ignore-quarantine ignore-resume))
+    (assert-true approval-edge
+                 "native workflow topology should expose governance-driven approval requests")
+    (assert-equal :governance
+                  (getf approval-edge :from-role)
+                  "approval workflow topology should originate from the governance actor")
+    (assert-equal :workflow
+                  (getf approval-edge :to-role)
+                  "approval workflow topology should target the workflow actor")
+    (assert-true (stringp (getf approval-edge :actor-execution-job-id))
+                 "approval workflow topology should retain the native actor execution handle")
+    (assert-true quarantine-edge
+                 "native workflow topology should expose workflow quarantine control transitions")
+    (assert-equal :workflow
+                  (getf quarantine-edge :from-role)
+                  "quarantine workflow topology should originate from the workflow actor")
+    (assert-equal :workflow
+                  (getf quarantine-edge :to-role)
+                  "quarantine workflow topology should remain within workflow ownership")
+    (assert-true (stringp (getf quarantine-edge :actor-execution-job-id))
+                 "quarantine workflow topology should retain the native actor execution handle")
+    (assert-true resume-edge
+                 "native workflow topology should expose workflow resume control transitions")
+    (assert-equal :workflow
+                  (getf resume-edge :from-role)
+                  "resume workflow topology should originate from the workflow actor")
+    (assert-equal :workflow
+                  (getf resume-edge :to-role)
+                  "resume workflow topology should remain within workflow ownership")
+    (assert-true (stringp (getf resume-edge :actor-execution-job-id))
+                 "resume workflow topology should retain the native actor execution handle")
+    (sbcl-agent::stop-actor-thread-pool session)))
 
 (defun actor-system-panel-persists-through-environment-save-load-test ()
   (let* ((provider (make-test-provider))
@@ -7296,6 +10184,438 @@ fi
                   (getf (getf runtime-actor :metrics) :open-supervision-incident-count)
                   "restart-child should clear the runtime actor's open supervision incident count")))
 
+(defun actor-supervision-resume-from-checkpoint-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (let* ((turn (sbcl-agent::most-recent-thread-turn session))
+           (work-item (first (sbcl-agent::agent-session-work-items session)))
+           (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+           (operation (first (sbcl-agent::list-turn-operations session
+                                                               (sbcl-agent::turn-id turn))))
+           (wait-report (sbcl-agent::work-item-wait-report session work-item))
+           (pending-action-id (getf (getf wait-report :resume-payload) :pending-action-id))
+           (mailbox-entry
+             (sbcl-agent::make-actor-mailbox-entry
+              :id (format nil "synthetic-supervision-~A" pending-action-id)
+              :owner (sbcl-agent::make-standard-actor-address
+                      :context-chat
+                      :scope (sbcl-agent::agent-session-id session))
+              :mailbox :context-chat-inbox
+              :direction :inbound
+              :session-id (sbcl-agent::agent-session-id session)
+              :pending-action-id pending-action-id
+              :target :workflow
+              :operation :resume-turn
+              :status :delivered
+              :delivery-status :delivered
+              :sent-at (get-universal-time)
+              :delivered-at (get-universal-time)
+              :payload (list :summary "Synthetic failed resumable mailbox entry")
+              :metadata (list :source :test
+                              :turn-id (sbcl-agent::turn-id turn)
+                              :work-item-id (sbcl-agent::work-item-id work-item)
+                              :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+           (ignored
+             (sbcl-agent::append-session-actor-mailbox-entry
+              session
+              :context-chat-inbox
+              mailbox-entry
+              :reason :test-seeded))
+           (_started
+             (sbcl-agent::mark-workflow-record-turn-resume-started
+              session
+              workflow-record
+              turn
+              :operations (list operation)))
+           (_failed
+             (setf (sbcl-agent::turn-status turn) :running
+                   (sbcl-agent::turn-completed-at turn) (get-universal-time)
+                   (sbcl-agent::turn-error-state turn) :synthetic-supervision-interruption
+                   (sbcl-agent::operation-status operation) :running
+                   (sbcl-agent::work-item-resume-payload work-item) nil
+                   (sbcl-agent::work-item-next-action work-item) nil
+                   (sbcl-agent::workflow-record-status workflow-record) :running
+                   (sbcl-agent::workflow-record-resume-payload workflow-record) nil
+                   (sbcl-agent::workflow-record-next-action workflow-record) nil))
+           (failure-result
+             (sbcl-agent::service-response-data
+              (sbcl-agent::command-desktop-task-fail-mailbox-entry-service
+               session
+               :context-chat-inbox
+               (sbcl-agent::actor-mailbox-entry-id mailbox-entry)
+               :pending-action-id pending-action-id
+               :summary "Synthetic resumable mailbox entry failed during supervision recovery test."
+               :condition-string "simulated checkpoint-recoverable failure"
+               :supervision-action :resume-from-checkpoint)))
+           (incident-id (or (getf (getf failure-result :incident) :incident-id)
+                            (getf (getf failure-result :incident) :id))))
+      (declare (ignore ignored _started _failed))
+      (let ((action-result
+              (sbcl-agent::service-response-data
+               (sbcl-agent::command-desktop-task-apply-supervision-action-service
+                session
+                incident-id
+                :action :resume-from-checkpoint
+                :note "Recover the workflow continuation from its native checkpoint."))))
+        (let* ((recovery (getf action-result :recovery))
+               (recovered-turn (sbcl-agent::find-turn session (sbcl-agent::turn-id turn)))
+               (recovered-work-item (sbcl-agent::find-work-item session
+                                                                (sbcl-agent::work-item-id work-item)))
+               (recovered-operation (first (sbcl-agent::list-turn-operations session
+                                                                             (sbcl-agent::turn-id turn))))
+               (checkpoint (sbcl-agent::latest-workflow-record-continuation-checkpoint
+                            (sbcl-agent::find-workflow-record session
+                                                              (sbcl-agent::workflow-record-id workflow-record)))))
+          (assert-equal :resume-from-checkpoint
+                        (getf action-result :action)
+                        "supervision checkpoint recovery should report the applied action")
+          (assert-equal :recovered
+                        (getf (getf action-result :mailbox-entry) :delivery-status)
+                        "supervision checkpoint recovery should mark the failed mailbox entry recovered")
+          (assert-equal :resolved
+                        (getf (getf action-result :incident) :status)
+                        "supervision checkpoint recovery should resolve the originating incident")
+          (assert-true (getf recovery :recoverable-p)
+                       "supervision checkpoint recovery should return structured recovery evidence")
+          (assert-equal :awaiting-approval
+                        (sbcl-agent::turn-status recovered-turn)
+                        "supervision checkpoint recovery should restage the turn as resumable")
+          (assert-equal :staged
+                        (sbcl-agent::operation-status recovered-operation)
+                        "supervision checkpoint recovery should restage the blocked operation")
+          (assert-true (getf (sbcl-agent::turn-metadata recovered-turn) :recovered-from-workflow-checkpoint-p)
+                       "supervision checkpoint recovery should mark the turn metadata")
+          (assert-equal :supervision
+                        (getf checkpoint :recovery-origin)
+                        "supervision checkpoint recovery should preserve recovery origin on the native checkpoint")
+          (assert-true (getf checkpoint :recovered-pending-action-count)
+                       "supervision checkpoint recovery should update the checkpoint with recovered action counts")
+          (assert-true (getf (sbcl-agent::work-item-resume-payload recovered-work-item) :resume-command)
+                       "supervision checkpoint recovery should restore the work-item resume payload"))))))
+
+(defun actor-supervision-recommended-workflow-recovery-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (work-item (sbcl-agent::create-work-item session
+                                                  "Recommended supervision workflow recovery"
+                                                  :transaction-scope :test))
+         (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+         (transaction (sbcl-agent::current-work-item-transaction work-item)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (setf (sbcl-agent::work-item-status work-item) :failed
+          (sbcl-agent::workflow-record-status workflow-record) :quarantined
+          (sbcl-agent::workflow-record-waiting-on workflow-record) :operator-review
+          (sbcl-agent::mutation-transaction-state transaction) :failed
+          (sbcl-agent::mutation-transaction-rollback-status transaction) :required
+          (sbcl-agent::mutation-transaction-rollback-detail transaction)
+          (list :reason "Synthetic recommended supervision recovery test."
+                :recommended-action :rollback-or-quarantine))
+    (sbcl-agent::set-work-item-next-action session work-item
+                                           (list :type :review-failure
+                                                 :suggested-step :quarantine-or-rollback))
+    (sbcl-agent::set-work-item-resume-payload session work-item
+                                              (list :resume-command :quarantine-or-rollback
+                                                    :checkpoint-id (sbcl-agent::latest-work-item-checkpoint-id work-item)
+                                                    :replay-id (sbcl-agent::mutation-transaction-replay-id transaction)
+                                                    :error "Synthetic recommended supervision recovery test."))
+    (setf (sbcl-agent::work-item-next-action work-item) nil
+          (sbcl-agent::work-item-resume-payload work-item) nil
+          (sbcl-agent::workflow-record-next-action workflow-record) nil
+          (sbcl-agent::workflow-record-resume-payload workflow-record) nil)
+    (let* ((mailbox-entry
+             (sbcl-agent::make-actor-mailbox-entry
+              :id (format nil "synthetic-supervision-recommended-~A"
+                          (sbcl-agent::work-item-id work-item))
+              :owner (sbcl-agent::make-standard-actor-address
+                      :workflow
+                      :scope (sbcl-agent::agent-session-id session))
+              :mailbox :context-chat-inbox
+              :direction :inbound
+              :session-id (sbcl-agent::agent-session-id session)
+              :target :workflow
+              :operation :rollback-work-item
+              :status :delivered
+              :delivery-status :delivered
+              :sent-at (get-universal-time)
+              :delivered-at (get-universal-time)
+              :payload (list :summary "Synthetic failed rollback review mailbox entry")
+              :metadata (list :source :test
+                              :work-item-id (sbcl-agent::work-item-id work-item)
+                              :workflow-record-id (sbcl-agent::workflow-record-id workflow-record))))
+           (_ignored
+             (sbcl-agent::append-session-actor-mailbox-entry
+              session
+              :context-chat-inbox
+              mailbox-entry
+              :reason :test-seeded))
+           (failure-result
+             (sbcl-agent::service-response-data
+              (sbcl-agent::command-desktop-task-fail-mailbox-entry-service
+               session
+               :context-chat-inbox
+               (sbcl-agent::actor-mailbox-entry-id mailbox-entry)
+               :summary "Synthetic failed mailbox entry for recommended supervision recovery."
+               :condition-string "simulated workflow recovery classification failure"
+               :supervision-action :escalate-to-parent)))
+           (incident-id (or (getf (getf failure-result :incident) :incident-id)
+                            (getf (getf failure-result :incident) :id)))
+           (incidents
+             (sbcl-agent::service-response-data
+              (sbcl-agent::query-desktop-task-supervision-incidents-service
+               session
+               :mailbox :context-chat-inbox
+               :mailbox-entry-id (sbcl-agent::actor-mailbox-entry-id mailbox-entry))))
+           (incident (first (getf incidents :incidents)))
+           (action-result
+             (sbcl-agent::service-response-data
+              (sbcl-agent::command-desktop-task-apply-supervision-action-service
+               session
+               incident-id
+               :action :recommended
+               :note "Apply the workflow-derived recommended recovery action.")))
+           (environment (or (sbcl-agent::session-bound-environment session)
+                            (sbcl-agent::bind-session-to-environment session)))
+           (stream
+             (sbcl-agent::service-response-data
+              (sbcl-agent::query-service-event-stream :environment environment
+                                                      :family :actor
+                                                      :limit 20)))
+           (supervision-event
+             (find :actor-supervision-action-applied
+                   (getf stream :events)
+                   :key (lambda (entry) (getf entry :kind))
+                   :test #'eq))
+           (recovered-work-item (sbcl-agent::find-work-item session
+                                                            (sbcl-agent::work-item-id work-item))))
+      (declare (ignore _ignored))
+      (assert-equal :failed-work-item
+                    (getf incident :workflow-state-class)
+                    "supervision incidents should classify failed governed work-items from durable state")
+      (assert-equal :rollback-replay
+                    (getf incident :replay-class)
+                    "supervision incidents should expose rollback replay classification from durable workflow state")
+      (assert-equal :rollback-work-item
+                    (getf incident :recommended-supervision-action)
+                    "supervision incidents should recommend rollback for failed governed work-items")
+      (assert-true (member :rollback-work-item
+                           (getf incident :recovery-options)
+                           :test #'eq)
+                   "supervision incidents should surface rollback as an available durable recovery option")
+      (assert-equal :recommended
+                    (getf action-result :requested-action)
+                    "recommended supervision application should preserve the requested alias")
+      (assert-equal :rollback-work-item
+                    (getf action-result :action)
+                    "recommended supervision application should resolve to rollback-work-item")
+      (assert-equal :resolved
+                    (getf (getf action-result :incident) :status)
+                    "workflow-derived recommended supervision recovery should resolve the incident")
+      (assert-equal :rolled-back
+                    (sbcl-agent::work-item-status recovered-work-item)
+                    "recommended supervision recovery should execute the derived rollback workflow action")
+      (assert-equal :rollback-work-item
+                    (getf (getf action-result :recovery) :workflow-action)
+                    "recommended supervision recovery should report the workflow action it executed")
+      (assert-true supervision-event
+                   "recommended supervision recovery should emit an actor supervision event")
+      (assert-equal :rollback-replay
+                    (getf supervision-event :replay-class)
+                    "supervision action events should expose replay classification at the stream level"))))
+
+(defun work-item-control-state-restores-through-session-load-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (work-item (sbcl-agent::create-work-item session
+                                                  "Recover work-item control state"
+                                                  :transaction-scope :test))
+         (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+         (save-path (merge-pathnames "work-item-control-state-recovery.session"
+                                     (uiop:temporary-directory))))
+    (sbcl-agent::request-work-item-approval session
+                                            work-item
+                                            :git-write
+                                            :reason "Approval-gated work-item recovery test.")
+    (setf (sbcl-agent::work-item-resume-payload work-item) nil
+          (sbcl-agent::work-item-next-action work-item) nil
+          (sbcl-agent::workflow-record-resume-payload workflow-record) nil
+          (sbcl-agent::workflow-record-next-action workflow-record) nil)
+    (unwind-protect
+         (progn
+           (sbcl-agent::save-session session save-path)
+           (let* ((loaded (sbcl-agent::load-session save-path))
+                  (loaded-work-item (sbcl-agent::find-work-item loaded
+                                                                (sbcl-agent::work-item-id work-item)))
+                  (loaded-record (sbcl-agent::work-item-workflow-record loaded
+                                                                        loaded-work-item))
+                  (recovery-event
+                    (find :workflow-record-control-state-recovered
+                          (sbcl-agent::agent-session-events loaded)
+                          :key #'sbcl-agent::event-kind
+                          :test #'eq)))
+             (assert-true loaded-work-item
+                          "load should retain the work-item being recovered")
+             (assert-true (getf (sbcl-agent::work-item-next-action loaded-work-item) :type)
+                          "load recovery should restore a missing work-item next action")
+             (assert-true (getf (sbcl-agent::work-item-resume-payload loaded-work-item) :resume-command)
+                          "load recovery should restore a missing work-item resume payload")
+             (assert-true (getf (sbcl-agent::workflow-record-next-action loaded-record) :type)
+                          "load recovery should restore workflow-record next action when it was lost")
+             (assert-true (getf (sbcl-agent::workflow-record-resume-payload loaded-record) :resume-command)
+                          "load recovery should restore workflow-record resume payload when it was lost")
+             (assert-equal "RESUME-WORK-ITEM"
+                           (symbol-name
+                            (first (getf (sbcl-agent::work-item-resume-payload loaded-work-item)
+                                         :resume-command)))
+                           "recovered approval-gated work-item should remain resumable through resume-work-item")
+             (assert-true recovery-event
+                          "work-item control-state recovery should emit a workflow recovery event")
+             (assert-equal :session-load
+                           (getf (sbcl-agent::event-payload recovery-event) :recovery-origin)
+                           "work-item control-state recovery should preserve load recovery origin")))
+      (ignore-errors
+        (when (probe-file save-path)
+          (delete-file save-path))))))
+
+(defun work-item-complete-validations-recovers-live-control-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (work-item (sbcl-agent::create-work-item session
+                                                  "Recover live validation control state"
+                                                  :transaction-scope :test))
+         (workflow-record (sbcl-agent::work-item-workflow-record session work-item)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (setf (sbcl-agent::work-item-live-validation-result work-item)
+          (sbcl-agent::make-live-validation-result :passed
+                                                   (list :seeded-p t))
+          (sbcl-agent::work-item-status work-item) :awaiting-cold-validation
+          (sbcl-agent::work-item-closure-decision work-item) :committed-after-cold-validation
+          (sbcl-agent::workflow-record-status workflow-record) :awaiting-cold-validation
+          (sbcl-agent::workflow-record-waiting-on workflow-record) nil)
+    (sbcl-agent::refresh-work-item-pending-validations session work-item)
+    (sbcl-agent::set-work-item-next-action session
+                                           work-item
+                                           (list :type :complete-pending-validations
+                                                 :suggested-step :run-cold-validation
+                                                 :final-closure-decision :committed-after-cold-validation))
+    (sbcl-agent::set-work-item-resume-payload session
+                                              work-item
+                                              (list :resume-command :complete-validations
+                                                    :checkpoint-id (sbcl-agent::latest-work-item-checkpoint-id work-item)
+                                                    :pending (sbcl-agent::work-item-pending-validations work-item)
+                                                    :validator-actions (sbcl-agent::work-item-validator-actions work-item)
+                                                    :final-closure-decision :committed-after-cold-validation))
+    (setf (sbcl-agent::work-item-next-action work-item) nil
+          (sbcl-agent::work-item-resume-payload work-item) nil
+          (sbcl-agent::workflow-record-next-action workflow-record) nil
+          (sbcl-agent::workflow-record-resume-payload workflow-record) nil)
+    (let* ((response (sbcl-agent::command-work-item-complete-validations-service
+                      session
+                      (sbcl-agent::work-item-id work-item)
+                      :status :passed))
+           (data (sbcl-agent::service-response-data response))
+           (recovered-work-item (sbcl-agent::find-work-item session
+                                                            (sbcl-agent::work-item-id work-item)))
+           (recovery-event
+             (find :workflow-record-control-state-recovered
+                   (reverse (sbcl-agent::agent-session-events session))
+                   :key #'sbcl-agent::event-kind
+                   :test #'eq)))
+      (assert-equal :committed
+                    (getf data :status)
+                    "complete-validations should still commit the work-item after recovering lost control state")
+      (assert-equal :committed
+                    (sbcl-agent::work-item-status recovered-work-item)
+                    "live control-state recovery should allow cold validation completion to reach committed state")
+      (assert-true recovery-event
+                   "complete-validations recovery should emit a workflow recovery event")
+      (assert-equal :complete-validations
+                    (getf (sbcl-agent::event-payload recovery-event) :recovery-origin)
+                    "complete-validations recovery should preserve live recovery origin")
+      (assert-equal :validation-replay
+                    (getf (sbcl-agent::event-payload recovery-event) :replay-class)
+                    "complete-validations recovery should expose validation replay classification")
+      (assert-true (getf (sbcl-agent::event-metadata recovery-event) :actor-origin-p)
+                   "complete-validations recovery should surface actor-origin workflow recovery events")
+      (assert-equal :complete-validations
+                    (getf (sbcl-agent::event-metadata recovery-event) :actor-operation)
+                    "complete-validations recovery should retain actor operation metadata"))))
+
+(defun work-item-rollback-recovers-live-control-state-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (work-item (sbcl-agent::create-work-item session
+                                                  "Recover live rollback control state"
+                                                  :transaction-scope :test))
+         (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+         (transaction (sbcl-agent::current-work-item-transaction work-item)))
+    (sbcl-agent::append-work-item-checkpoint session work-item)
+    (setf (sbcl-agent::work-item-status work-item) :failed
+          (sbcl-agent::workflow-record-status workflow-record) :quarantined
+          (sbcl-agent::workflow-record-waiting-on workflow-record) :operator-review
+          (sbcl-agent::mutation-transaction-state transaction) :failed
+          (sbcl-agent::mutation-transaction-rollback-status transaction) :required
+          (sbcl-agent::mutation-transaction-rollback-detail transaction)
+          (list :reason "Synthetic live rollback recovery test."
+                :recommended-action :rollback-or-quarantine))
+    (sbcl-agent::set-work-item-next-action session work-item
+                                           (list :type :review-failure
+                                                 :suggested-step :quarantine-or-rollback))
+    (sbcl-agent::set-work-item-resume-payload session work-item
+                                              (list :resume-command :quarantine-or-rollback
+                                                    :checkpoint-id (sbcl-agent::latest-work-item-checkpoint-id work-item)
+                                                    :replay-id (sbcl-agent::mutation-transaction-replay-id transaction)
+                                                    :error "Synthetic live rollback recovery test."))
+    (setf (sbcl-agent::work-item-next-action work-item) nil
+          (sbcl-agent::work-item-resume-payload work-item) nil
+          (sbcl-agent::workflow-record-next-action workflow-record) nil
+          (sbcl-agent::workflow-record-resume-payload workflow-record) nil)
+    (let* ((response (sbcl-agent::command-work-item-rollback-service
+                      session
+                      (sbcl-agent::work-item-id work-item)
+                      :reason "Operator rollback after recovery"
+                      :note "Recover lost control state before rollback"))
+           (data (sbcl-agent::service-response-data response))
+           (recovered-work-item (sbcl-agent::find-work-item session
+                                                            (sbcl-agent::work-item-id work-item)))
+           (recovered-record (sbcl-agent::work-item-workflow-record session
+                                                                    recovered-work-item))
+           (native-recovery-edge
+             (find :rollback-replay
+                   (sbcl-agent::workflow-record-native-actor-links session
+                                                                   recovered-record)
+                   :key (lambda (entry) (getf entry :replay-class))
+                   :test #'eq))
+           (recovery-event
+             (find :workflow-record-control-state-recovered
+                   (reverse (sbcl-agent::agent-session-events session))
+                   :key #'sbcl-agent::event-kind
+                   :test #'eq)))
+      (assert-equal :rolled-back
+                    (getf data :status)
+                    "rollback should still complete after recovering lost failure/review control state")
+      (assert-equal :rolled-back
+                    (sbcl-agent::work-item-status recovered-work-item)
+                    "live rollback recovery should drive the work-item to rolled-back state")
+      (assert-equal :rolled-back
+                    (sbcl-agent::workflow-record-status recovered-record)
+                    "live rollback recovery should close the workflow record as rolled-back")
+      (assert-true recovery-event
+                   "rollback recovery should emit a workflow recovery event")
+      (assert-equal :rollback-work-item
+                    (getf (sbcl-agent::event-payload recovery-event) :recovery-origin)
+                    "rollback recovery should preserve live recovery origin")
+      (assert-equal :rollback-replay
+                    (getf (sbcl-agent::event-payload recovery-event) :replay-class)
+                    "rollback recovery should expose rollback replay classification")
+      (assert-true (getf (sbcl-agent::event-metadata recovery-event) :actor-origin-p)
+                   "rollback recovery should surface actor-origin workflow recovery events")
+      (assert-equal :rollback-work-item
+                    (getf (sbcl-agent::event-metadata recovery-event) :actor-operation)
+                    "rollback recovery should retain actor operation metadata")
+      (assert-equal :replay-rollback-review
+                    (getf native-recovery-edge :operation)
+                    "native workflow topology should classify rollback recovery as replay-rollback-review"))))
+
 (defun direct-conversation-runtime-definition-actor-state-test ()
   (let* ((provider (make-test-provider))
          (session (sbcl-agent::make-default-session))
@@ -7387,12 +10707,13 @@ fi
            (sbcl-agent::save-environment environment environment-path)
            (let* ((reloaded-environment (sbcl-agent::load-environment environment-path))
                   (reloaded-session
-                    (sbcl-agent::compatibility-payload->session
-                     (sbcl-agent::environment-compatibility-session reloaded-environment)
-                     reloaded-environment))
+                    (sbcl-agent::environment-session reloaded-environment))
                   (mailboxes (sbcl-agent::agent-session-actor-mailboxes reloaded-session))
                   (runtime-state (getf mailboxes :runtime-state))
                   (definitions (getf runtime-state :definitions))
+                  (runtime-summary (sbcl-agent::actor-runtime-state-summary reloaded-session))
+                  (recent-executions (getf runtime-summary :recent-executions))
+                  (latest-execution (first recent-executions))
                   (definition-entry
                     (find "PERSISTED-RUNTIME-FOO"
                           definitions
@@ -7401,7 +10722,26 @@ fi
              (assert-true definition-entry
                           "runtime actor state definitions should persist through environment save/load")
              (assert-true (string= "SBCL-AGENT-USER" (getf definition-entry :package-name))
-                          "reloaded runtime actor state should retain the package name for the definition")))
+                          "reloaded runtime actor state should retain the package name for the definition")
+             (assert-true (sbcl-agent::agent-session-actor-runtime-state reloaded-session)
+                          "environment load should rehydrate native actor runtime state")
+             (assert-true recent-executions
+                          "environment load should preserve recent actor runtime executions")
+             (assert-true (search "actor/context-chat"
+                                  (or (getf latest-execution :actor-id) ""))
+                          "rehydrated actor runtime history should preserve the session-scoped actor identity")
+             (assert-true (> (or (getf runtime-summary :submitted-job-count) 0) 0)
+                          "rehydrated actor runtime state should preserve submitted job counts")
+             (assert-true (> (or (getf runtime-summary :completed-job-count) 0) 0)
+                          "rehydrated actor runtime state should preserve completed job counts")
+             (assert-equal 0
+                           (or (getf runtime-summary :queue-depth) 0)
+                           "rehydrated actor runtime state should not restore live queued jobs")
+             (assert-equal 0
+                           (or (getf runtime-summary :worker-count) 0)
+                           "rehydrated actor runtime state should not restore live worker threads")
+             (assert-true (null (getf runtime-summary :running-p))
+                          "rehydrated actor runtime state should restart dormant instead of pretending to be live")))
       (ignore-errors
         (delete-file environment-path)))))
 
@@ -10743,6 +14083,65 @@ fi
                         (getf (sbcl-agent::event-metadata event) :environment-id)
                         "post-load environment/events should preserve environment-id metadata"))))))
 
+(defun context-chat-project-shell-commands-test ()
+  (let* ((provider (make-test-provider))
+         (session (sbcl-agent::make-default-session :cwd "/tmp/context-chat-project-shell-commands/"))
+         (primary-project (sbcl-agent::create-project-record
+                           session
+                           :title "Shell Primary Project"
+                           :summary "Primary chat project for shell command testing."
+                           :source-roots '("/tmp/shell-primary")))
+         (secondary-project (sbcl-agent::create-project-record
+                             session
+                             :title "Shell Secondary Project"
+                             :summary "Secondary chat project for shell command testing."
+                             :source-roots '("/tmp/shell-secondary")))
+         (set-command
+           (let ((*package* (find-package "SBCL-AGENT")))
+             (read-from-string
+              (format nil
+                      "(desktop-task/set-context-chat-projects :project-ids '(~S ~S) :primary-project-id ~S)"
+                      (sbcl-agent::project-record-id primary-project)
+                      (sbcl-agent::project-record-id secondary-project)
+                      (sbcl-agent::project-record-id primary-project)))))
+         (show-command
+           (let ((*package* (find-package "SBCL-AGENT")))
+             (read-from-string "(desktop-task/context-chat-context)"))))
+    (multiple-value-bind (set-result set-kind set-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command set-command)
+         provider
+         session)
+      (assert-equal :desktop-task-set-context-chat-projects set-kind
+                    "desktop-task/set-context-chat-projects should dispatch through the shell command surface")
+      (assert-equal (sbcl-agent::project-record-id primary-project)
+                    (getf set-result :primary-project-id)
+                    "desktop-task/set-context-chat-projects should persist the explicit primary project")
+      (assert-equal 2
+                    (getf set-result :project-count)
+                    "desktop-task/set-context-chat-projects should retain both selected projects")
+      (assert-equal (sbcl-agent::project-record-id primary-project)
+                    (sbcl-agent::agent-session-context-chat-primary-project-id set-session)
+                    "desktop-task/set-context-chat-projects should update session chat targeting state"))
+    (multiple-value-bind (show-result show-kind show-session)
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command show-command)
+         provider
+         session)
+      (declare (ignore show-session))
+      (assert-equal :desktop-task-context-chat-context show-kind
+                    "desktop-task/context-chat-context should dispatch through the shell command surface")
+      (assert-equal :explicit
+                    (getf show-result :selection-source)
+                    "desktop-task/context-chat-context should expose explicit selection state")
+      (assert-equal (sbcl-agent::project-record-id primary-project)
+                    (getf show-result :primary-project-id)
+                    "desktop-task/context-chat-context should expose the explicit primary project")
+      (assert-true (find (sbcl-agent::project-record-id secondary-project)
+                         (getf show-result :selected-project-ids)
+                         :test #'string=)
+                   "desktop-task/context-chat-context should expose the secondary selected project"))))
+
 (defun environment-load-shell-orientation-test ()
   (let* ((provider (make-test-provider))
          (path "/tmp/sbcl-agent-shell-environment-orientation.sexp")
@@ -12296,6 +15695,208 @@ fi
                         "loading a session with an in-flight operation should mark the operation interrupted")
           (assert-true (getf (getf loaded-operation :metadata) :interrupted-during-load-p)
                        "interrupted recovered operations should carry recovery metadata"))))))
+
+(defun workflow-turn-resume-checkpoint-restores-resumability-on-session-load-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (path (format nil "/tmp/sbcl-agent-turn-resume-recovery-~D-~D.sexp"
+                       (get-universal-time)
+                       (random 1000000)))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (let* ((thread (sbcl-agent::current-thread session))
+           (turn (sbcl-agent::most-recent-thread-turn session))
+           (work-item (first (sbcl-agent::agent-session-work-items session)))
+           (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+           (operation (first (sbcl-agent::list-turn-operations session
+                                                               (sbcl-agent::turn-id turn)))))
+      (assert-true work-item
+                   "prepare patch should create a governed work-item for checkpoint recovery smoke")
+      (assert-true workflow-record
+                   "prepare patch should create a workflow record for checkpoint recovery smoke")
+      (assert-true operation
+                   "prepare patch should create a resumable assistant operation for checkpoint recovery smoke")
+      (assert-equal :awaiting-approval
+                    (sbcl-agent::turn-status turn)
+                    "prepare patch should leave the turn awaiting approval before checkpoint recovery")
+    (sbcl-agent::mark-workflow-record-turn-resume-started session
+                                                          workflow-record
+                                                          turn
+                                                          :operations (list operation))
+      ;; Simulate a save/load boundary in the middle of actor-owned resume after
+      ;; volatile turn/work-item posture has been lost.
+      (setf (sbcl-agent::turn-status turn) :running
+            (sbcl-agent::operation-status operation) :running
+            (sbcl-agent::work-item-resume-payload work-item) nil
+            (sbcl-agent::work-item-next-action work-item) nil
+            (sbcl-agent::workflow-record-resume-payload workflow-record) nil
+            (sbcl-agent::workflow-record-next-action workflow-record) nil)
+      (sbcl-agent::save-session session path)
+      (let* ((loaded (sbcl-agent::load-session path))
+             (loaded-turn (sbcl-agent::find-turn loaded (sbcl-agent::turn-id turn)))
+             (loaded-work-item (sbcl-agent::find-work-item loaded
+                                                           (sbcl-agent::work-item-id work-item)))
+             (loaded-workflow-record (sbcl-agent::find-workflow-record
+                                      loaded
+                                      (sbcl-agent::workflow-record-id workflow-record)))
+             (loaded-operation (first (sbcl-agent::list-turn-operations loaded
+                                                                        (sbcl-agent::turn-id loaded-turn))))
+             (checkpoint (sbcl-agent::latest-workflow-record-continuation-checkpoint
+                          loaded-workflow-record))
+             (workflow-entry-kinds (mapcar #'sbcl-agent::workflow-entry-kind
+                                           (sbcl-agent::workflow-record-entries loaded-workflow-record)))
+             (environment (or (sbcl-agent::session-bound-environment loaded)
+                              (sbcl-agent::bind-session-to-environment loaded)))
+             (stream (sbcl-agent::service-response-data
+                      (sbcl-agent::query-service-event-stream :environment environment
+                                                              :family :workflow
+                                                              :limit 20)))
+             (recovery-event
+               (find :workflow-turn-resume-recovered
+                     (getf stream :events)
+                     :key (lambda (entry) (getf entry :kind))
+                     :test #'eq)))
+        (assert-equal :awaiting-approval
+                      (sbcl-agent::turn-status loaded-turn)
+                      "loading an interrupted resume checkpoint should restore the turn to resumable posture")
+        (assert-equal :staged
+                      (sbcl-agent::operation-status loaded-operation)
+                      "loading an interrupted resume checkpoint should restage pending assistant actions")
+        (assert-true (getf (sbcl-agent::work-item-resume-payload loaded-work-item) :resume-command)
+                     "loading an interrupted resume checkpoint should restore the work-item resume payload")
+        (assert-true (or (eq (getf (sbcl-agent::work-item-resume-payload loaded-work-item) :resume-command)
+                             :turn/resume)
+                         (consp (getf (sbcl-agent::work-item-resume-payload loaded-work-item) :resume-command)))
+                     "loading an interrupted resume checkpoint should restore a resumable command payload")
+        (assert-true (getf (sbcl-agent::turn-metadata loaded-turn) :recovered-from-workflow-checkpoint-p)
+                     "loading an interrupted resume checkpoint should mark the turn as checkpoint-recovered")
+        (assert-true (getf checkpoint :recovered-during-load-p)
+                     "loading an interrupted resume checkpoint should mark the workflow checkpoint recovered")
+        (assert-true (member :turn-resume-recovered workflow-entry-kinds :test #'eq)
+                     "loading an interrupted resume checkpoint should append a native workflow recovery entry")
+        (assert-true recovery-event
+                     "loading an interrupted resume checkpoint should emit a workflow recovery event")
+        (assert-equal :workflow-checkpoint-recovery
+                      (getf recovery-event :event-origin)
+                      "workflow recovery events should expose checkpoint-recovery origin")
+        (assert-true (getf recovery-event :actor-origin-p)
+                     "workflow recovery events should preserve actor-scoped provenance")
+        (multiple-value-bind (status-result status-kind status-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command '(turn/status))
+             provider
+             loaded)
+          (declare (ignore status-session))
+          (assert-equal :turn-status status-kind
+                        "turn/status should dispatch after checkpoint recovery load")
+          (assert-true (getf (getf status-result :recovery) :resumable-p)
+                       "turn/status should expose checkpoint-recovered turns as resumable"))
+        (sbcl-agent::execute-command
+         (sbcl-agent::normalize-form-command '(approve :workspace-write))
+         provider
+         loaded)
+        (multiple-value-bind (resume-result resume-kind resumed-session)
+            (sbcl-agent::execute-command
+             (sbcl-agent::normalize-form-command '(turn/resume))
+             provider
+             loaded)
+          (assert-equal :turn-resume resume-kind
+                        "turn/resume should dispatch after checkpoint-based recovery load")
+          (assert-equal 1
+                        (getf resume-result :resumed-operation-count)
+                        "turn/resume should consume the restaged operation after checkpoint recovery load")
+          (let ((resumed-turn (sbcl-agent::find-turn resumed-session (sbcl-agent::turn-id turn))))
+            (assert-equal :completed
+                          (sbcl-agent::turn-status resumed-turn)
+                          "turn/resume should complete the recovered turn after load")))))))
+
+(defun workflow-turn-resume-checkpoint-recovers-live-resume-test ()
+  (let* ((provider (make-instance 'patch-action-provider))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root))))
+    (sbcl-agent::execute-command
+     (sbcl-agent::normalize-form-command '(say "prepare patch"))
+     provider
+     session)
+    (let* ((turn (sbcl-agent::most-recent-thread-turn session))
+           (work-item (first (sbcl-agent::agent-session-work-items session)))
+           (workflow-record (sbcl-agent::work-item-workflow-record session work-item))
+           (operation (first (sbcl-agent::list-turn-operations session
+                                                               (sbcl-agent::turn-id turn)))))
+      (assert-true work-item
+                   "prepare patch should create a governed work-item for live resume recovery smoke")
+      (assert-true workflow-record
+                   "prepare patch should create a workflow record for live resume recovery smoke")
+      (assert-true operation
+                   "prepare patch should create a resumable assistant operation for live resume recovery smoke")
+      (sbcl-agent::mark-workflow-record-turn-resume-started session
+                                                            workflow-record
+                                                            turn
+                                                            :operations (list operation))
+      ;; Simulate an interrupted live workflow-owned continuation before the
+      ;; session crosses a persistence boundary.
+      (setf (sbcl-agent::turn-status turn) :running
+            (sbcl-agent::turn-completed-at turn) (get-universal-time)
+            (sbcl-agent::turn-error-state turn) :synthetic-live-interruption
+            (sbcl-agent::operation-status operation) :running
+            (sbcl-agent::work-item-resume-payload work-item) nil
+            (sbcl-agent::work-item-next-action work-item) nil
+            (sbcl-agent::workflow-record-status workflow-record) :running
+            (sbcl-agent::workflow-record-resume-payload workflow-record) nil
+            (sbcl-agent::workflow-record-next-action workflow-record) nil)
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(approve :workspace-write))
+       provider
+       session)
+      (multiple-value-bind (resume-result resume-kind resumed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command '(turn/resume))
+           provider
+           session)
+        (assert-equal :turn-resume resume-kind
+                      "turn/resume should dispatch after live workflow checkpoint recovery")
+        (assert-equal 1
+                      (getf resume-result :resumed-operation-count)
+                      "turn/resume should consume the recovered staged operation in the live session")
+        (let* ((resumed-turn (sbcl-agent::find-turn resumed-session
+                                                    (sbcl-agent::turn-id turn)))
+               (resumed-work-item (sbcl-agent::find-work-item resumed-session
+                                                              (sbcl-agent::work-item-id work-item)))
+               (resumed-record (sbcl-agent::find-workflow-record
+                                resumed-session
+                                (sbcl-agent::workflow-record-id workflow-record)))
+               (checkpoint (sbcl-agent::latest-workflow-record-continuation-checkpoint
+                            resumed-record))
+               (environment (or (sbcl-agent::session-bound-environment resumed-session)
+                                (sbcl-agent::bind-session-to-environment resumed-session)))
+               (stream (sbcl-agent::service-response-data
+                        (sbcl-agent::query-service-event-stream :environment environment
+                                                                :family :workflow
+                                                                :limit 20)))
+               (recovery-event
+                 (find :workflow-turn-resume-recovered
+                       (getf stream :events)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)))
+          (assert-equal :completed
+                        (sbcl-agent::turn-status resumed-turn)
+                        "turn/resume should complete the live recovered turn")
+          (assert-true (getf checkpoint :recovered-during-resume-p)
+                       "live workflow checkpoint recovery should be recorded on the native checkpoint")
+          (assert-equal :turn-resume
+                        (getf checkpoint :recovery-origin)
+                        "live workflow checkpoint recovery should preserve its origin")
+          (assert-true (getf (sbcl-agent::turn-metadata resumed-turn) :recovered-from-workflow-checkpoint-p)
+                       "live workflow checkpoint recovery should mark the turn metadata")
+          (assert-true recovery-event
+                       "live workflow checkpoint recovery should emit a workflow recovery event")
+          (assert-equal :turn-resume
+                        (getf recovery-event :recovery-origin)
+                        "workflow recovery events should preserve live turn/resume origin")
+          (assert-equal :committed
+                        (sbcl-agent::work-item-status resumed-work-item)
+                        "turn/resume should finish the recovered governed work item"))))))
 
 (defun list-tools-test ()
   (let ((tools (sbcl-agent::list-tools)))

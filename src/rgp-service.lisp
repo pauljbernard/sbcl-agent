@@ -1,5 +1,125 @@
 (in-package #:sbcl-agent)
 
+(defun actorize-rgp-query-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (and (listp data)
+                   (keywordp (first data)))
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun command-rgp-workspace-query-service (session &optional environment)
+  (let ((active-environment (ensure-rgp-bound-environment session environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :rgp-workspace-query
+                                       :rgp/workspace
+                                       :payload '()
+                                       :metadata (list :rgp-query-kind :workspace))
+     (lambda ()
+       (actorize-rgp-query-response
+        (command-kernel-invoke-service session
+                                       "Read RGP workspace summary."
+                                       "rgp/workspace"
+                                       :authority :operator
+                                       :environment active-environment
+                                       :payload '())
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :rgp/workspace
+     :rgp-workspace-query)))
+
+(defun query-rgp-artifact-detail-service (session artifact-id &optional environment)
+  (let* ((active-environment (ensure-rgp-bound-environment session environment))
+         (record (environment-find-artifact-record active-environment artifact-id)))
+    (unless record
+      (error "Unknown artifact ~A" artifact-id))
+    (make-service-query-response
+     :artifact
+     :detail
+     (append record
+             (list :lineage (list :source-ref (getf record :source-ref)
+                                  :image-ref (getf record :image-ref)
+                                  :work-item-id (getf record :work-item-id))
+                   :governance-scope (if (getf record :thread-id)
+                                         :thread
+                                         :environment)))
+     :metadata (make-service-metadata :authority :environment
+                                      :read-model :artifact-detail-v1
+                                      :session session
+                                      :environment active-environment))))
+
+(defun command-rgp-artifacts-query-service (session &optional environment)
+  (let ((active-environment (ensure-rgp-bound-environment session environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :rgp-artifacts-query
+                                       :rgp/artifacts
+                                       :payload '()
+                                       :metadata (list :rgp-query-kind :artifacts))
+     (lambda ()
+       (actorize-rgp-query-response
+        (command-kernel-invoke-service session
+                                       "Read RGP artifacts."
+                                       "rgp/artifacts"
+                                       :authority :operator
+                                       :environment active-environment
+                                       :payload '())
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :rgp/artifacts
+     :rgp-artifacts-query)))
+
+(defun command-rgp-artifact-detail-query-service (session artifact-id &optional environment)
+  (let ((active-environment (ensure-rgp-bound-environment session environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :rgp-artifact-detail-query
+                                       :rgp/artifact-detail
+                                       :payload (list :artifact-id artifact-id)
+                                       :metadata (list :artifact-id artifact-id
+                                                       :rgp-query-kind :artifact-detail))
+     (lambda ()
+       (actorize-rgp-query-response
+        (command-kernel-invoke-service session
+                                       "Read RGP artifact detail."
+                                       "rgp/artifact-detail"
+                                       :authority :operator
+                                       :environment active-environment
+                                       :payload (list :artifact-id artifact-id))
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :rgp/artifact-detail
+     :rgp-artifact-detail-query)))
+
+(defun command-rgp-approvals-query-service (session &optional environment)
+  (let ((active-environment (ensure-rgp-bound-environment session environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :rgp-approvals-query
+                                       :rgp/approvals
+                                       :payload '()
+                                       :metadata (list :rgp-query-kind :approvals))
+     (lambda ()
+       (actorize-rgp-query-response
+        (command-kernel-invoke-service session
+                                       "Read RGP approvals."
+                                       "rgp/approvals"
+                                       :authority :operator
+                                       :environment active-environment
+                                       :payload '())
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :rgp/approvals
+     :rgp-approvals-query)))
+
 (defun command-rgp-bind-service (session &key tenant-id
                                       request-id
                                       agent-session-id
@@ -354,13 +474,20 @@
     (make-service-query-response :rgp
                                  :approvals
                                  (mapcar (lambda (approval)
-                                           (append approval
+                                           (let ((approval-plist
+                                                   (if (and (listp approval)
+                                                            (= (length approval) 1)
+                                                            (listp (first approval))
+                                                            (keywordp (first (first approval))))
+                                                       (first approval)
+                                                       approval)))
+                                             (append approval-plist
                                                    (list :execution-surface
                                                          (compact-execution-surface-summary
                                                           (primary-execution-surface-summary
                                                            session
-                                                           (getf approval :execution-handles)
-                                                           :environment active-environment)))))
+                                                           (getf approval-plist :execution-handles)
+                                                           :environment active-environment))))))
                                          (environment-rgp-approval-summaries active-environment))
                                  :metadata (make-service-metadata :authority :environment
                                                                  :read-model :rgp-approvals-v1
@@ -503,15 +630,17 @@
 
 (defun command-rgp-resume-service (session work-item-id &key note environment)
   (let* ((active-environment (ensure-rgp-bound-environment session environment))
-         (work-item (find-work-item session work-item-id)))
-    (unless work-item
-      (error "Unknown work-item ~A" work-item-id))
-    (resume-work-item session work-item :note note)
+         (resume-response (command-work-item-resume-service session
+                                                            work-item-id
+                                                            :note note)))
     (make-service-command-response :rgp
                                    :resume
                                    (list :binding (rgp-binding-summary active-environment)
-                                         :approval (work-item-wait-report session work-item)
-                                         :work-item (enriched-work-item-service-detail session work-item))
+                                         :approval (getf (service-response-data resume-response) :wait)
+                                         :work-item (getf (service-response-data resume-response) :work-item)
+                                         :actor-execution-job-id
+                                         (or (getf (service-response-data resume-response) :actor-execution-job-id)
+                                             (getf (service-response-metadata resume-response) :actor-execution-job-id)))
                                    :metadata (make-service-metadata :authority :environment
                                                                     :command-model :rgp-command-v1
                                                                     :session session

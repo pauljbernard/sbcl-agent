@@ -5,7 +5,11 @@
   subscriptions
   memory
   plan
+  plans
+  active-plan-id
+  plan-summaries
   actor-mailboxes
+  actor-runtime
   pending-actions
   desktop-tasks
   incidents

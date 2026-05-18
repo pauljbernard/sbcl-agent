@@ -251,6 +251,27 @@
         (format nil "~{~A~%~}" lines)
         "none")))
 
+(defun build-openai-planning-context-packet (request)
+  (or (provider-request-planning-context-packet request)
+      (build-provider-planning-context-packet (provider-request-prompt request)
+                                              (provider-request-operator-mode request)
+                                              (provider-request-stream-p request)
+                                              (provider-request-session-summary request)
+                                              nil
+                                              (provider-request-thread-context request)
+                                              (provider-request-turn-context request)
+                                              (provider-request-environment-context request)
+                                              (provider-request-surface-context request)
+                                              (provider-request-surface-actions request)
+                                              (provider-request-runtime-summary request)
+                                              (provider-request-workspace-summary request)
+                                              (provider-request-policy-summary request)
+                                              (provider-request-retrieval-dossier request)
+                                              (provider-request-cognition-bundle request)
+                                              (provider-request-reasoning-brief request)
+                                              (provider-request-planning-brief request)
+                                              (provider-request-outcome-brief request))))
+
 (defun build-openai-cached-conversation-user-prompt (request)
   (format nil
           "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~A~%Turn: ~A~%~%Recent transcript:~%~A~%Cached context hits:~%~A~%Runtime summary: ~A~%Workspace summary: ~A~%Policy summary: ~A~%~@[Surface context: ~A~%~]~@[Available Surface actions:~%~A~]~%~A~%~%Respond naturally, use the cached warm context as background memory, and keep the reply focused on what is most relevant to the user prompt. Prefer the cached context hits over reconstructing the whole environment. Do not invent missing evidence, and do not propose structured actions unless the user actually asks you to execute or inspect something."
@@ -288,26 +309,12 @@
              (and (provider-request-surface-actions request)
                   (compact-openai-surface-actions (provider-request-surface-actions request)))))
     (t
-     (format nil
-             "User prompt: ~A~%~%Operator mode: ~S~%Stream requested: ~S~%~%Conversation context:~%Thread: ~S~%Turn: ~S~%~%Environment context: ~S~%~%Surface context: ~S~%~%Available Surface actions: ~S~%~%Runtime summary: ~S~%~%Workspace summary: ~S~%~%Policy summary: ~S~%~%Retrieved environment dossier: ~S~%~%Canonical cognition bundle: ~S~%~%Reasoning brief: ~S~%~%Planning brief: ~S~%~%Outcome brief: ~S~%~%Session summary: ~S~%~%~A~%~%Treat dossier ranking metadata as advisory prioritization, not as a replacement for the explicit domain payloads. Treat the canonical cognition bundle as the default reasoning loop for this request, including retrieval focus, prior-outcome reuse, execution strategy, validation strategy, and the derived action agenda. When the cognition bundle carries a retrieval focus plan, prioritize those domains first when deciding what evidence matters most for the current request. When the cognition bundle carries a validation plan, treat it as the concrete validation agenda for this request and prefer completing that agenda over proposing fresh governed mutations. When the cognition bundle carries an action agenda, treat it as the ordered list of next steps for this request unless current evidence clearly invalidates one of those steps. Reuse similar prior successes when they fit the current evidence, and explicitly avoid repeating similar prior failures when the cognition bundle surfaces avoidance guidance. Use the reasoning brief to distinguish environment-backed facts, blockers, validation obligations, and uncertainties from assumptions. Use the planning brief as the default execution outline unless the evidence clearly requires deviation. When an outcome brief is present, compare expected phases against observed consequences before concluding success. Interpret references like 'the code you suggested' against the structured conversation context, retrieved dossier, environment refs, and :recent-transcript when available."
-             (provider-request-prompt request)
-             (provider-request-operator-mode request)
-             (provider-request-stream-p request)
-             (provider-request-thread-context request)
-             (provider-request-turn-context request)
-             (provider-request-environment-context request)
-             (provider-request-surface-context request)
-             (provider-request-surface-actions request)
-             (provider-request-runtime-summary request)
-             (provider-request-workspace-summary request)
-             (provider-request-policy-summary request)
-             (provider-request-retrieval-dossier request)
-             (provider-request-cognition-bundle request)
-             (provider-request-reasoning-brief request)
-             (provider-request-planning-brief request)
-             (provider-request-outcome-brief request)
-             (provider-request-session-summary request)
-             (build-openai-governance-directives request)))))
+     (let ((planning-context-packet (build-openai-planning-context-packet request)))
+       (format nil
+               "User prompt: ~A~%~%Planning context packet: ~S~%~%~A~%~%Treat the planning context packet as the canonical model-facing contract for this request. Use task-frame to understand the requested work shape, deliverable, and current phase. Use planner-directives as the explicit rule layer for authority precedence, uncertainty policy, and default planning posture. Use authority-state to decide which environment-backed sources are authoritative. Within authority-state, treat agent-constitution as the stable statement of system identity, purpose, goals, and hard constraints, and treat capability-inventory as the live capability and dependency surface available to the agent right now. Use decisive-evidence as the primary grounding core before consulting optional-support. Use uncertainty-and-obligations to determine what must be inspected, what remains blocked, and what cannot safely be assumed. Use strategy as the default execution and validation posture unless current authoritative evidence clearly requires deviation. Treat optional-support as secondary context that may refine the answer but must not override decisive-evidence or authority-state. When decisive-evidence and optional-support diverge, prefer decisive-evidence unless authority-state or planner-directives indicate otherwise. When uncertainty-and-obligations identifies missing authority or conflict candidates, follow planner-directives uncertainty-policy, surface that explicitly, and avoid pretending the context is complete. Interpret references like 'the code you suggested' against the structured conversation context, authority-state thread/turn context, optional-support session summary, and any recent transcript carried there."
+               (provider-request-prompt request)
+               planning-context-packet
+               (build-openai-governance-directives request))))))
 
 (defun build-openai-user-prompt (request)
   "Compatibility wrapper for tests and callers that still use the older helper name."

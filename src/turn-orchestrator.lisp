@@ -1155,13 +1155,18 @@
              (lambda (operation)
                (let ((action (operation-assistant-action operation)))
                  (handler-case
-                     (list :action action
-                           :status :completed
-                           :result (execute-assistant-action action
-                                                            session
-                                                            :thread thread
-                                                            :turn turn
-                                                            :operation operation))
+                     (let* ((response
+                              (command-execute-assistant-action-service
+                               session
+                               action
+                               :thread thread
+                               :turn turn
+                               :operation operation))
+                            (metadata (service-response-metadata response)))
+                       (list :action action
+                             :status :completed
+                             :kernel-execution-id (getf metadata :execution-id)
+                             :result (service-response-data response)))
                    (error (condition)
                      (let ((incident
                              (or (latest-operation-incident session operation)
@@ -1184,6 +1189,54 @@
       (remove-pending-actions session actions)
       results)))
 
+(defun turn-resume-work-item-id (turn)
+  (or (turn-bound-work-item-id turn)
+      (getf (turn-metadata turn) :work-item-id)))
+
+(defun turn-resume-workflow-record-id (session turn)
+  (or (getf (turn-metadata turn) :workflow-record-id)
+      (let* ((work-item-id (turn-resume-work-item-id turn))
+             (work-item (and work-item-id
+                             (find-work-item session work-item-id))))
+        (and work-item
+             (work-item-workflow-record-ref work-item)))))
+
+(defun turn-resume-plan-id (session turn)
+  (or (getf (turn-metadata turn) :plan-id)
+      (let* ((workflow-record-id (turn-resume-workflow-record-id session turn))
+             (workflow-record (and workflow-record-id
+                                   (find-workflow-record session workflow-record-id))))
+        (and workflow-record
+             (workflow-record-plan-id workflow-record)))))
+
+(defun make-turn-resume-request (session turn source operator-mode)
+  (make-governed-desktop-task-request
+   :requester :context-chat
+   :target :workflow
+   :operation :resume-turn
+   :capability :workflow/resume
+   :payload (list :turn-id (turn-id turn)
+                  :source source
+                  :operator-mode operator-mode)
+   :metadata (append (list :session-id (agent-session-id session)
+                           :turn-id (turn-id turn)
+                           :thread-id (turn-thread-id turn)
+                           :actor-slice :workflow-turn-resume-v1)
+                     (when (turn-resume-work-item-id turn)
+                       (list :work-item-id (turn-resume-work-item-id turn)))
+                     (when (turn-resume-workflow-record-id session turn)
+                       (list :workflow-record-id (turn-resume-workflow-record-id session turn)))
+                     (when (turn-resume-plan-id session turn)
+                       (list :plan-id (turn-resume-plan-id session turn))))))
+
+(defun actorize-turn-resume-result (result &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp result))
+      (let ((updated (copy-list result)))
+        (setf (getf updated :actor-execution-job-id) actor-execution-job-id)
+        updated)
+      result))
+
 (defun turn-pending-governed-desktop-task-records (session turn)
   (remove-if-not
    (lambda (record)
@@ -1192,40 +1245,42 @@
               (eq (desktop-task-record-status record) :retryable-failure))))
    (desktop-task-records-for-turn session (turn-id turn))))
 
+(defun maybe-recover-turn-resume-from-workflow-checkpoint (session turn)
+  (when (fboundp 'recover-turn-resume-from-workflow-checkpoint)
+    (recover-turn-resume-from-workflow-checkpoint session
+                                                  turn
+                                                  :recovery-origin :turn-resume))
+  turn)
+
 (defun execute-turn-governed-desktop-task-records (session records &key thread turn)
   (let ((results '()))
     (dolist (record records (nreverse results))
-      (let* ((request (make-desktop-task-request-from-record record))
-             (manifest (desktop-task-manifest-for-request request))
-             (resolution (resolve-governed-desktop-task-request request session)))
+      (let* ((request (make-desktop-task-request-from-record record)))
         (handler-case
-            (progn
-              (when (eq (desktop-task-record-approval-status record) :awaiting-approval)
-                (mark-desktop-task-record-approved session record))
-              (if (eq (desktop-task-record-status record) :retryable-failure)
-                  (mark-desktop-task-record-retrying
-                   session
-                   record
-                   :reason "Retrying governed desktop task after approval.")
-                  (mark-desktop-task-record-executing session record))
-              (let* ((invocation-result
-                       (getf (invoke-governed-desktop-task-request
-                              request
-                              session
-                              :resolution resolution
-                              :manifest manifest)
-                             :result))
-                     (result-summary
-                       (make-desktop-task-record-completed-result
-                        request
-                        resolution
-                        invocation-result)))
-                (mark-desktop-task-record-completed session record result-summary)
-                (push (list :record-id (desktop-task-record-id record)
-                            :request-id (desktop-task-request-id request)
-                            :status :completed
-                            :result result-summary)
-                      results)))
+            (let* ((response
+                     (command-desktop-task-invoke-service
+                      session
+                      :request request
+                      :register-record-p nil
+                      :retry-reason "Retrying governed desktop task after approval."
+                      :thread-id (and thread (thread-id thread))
+                      :turn-id (and turn (turn-id turn))))
+                   (data (service-response-data response))
+                   (task-record (or (find-desktop-task-record session
+                                                              (desktop-task-record-id record))
+                                    record))
+                   (status (desktop-task-record-status task-record))
+                   (result (getf data :result)))
+              (push (list :record-id (desktop-task-record-id task-record)
+                          :request-id (desktop-task-request-id request)
+                          :status status
+                          :actor-execution-job-id
+                          (or (getf data :actor-execution-job-id)
+                              (and (listp (desktop-task-record-metadata task-record))
+                                   (getf (desktop-task-record-metadata task-record)
+                                         :actor-execution-job-id)))
+                          :result result)
+                    results))
           (error (condition)
             (let* ((error-summary
                      (list :summary "Desktop task execution failed during resumed execution."
@@ -1304,9 +1359,10 @@
                       :results ordered-results))))))
      record-results)))
 
-(defun resume-conversation-turn (provider session turn
-                                  &key (source (or (getf (turn-metadata turn) :source) :say))
-                                    (operator-mode :conversation))
+(defun perform-resume-conversation-turn (provider session turn
+                                         &key (source (or (getf (turn-metadata turn) :source) :say))
+                                           (operator-mode :conversation))
+  (maybe-recover-turn-resume-from-workflow-checkpoint session turn)
   (let ((operations (turn-pending-action-operations session turn)))
     (unless (eq (turn-status turn) :awaiting-approval)
       (error "TURN/RESUME requires a turn in :awaiting-approval state"))
@@ -1315,53 +1371,107 @@
              (policy-id (getf decision :policy-id)))
         (when policy-id
           (ensure-policy-approved session policy-id))))
-      (let* ((thread (or (find-thread session (turn-thread-id turn))
-                         (current-thread session)))
-             (desktop-task-records (desktop-task-records-for-operations session operations))
-             (governed-records (turn-pending-governed-desktop-task-records session turn))
-             (action-results (if operations
-                                 (execute-turn-pending-actions session
-                                                               operations
-                                                               :thread thread
-                                                               :turn turn)
-                                 '()))
-             (governed-results (if governed-records
-                                   (execute-turn-governed-desktop-task-records session
-                                                                               governed-records
-                                                                               :thread thread
-                                                                               :turn turn)
-                                   '()))
-             (results (append action-results governed-results))
-           (followup nil))
-      (dolist (record governed-records)
-        (let ((policy-id (desktop-task-record-policy-id record)))
-          (when policy-id
-            (ensure-policy-approved session policy-id))))
-      (when desktop-task-records
-        (update-turn-desktop-task-records-from-resume-results session
-                                                              turn
-                                                              operations
-                                                              action-results))
-      (loop for operation in operations
-            for result in action-results
-            do (apply-resumed-mutation-result session thread turn operation result))
-      (refresh-turn-status session
-                           turn
-                           :status (if governed-records
-                                       (if (find :failed results :key (lambda (entry)
-                                                                        (getf entry :status)))
-                                           :failed
-                                           :completed)
-                                       nil)
-                           :metadata '(:resumed-p t))
-      (when (and provider
-                 (provider-turn-followup-p provider)
-                 (eq (turn-status turn) :completed))
-        (setf followup (continue-conversation-turn provider
-                                                   session
-                                                   thread
-                                                   turn
-                                                   :source source
-                                                   :action-results results
-                                                   :operator-mode operator-mode)))
-      (resume-turn-operation-results turn operations results :followup followup))))
+    (let* ((thread (or (find-thread session (turn-thread-id turn))
+                       (current-thread session)))
+           (governed-records (turn-pending-governed-desktop-task-records session turn))
+           (workflow-record-id (turn-resume-workflow-record-id session turn))
+           (workflow-record (and workflow-record-id
+                                 (find-workflow-record session workflow-record-id)))
+           (actor-execution-job-id (current-actor-execution-job-id)))
+      (when workflow-record
+        (mark-workflow-record-turn-resume-started session
+                                                  workflow-record
+                                                  turn
+                                                  :source source
+                                                  :actor-execution-job-id actor-execution-job-id
+                                                  :operations operations
+                                                  :governed-records governed-records))
+      (handler-case
+          (let* ((desktop-task-records (desktop-task-records-for-operations session operations))
+                 (action-results (if operations
+                                     (execute-turn-pending-actions session
+                                                                   operations
+                                                                   :thread thread
+                                                                   :turn turn)
+                                     '()))
+                 (governed-results (if governed-records
+                                       (execute-turn-governed-desktop-task-records session
+                                                                                   governed-records
+                                                                                   :thread thread
+                                                                                   :turn turn)
+                                       '()))
+                 (results (append action-results governed-results))
+                 (followup nil))
+            (when desktop-task-records
+              (update-turn-desktop-task-records-from-resume-results session
+                                                                    turn
+                                                                    operations
+                                                                    action-results))
+            (loop for operation in operations
+                  for result in action-results
+                  do (apply-resumed-mutation-result session thread turn operation result))
+            (refresh-turn-status session
+                                 turn
+                                 :status (if governed-records
+                                             (if (find :failed results :key (lambda (entry)
+                                                                              (getf entry :status)))
+                                                 :failed
+                                                 :completed)
+                                             nil)
+                                 :metadata '(:resumed-p t))
+            (when (and provider
+                       (provider-turn-followup-p provider)
+                       (eq (turn-status turn) :completed))
+              (setf followup (continue-conversation-turn provider
+                                                         session
+                                                         thread
+                                                         turn
+                                                         :source source
+                                                         :action-results results
+                                                         :operator-mode operator-mode)))
+            (when workflow-record
+              (mark-workflow-record-turn-resume-completed session
+                                                          workflow-record
+                                                          turn
+                                                          results
+                                                          :followup followup
+                                                          :actor-execution-job-id actor-execution-job-id))
+            (resume-turn-operation-results turn operations results :followup followup))
+        (error (condition)
+          (when workflow-record
+            (mark-workflow-record-turn-resume-failed session
+                                                     workflow-record
+                                                     turn
+                                                     condition
+                                                     :actor-execution-job-id actor-execution-job-id))
+          (error condition))))))
+
+(defun resume-conversation-turn (provider session turn
+                                 &key (source (or (getf (turn-metadata turn) :source) :say))
+                                   (operator-mode :conversation))
+  (let* ((request (make-turn-resume-request session turn source operator-mode))
+         (actor-address (make-standard-actor-address :workflow
+                                                     :scope (agent-session-id session))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-turn-resume-result
+        (perform-resume-conversation-turn provider
+                                          session
+                                          turn
+                                          :source source
+                                          :operator-mode operator-mode)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :workflow/resume
+               :authority :operator
+               :target :workflow
+               :operation :resume-turn
+               :request-id (desktop-task-request-id request)
+               :thread-id (turn-thread-id turn)
+               :turn-id (turn-id turn)
+               :work-item-id (turn-resume-work-item-id turn)
+               :workflow-record-id (turn-resume-workflow-record-id session turn)
+               :plan-id (turn-resume-plan-id session turn)))))

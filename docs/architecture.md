@@ -58,6 +58,22 @@ For the federated employee/contractor operating model, this environment also has
 
 The current implementation is environment-oriented now. Remaining transitional structure exists mainly at compatibility and persistence boundaries, not at the level of the primary architectural center of gravity.
 
+## Context Engineering Is Now Part Of The Architecture
+
+The current architecture is not only layered in execution terms. It is now also layered in planning terms.
+
+Provider-bound planning and development requests are built from a canonical planning packet rather than by handing the model a transcript plus a few ad hoc summaries. That packet is assembled from:
+
+- retrieval intent
+- retrieval dossier
+- decisive evidence
+- reasoning brief
+- environment authority
+- project authority
+- workflow and incident posture
+
+The planning packet is now a primary architectural seam because it determines how the integrated agent understands the environment it is acting inside.
+
 ## Architecture Diagrams
 
 The following diagrams capture the current architecture more accurately than the older static kernel/chat/governance image set. The system is now best understood as a layered stack with an explicit actor runtime above a more traditional kernel.
@@ -172,6 +188,50 @@ flowchart LR
     Policy --> Workflow
     Policy --> Runtime
 ```
+
+### Canonical Planning Context Packet
+
+```mermaid
+flowchart LR
+    Prompt["Prompt"]
+    Intent["Retrieval Intent"]
+    Dossier["Retrieval Dossier"]
+    Reasoning["Reasoning Brief"]
+    Packet["Planning Context Packet"]
+    Provider["Provider Request"]
+
+    Prompt --> Intent
+    Intent --> Dossier
+    Dossier --> Reasoning
+    Reasoning --> Packet
+    Packet --> Provider
+
+    Packet --> Task["task-frame"]
+    Packet --> Directives["planner-directives"]
+    Packet --> Authority["authority-state"]
+    Packet --> Evidence["decisive-evidence"]
+    Packet --> Uncertainty["uncertainty-and-obligations"]
+    Packet --> Strategy["strategy"]
+    Packet --> Support["optional-support"]
+```
+
+The authority section is now especially important. It carries:
+
+- `agent-constitution`
+- `capability-inventory`
+- project context
+- explicit Context Chat project selection when present
+- environment and conversation continuity state
+
+This means the integrated agent now receives a stronger statement of:
+
+- who it is
+- what constraints govern it
+- what capabilities are actually available
+- what project frame should dominate interpretation
+- what contradictions or missing authority prevent safe progress
+
+That is a substantive architectural change from earlier transcript-heavy prompt assembly.
 
 ### Canonical Runtime / Governance Flow
 

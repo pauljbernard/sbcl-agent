@@ -1034,6 +1034,18 @@
                                  (and (listp request-metadata)
                                       (or (getf request-metadata :pending-action-id)
                                           (getf request-metadata :PENDING-ACTION-ID))))
+          :actor-execution-job-id (or (and (listp (desktop-task-record-metadata record))
+                                           (getf (desktop-task-record-metadata record) :actor-execution-job-id))
+                                      (and (listp request-metadata)
+                                           (getf request-metadata :actor-execution-job-id)))
+          :actor-execution-authority (or (and (listp (desktop-task-record-metadata record))
+                                              (getf (desktop-task-record-metadata record) :actor-execution-authority))
+                                         (and (listp request-metadata)
+                                              (getf request-metadata :actor-execution-authority)))
+          :actor-execution-capability (or (and (listp (desktop-task-record-metadata record))
+                                               (getf (desktop-task-record-metadata record) :actor-execution-capability))
+                                          (and (listp request-metadata)
+                                               (getf request-metadata :actor-execution-capability)))
           :target (desktop-task-record-target record)
           :operation (desktop-task-record-operation record)
           :capability (desktop-task-record-capability record)
@@ -1566,6 +1578,10 @@
         :actor-message (actor-message-summary
                         (desktop-task-request-actor-message request))
         :metadata (append (copy-list (or (desktop-task-resolution-metadata resolution) '()))
+                          (when (and (listp invocation-result)
+                                     (getf invocation-result :kernel-execution-id))
+                            (list :kernel-execution-id
+                                  (getf invocation-result :kernel-execution-id)))
                           (list :native-executor-p
                                 (desktop-task-resolution-native-executor-p resolution)))))
 
@@ -1597,6 +1613,15 @@
           :retryable-p (desktop-task-retryable-p record)
           :retry-count (desktop-task-record-retry-count record)
           :max-attempts (desktop-task-record-max-attempts record)
+          :actor-execution-job-id (or (and (listp (desktop-task-record-metadata record))
+                                           (getf (desktop-task-record-metadata record) :actor-execution-job-id))
+                                      (and (listp result)
+                                           (getf result :actor-execution-job-id)))
+          :kernel-execution-id (or (and (listp result)
+                                        (getf result :kernel-execution-id))
+                                   (and (listp result)
+                                        (listp (getf result :metadata))
+                                        (getf (getf result :metadata) :kernel-execution-id)))
           :actor-message (actor-message-summary
                           (desktop-task-record-actor-message record))
           :result result
@@ -1686,6 +1711,48 @@
        (find-desktop-task-record-by-request-id session
                                                (desktop-task-request-id request))))
 
+(defun desktop-task-actor-execution-context (request manifest resolution
+                                             &key policy-id approval-required-p)
+  (let* ((request-metadata (desktop-task-request-metadata request))
+         (actor-message (desktop-task-request-actor-message request))
+         (actor-address (and actor-message
+                             (actor-message-receiver actor-message)))
+         (record-metadata (and resolution
+                               (desktop-task-resolution-metadata resolution))))
+    (make-actor-execution-context
+     :actor-id (or (and actor-address (actor-address-id actor-address))
+                   (desktop-task-request-target request))
+     :capability (or (desktop-task-request-capability request)
+                     (and manifest (desktop-task-manifest-capability manifest)))
+     :authority :governed-desktop-task
+     :policy-id policy-id
+     :target (desktop-task-request-target request)
+     :operation (desktop-task-request-operation request)
+     :request-id (desktop-task-request-id request)
+     :thread-id (or (getf request-metadata :thread-id)
+                    (getf request-metadata :THREAD-ID))
+     :turn-id (or (getf request-metadata :turn-id)
+                  (getf request-metadata :TURN-ID))
+     :work-item-id (or (getf request-metadata :work-item-id)
+                       (getf request-metadata :WORK-ITEM-ID)
+                       (getf record-metadata :work-item-id)
+                       (getf record-metadata :WORK-ITEM-ID))
+     :workflow-record-id (or (getf request-metadata :workflow-record-id)
+                             (getf request-metadata :WORKFLOW-RECORD-ID)
+                  (getf record-metadata :workflow-record-id)
+                  (getf record-metadata :WORKFLOW-RECORD-ID))
+     :plan-id (or (getf request-metadata :plan-id)
+                  (getf request-metadata :PLAN-ID)
+                  (getf record-metadata :plan-id)
+                  (getf record-metadata :PLAN-ID))
+     :approval-required-p approval-required-p
+     :metadata (list :manifest-id (and manifest (desktop-task-manifest-id manifest))
+                     :resolution-id (and resolution
+                                         (desktop-task-resolution-request-id resolution))
+                     :backend-kind (and manifest (desktop-task-manifest-backend-kind manifest))
+                     :native-executor-p (and resolution
+                                             (desktop-task-resolution-native-executor-p resolution))))))
+
 (defun append-desktop-task-audit-event (session event-kind request payload)
   (let ((record (desktop-task-request-record session request)))
     (append-session-event session
@@ -1696,6 +1763,33 @@
                           :thread-id (and record (desktop-task-record-thread-id record))
                           :turn-id (and record (desktop-task-record-turn-id record))
                           :visibility :operator)))
+
+(defun annotate-desktop-task-record-actor-execution (session request actor-execution-context)
+  (let* ((record (desktop-task-request-record session request))
+         (job-id (and (fboundp 'current-actor-execution-job-id)
+                      (current-actor-execution-job-id))))
+    (when job-id
+      (setf (desktop-task-request-metadata request)
+            (append (desktop-task-request-metadata request)
+                    (list :actor-execution-job-id job-id
+                          :actor-execution-authority
+                          (and actor-execution-context
+                               (actor-execution-context-authority actor-execution-context))
+                          :actor-execution-capability
+                          (and actor-execution-context
+                               (actor-execution-context-capability actor-execution-context)))))
+      (when record
+        (update-desktop-task-record
+         session
+         record
+         :metadata (list :actor-execution-job-id job-id
+                         :actor-execution-authority
+                         (and actor-execution-context
+                              (actor-execution-context-authority actor-execution-context))
+                         :actor-execution-capability
+                         (and actor-execution-context
+                              (actor-execution-context-capability actor-execution-context)))))
+      job-id)))
 
 (defun resolve-governed-desktop-task-request (request session)
   (let* ((manifest (find-desktop-task-manifest (desktop-task-request-target request)
@@ -1714,28 +1808,8 @@
               (desktop-task-request-target request)
               (desktop-task-request-operation request))))))
 
-(defun execute-governed-desktop-task-resolution (resolution session request manifest)
-  (flet ((perform-execution ()
-           (cond
-             ((desktop-task-resolution-native-executor-p resolution)
-              (funcall (desktop-task-resolution-executor resolution) session))
-             (t
-              (let ((invoker (find-desktop-task-backend-invoker
-                              (desktop-task-manifest-backend-kind manifest))))
-                (unless invoker
-                  (error "No backend invoker is registered for desktop task backend ~S (~S/~S)."
-                         (desktop-task-manifest-backend-kind manifest)
-                         (desktop-task-request-target request)
-                         (desktop-task-request-operation request)))
-                (funcall invoker manifest request resolution session))))))
-    (let ((actor-worker-dispatcher
-            (and (fboundp 'call-with-actor-worker-for-request)
-                 (symbol-function 'call-with-actor-worker-for-request))))
-      (if actor-worker-dispatcher
-          (funcall actor-worker-dispatcher session request #'perform-execution)
-          (perform-execution)))))
-
-(defun invoke-governed-desktop-task-request (request session &key resolution manifest)
+(defun prepare-governed-desktop-task-execution (request session
+                                                &key manifest resolution)
   (let* ((effective-manifest (or manifest
                                  (desktop-task-manifest-for-request request)))
          (effective-resolution (or resolution
@@ -1744,37 +1818,183 @@
          (approval-required-p (desktop-task-request-approval-required-p
                                request
                                effective-manifest
-                               effective-resolution)))
+                               effective-resolution))
+         (actor-execution-context
+           (desktop-task-actor-execution-context
+            request
+            effective-manifest
+            effective-resolution
+            :policy-id policy-id
+            :approval-required-p approval-required-p)))
+    (list :manifest effective-manifest
+          :resolution effective-resolution
+          :policy-id policy-id
+          :approval-required-p approval-required-p
+          :actor-execution-context actor-execution-context)))
+
+(defun execute-governed-desktop-task-resolution (resolution session request manifest
+                                                 &key policy-id approval-required-p
+                                                   actor-execution-context)
+  (flet ((perform-execution ()
+           (let* ((prepared (prepare-governed-desktop-task-execution
+                             request
+                             session
+                             :manifest manifest
+                             :resolution resolution))
+                  (effective-manifest (getf prepared :manifest))
+                  (effective-resolution (getf prepared :resolution))
+                  (effective-policy-id (getf prepared :policy-id))
+                  (effective-approval-required-p (getf prepared :approval-required-p))
+                  (effective-actor-execution-context
+                    (or (getf prepared :actor-execution-context)
+                        actor-execution-context)))
+             (when (fboundp 'update-current-actor-execution-context)
+               (update-current-actor-execution-context
+                effective-actor-execution-context))
+             (let ((job-id (annotate-desktop-task-record-actor-execution
+                            session
+                            request
+                            effective-actor-execution-context)))
+               (when (and job-id effective-actor-execution-context)
+                 (when (fboundp 'update-current-actor-execution-context)
+                   (update-current-actor-execution-context
+                    (make-actor-execution-context
+                     :metadata (list :actor-execution-job-id job-id))))))
+             (append-desktop-task-audit-event
+              session
+              :desktop-task-actor-resolution-preparation
+              request
+              (list :request-id (desktop-task-request-id request)
+                    :target (desktop-task-request-target request)
+                    :operation (desktop-task-request-operation request)
+                    :manifest (desktop-task-manifest-summary effective-manifest)
+                    :resolution (desktop-task-resolution-summary-data effective-resolution)
+                    :policy-id effective-policy-id
+                    :approval-required-p effective-approval-required-p
+                    :actor-execution
+                    (actor-execution-context-summary effective-actor-execution-context)))
+             (append-desktop-task-audit-event
+              session
+              :desktop-task-actor-authority-dispatch
+              request
+              (list :request-id (desktop-task-request-id request)
+                    :target (desktop-task-request-target request)
+                    :operation (desktop-task-request-operation request)
+                    :policy-id effective-policy-id
+                    :approval-required-p effective-approval-required-p
+                    :actor-execution
+                    (actor-execution-context-summary effective-actor-execution-context)))
+             (when effective-approval-required-p
+               (unless effective-policy-id
+                 (error "Desktop task ~S/~S requires approval, but no policy id is available."
+                        (desktop-task-request-target request)
+                        (desktop-task-request-operation request)))
+               (append-desktop-task-audit-event
+                session
+                :desktop-task-actor-governance-enforcement
+                request
+                (list :request-id (desktop-task-request-id request)
+                      :target (desktop-task-request-target request)
+                      :operation (desktop-task-request-operation request)
+                      :policy-id effective-policy-id
+                      :approval-required-p effective-approval-required-p
+                      :actor-execution
+                      (actor-execution-context-summary effective-actor-execution-context)))
+               (ensure-policy-approved session effective-policy-id))
+             (let ((result
+                     (cond
+                       ((desktop-task-resolution-native-executor-p effective-resolution)
+                        (funcall (desktop-task-resolution-executor effective-resolution) session))
+                       (t
+                        (let ((invoker (find-desktop-task-backend-invoker
+                                        (desktop-task-manifest-backend-kind effective-manifest))))
+                          (unless invoker
+                            (error "No backend invoker is registered for desktop task backend ~S (~S/~S)."
+                                   (desktop-task-manifest-backend-kind effective-manifest)
+                                   (desktop-task-request-target request)
+                                   (desktop-task-request-operation request)))
+                          (funcall invoker effective-manifest
+                                   request
+                                   effective-resolution
+                                   session))))))
+               (list :manifest effective-manifest
+                     :resolution effective-resolution
+                     :policy-id effective-policy-id
+                     :approval-required-p effective-approval-required-p
+                     :actor-execution-context effective-actor-execution-context
+                     :result result)))))
+    (let ((actor-worker-dispatcher
+            (and (fboundp 'call-with-actor-worker-for-request)
+                 (symbol-function 'call-with-actor-worker-for-request))))
+      (if actor-worker-dispatcher
+          (funcall actor-worker-dispatcher
+                   session
+                   request
+                   #'perform-execution
+                   :context (desktop-task-actor-execution-context
+                             request
+                             manifest
+                             resolution
+                             :policy-id policy-id
+                             :approval-required-p approval-required-p)))
+          (perform-execution))))
+
+(defun invoke-governed-desktop-task-request (request session &key resolution manifest)
+  (let* ((effective-manifest manifest)
+         (effective-resolution resolution)
+         (policy-id (and effective-manifest
+                         (desktop-task-request-policy-id request effective-manifest)))
+         (approval-required-p (and effective-manifest
+                                   effective-resolution
+                                   (desktop-task-request-approval-required-p
+                                    request
+                                    effective-manifest
+                                    effective-resolution)))
+         (actor-execution-context
+           (desktop-task-actor-execution-context
+            request
+            effective-manifest
+            effective-resolution
+            :policy-id policy-id
+             :approval-required-p approval-required-p)))
     (append-desktop-task-audit-event
      session
      :desktop-task-governance-check
      request
      (list :request (desktop-task-request-summary request)
-           :manifest (desktop-task-manifest-summary effective-manifest)
-           :resolution (desktop-task-resolution-summary-data effective-resolution)
+           :manifest (and effective-manifest
+                          (desktop-task-manifest-summary effective-manifest))
+           :resolution (and effective-resolution
+                            (desktop-task-resolution-summary-data effective-resolution))
            :policy-id policy-id
-           :approval-required-p approval-required-p))
-    (when approval-required-p
-      (unless policy-id
-        (error "Desktop task ~S/~S requires approval, but no policy id is available."
-               (desktop-task-request-target request)
-               (desktop-task-request-operation request)))
-      (ensure-policy-approved session policy-id))
+           :approval-required-p (or approval-required-p :deferred)
+           :actor-execution (actor-execution-context-summary actor-execution-context)))
     (append-desktop-task-audit-event
      session
      :desktop-task-invocation
      request
      (list :request (desktop-task-request-summary request)
-           :manifest (desktop-task-manifest-summary effective-manifest)
-           :resolution (desktop-task-resolution-summary-data effective-resolution)
+           :manifest (and effective-manifest
+                          (desktop-task-manifest-summary effective-manifest))
+           :resolution (and effective-resolution
+                            (desktop-task-resolution-summary-data effective-resolution))
            :policy-id policy-id
-           :approval-required-p approval-required-p))
+           :approval-required-p (or approval-required-p :deferred)
+           :actor-execution (actor-execution-context-summary actor-execution-context)))
     (handler-case
-        (let ((result (execute-governed-desktop-task-resolution
+        (let* ((execution-envelope (execute-governed-desktop-task-resolution
                        effective-resolution
                        session
                        request
-                       effective-manifest)))
+                       effective-manifest
+                       :policy-id policy-id
+                       :approval-required-p approval-required-p
+                       :actor-execution-context actor-execution-context))
+               (actual-manifest (getf execution-envelope :manifest))
+               (actual-resolution (getf execution-envelope :resolution))
+               (actual-policy-id (getf execution-envelope :policy-id))
+               (actual-approval-required-p (getf execution-envelope :approval-required-p))
+               (result (getf execution-envelope :result)))
           (append-desktop-task-audit-event
            session
            :desktop-task-invocation-result
@@ -1782,17 +2002,17 @@
            (list :request-id (desktop-task-request-id request)
                  :target (desktop-task-request-target request)
                  :operation (desktop-task-request-operation request)
-                 :policy-id policy-id
-                 :approval-required-p approval-required-p
+                 :policy-id actual-policy-id
+                 :approval-required-p actual-approval-required-p
                  :summary (desktop-task-invocation-result-summary
                            result
-                           (desktop-task-resolution-summary effective-resolution))
+                           (desktop-task-resolution-summary actual-resolution))
                  :status (or (and (listp result)
                                   (or (getf result :status)
                                       (getf result :STATUS)))
                              :completed)))
-          (list :manifest effective-manifest
-                :resolution effective-resolution
+          (list :manifest actual-manifest
+                :resolution actual-resolution
                 :result result))
       (error (condition)
         (append-desktop-task-audit-event
@@ -1802,8 +2022,8 @@
          (list :request-id (desktop-task-request-id request)
                :target (desktop-task-request-target request)
                :operation (desktop-task-request-operation request)
-               :policy-id policy-id
-               :approval-required-p approval-required-p
+               :policy-id (or policy-id :deferred)
+               :approval-required-p (or approval-required-p :deferred)
                :error (princ-to-string condition)
                :failure-classification :execution))
         (error condition)))))

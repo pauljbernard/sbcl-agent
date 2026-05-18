@@ -125,6 +125,11 @@ The target model above is no longer only aspirational. The current code now incl
   - workflow edges
   - supervision incidents
   - worker-pool execution metrics
+- planner-context and provider-request surfaces that project:
+  - `agent-constitution`
+  - `capability-inventory`
+  - explicit Context Chat project targeting
+  - contradiction-aware uncertainty
 - a real SBCL worker-pool runner for thread-pool-backed actor execution
 
 The system is therefore in the middle phase:
@@ -258,6 +263,10 @@ sequenceDiagram
 2. Actors own routing and continuity.
    - Threads, turns, and transcript panels are presentation artifacts only.
    - Continuity must be carried by actor message fields and actor-owned state.
+
+3. Planning context must be authoritative, not merely convenient.
+   - The integrated agent should prefer `authority-state` and decisive evidence over transcript-shaped support material.
+   - Project targeting, capability readiness, and uncertainty are now architectural inputs to execution rather than presentation-only metadata.
 
 3. Mailboxes are primary.
    - Task records and transcript state are not the routing backbone.

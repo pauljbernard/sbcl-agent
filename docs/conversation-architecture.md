@@ -30,6 +30,7 @@ flowchart LR
     UI["Surface Context Chat"]
     Chat["ContextChatActor(session)"]
     Threads["threads / messages / turns / artifacts"]
+    Planner["planning-context packet"]
     Gov["GovernanceActor(session)"]
     Runtime["RuntimeActor(session)"]
     Editor["EditorActor(session)"]
@@ -38,12 +39,15 @@ flowchart LR
 
     UI --> Chat
     Chat --> Threads
+    Chat --> Planner
     Chat --> Gov
     Gov --> Runtime
     Gov --> Editor
     Runtime --> Kernel
     Editor --> Kernel
     Kernel --> State
+    State --> Planner
+    Planner --> Gov
     Runtime --> Threads
     Editor --> Threads
     Threads --> UI
@@ -62,6 +66,7 @@ That rule is the cleanest way to align the conversation runtime with the project
 The actor-system refactor adds one more practical rule:
 
 - conversation owns interaction continuity through `ContextChatActor`, not through whichever renderer thread happens to be selected
+- the planning frame for a turn is authoritative environment context, not a renderer-local chat heuristic
 
 ## What Exists Today
 
@@ -84,6 +89,8 @@ Present in code now:
 - load-time interruption recovery that marks persisted in-flight turns and operations as `:interrupted` instead of pretending they are still active
 - explicit `:awaiting-cold-validation` runtime/workflow state for governed runtime mutations that succeed in the warm image but still require colder evidence before durable closure
 - compact environment-backed provider context, so provider requests now carry environment refs instead of only flat session summaries
+- canonical planning-context packet construction with task frame, authority state, decisive evidence, uncertainty, strategy, and optional support
+- explicit Context Chat project targeting so a conversation can be scoped to zero, one, or many projects without relying only on inference
 - validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence appears in the conversational artifact stream instead of only inside workflow records
 - environment-first persistence where conversation records, workflow records, incident state, task/worker state, staged actions, operator plan, and policy grants are rehydrated from environment-owned domains instead of a duplicated serialized session blob
 - a minimal compatibility-session payload that now acts primarily as a session identity shim rather than as the primary durable source of runtime truth
@@ -212,13 +219,15 @@ The turn orchestrator is the bridge between provider text generation and governe
 Its responsibilities are:
 
 1. Resolve the current thread and turn context.
-2. Build provider input from conversation and runtime summaries.
+2. Build provider input from conversation, project, capability, and runtime authority state.
 3. Create and update assistant message state during streaming.
 4. Record structured operation intents when the assistant proposes actions.
 5. Apply policy decisions and pause when approval is needed.
 6. Resume the turn after approval.
 7. Optionally resume the provider after the operation phase when the provider supports structured turn follow-up.
 8. Finalize turn, operation, and artifact state.
+
+In the current implementation, that provider input should be understood as the canonical planning-context packet rather than a loose bundle of transcript and summaries.
 
 This keeps behavior in Lisp rather than encoding it in prompt tricks.
 

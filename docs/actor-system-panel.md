@@ -60,6 +60,8 @@ The current surface should expose:
   - open and recent incidents
   - parent lineage
   - action taken or pending
+  - recovery recommendation
+  - replay or recovery class when durable continuation is available
 
 ## Hierarchy View
 
@@ -165,6 +167,8 @@ Selecting any actor should show:
 - configured LLM profile
 - inbox id
 - outbox id
+- recent workflow ownership or linked governed work where applicable
+- recent recovery or supervision posture when the actor owns resumable continuation
 
 ## Metrics
 
@@ -205,5 +209,14 @@ The live surface should be backed by one aggregate actor-system query that retur
 - actor supervision incidents
 - pool configuration
 - runtime execution summary
+- workflow ownership and native workflow-edge summaries for actor-owned continuation
+- durable recovery and replay annotations where the actor/runtime slice exposes them
 
 The `Actor System Surface` should project directly from actor-system state.
+
+In the current architecture, that state is not just runtime pressure telemetry. It is also part of the governed execution model. The surface should therefore be able to explain:
+
+- which actors currently own live work
+- which actors are blocked on approval or validation
+- which actors have recoverable continuation checkpoints
+- which incidents can be resumed, replayed, or require manual intervention

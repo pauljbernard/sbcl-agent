@@ -62,8 +62,13 @@ The codebase is real and usable today. It currently provides:
 - structured tools for files, docs, runtime, processes, git, and patches
 - persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
 - kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming the primary operator reference
+- an explicit actor registry plus kernel capability registry for authoritative ingress and discoverable operator surfaces
 - explicit execution surfaces, shell workspace, governance queue, object browser, and inspector models
 - compatibility execution tracking for hosted process-style capabilities
+- a canonical planning-context packet with task framing, authority state, decisive evidence, uncertainty handling, strategy posture, and optional support
+- durable `agent-constitution` and planner-grade `capability-inventory` context in the environment and provider request path
+- contradiction-aware reasoning and uncertainty arbitration for missing authority, stale context, capability drift, and project ambiguity
+- explicit Context Chat project targeting with zero, one, or many selected projects carried through environment context and planner authority
 - a hostable desktop contract consumed by `sbcl-agent-ux`
 - developer-platform manifests and `.aop` package export, validation, import, activation, install, and applied-profile queries
 
@@ -81,6 +86,7 @@ Start here:
 6. [Getting Started](docs/getting-started.md)
 7. [User Guide](docs/user-guide.md)
 8. [Safety and Risk](docs/safety-and-risk.md)
+9. [Context Engineering](docs/context-engineering.md)
 
 Then use these as secondary or forward-looking material:
 
@@ -188,6 +194,39 @@ flowchart LR
     Hierarchy --> Detail
     Workflow --> Detail
     Supervision --> Detail
+```
+
+The planning/runtime context path is now equally important. Provider-bound requests are built from one canonical packet rather than a loose collection of summaries:
+
+```mermaid
+flowchart LR
+    Prompt["User Prompt"]
+    Intent["Retrieval Intent"]
+    Dossier["Retrieval Dossier"]
+    Reasoning["Reasoning Brief"]
+    Packet["Planning Context Packet"]
+    Provider["Provider Request"]
+
+    Prompt --> Intent
+    Intent --> Dossier
+    Dossier --> Reasoning
+    Reasoning --> Packet
+
+    Packet --> Task["task-frame"]
+    Packet --> Directives["planner-directives"]
+    Packet --> Authority["authority-state"]
+    Packet --> Evidence["decisive-evidence"]
+    Packet --> Uncertainty["uncertainty-and-obligations"]
+    Packet --> Strategy["strategy"]
+    Packet --> Support["optional-support"]
+
+    Task --> Provider
+    Directives --> Provider
+    Authority --> Provider
+    Evidence --> Provider
+    Uncertainty --> Provider
+    Strategy --> Provider
+    Support --> Provider
 ```
 
 ## Current Surface Desktop

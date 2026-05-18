@@ -220,6 +220,12 @@
 (defun current-thread (session)
   (ensure-default-thread session))
 
+(defun current-turn (session)
+  (let* ((thread (current-thread session))
+         (turn-id (car (last (or (thread-turn-ids thread) '())))))
+    (and turn-id
+         (find-turn session turn-id))))
+
 (defun create-thread (session &key title summary metadata)
   (ensure-default-thread session)
   (let ((thread (make-session-thread :title (or title

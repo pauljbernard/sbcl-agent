@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the runtime and persistence substrate, a more traditional governed kernel as the authority boundary, an address-based actor system as the primary execution and workflow substrate, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, and policy-based governance is native to the stack rather than bolted on around it.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the runtime and persistence substrate, a more traditional governed kernel as the authority boundary, an address-based actor system as the primary execution and workflow substrate, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, policy-based governance is native to the stack, and provider-bound planning now flows through a canonical planning-context packet with explicit authority, capability, project, evidence, and uncertainty sections.</div>
 
 ## Start Here
 
@@ -43,6 +43,8 @@ flowchart TB
     Actor --> Kernel
     Kernel --> Runtime
 ```
+
+<p><img src="{{ '/assets/current-layered-architecture.svg' | relative_url }}" alt="Current layered sbcl-agent architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;"></p>
 
 ## Actor System Architecture
 
@@ -86,6 +88,21 @@ flowchart TB
     Pool --> Calc
     Pool --> Env
 ```
+
+## Planning Context Engineering
+
+The integrated agent now plans and executes against a canonical planning packet rather than a transcript-only prompt:
+
+<p><img src="{{ '/assets/planning-context-packet.svg' | relative_url }}" alt="Planning context packet architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;"></p>
+
+That packet carries:
+
+- stable system identity through `agent-constitution`
+- live capability and dependency posture through `capability-inventory`
+- project and workflow frame of reference
+- decisive evidence instead of broad relevance alone
+- structured uncertainty, contradictions, and inspection obligations
+- archetype- and risk-aware strategy defaults
 
 ## Runtime And Governance Flow
 
@@ -147,6 +164,7 @@ If you are evaluating whether the system is safe or mature enough for your use, 
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/application-domains.html"><strong>Application Domains</strong>See where governed, runtime-aware causality becomes necessary rather than optional.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/foundation.html"><strong>Foundation</strong>Learn the three-truth model and the environment-first framing.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/architecture.html"><strong>Architecture</strong>Map the conceptual model onto the code that exists today.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/context-engineering.html"><strong>Context Engineering</strong>See how retrieval, authority, capability inventory, project targeting, and uncertainty now shape the planning packet.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/robust-actor-kernel-architecture.html"><strong>Actor Runtime</strong>See the actor-system layer, worker-pool execution model, and kernel authority boundary.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/actor-system-panel.html"><strong>Actor System Surface</strong>See how the live hierarchy, workflow graph, supervision, and runtime pool are projected to operators.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html"><strong>Safety and Risk</strong>Read the system's strengths, weaknesses, and governance model directly.</a>

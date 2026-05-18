@@ -6,6 +6,7 @@
   alignment-intent-context
   plan
   ranking
+  decisive-context-core
   observed-consequences
   conversation-context
   runtime-context
@@ -21,6 +22,223 @@
   source-context
   trace-context
   gaps)
+
+(defun decisive-context-base-score (kind)
+  (case kind
+    (:blocker 100)
+    (:validation-obligation 95)
+    (:open-incident 90)
+    (:observed-consequence 85)
+    (:runtime-target 70)
+    (:project-constraint 65)
+    (:intent-constraint 60)
+    (:history-anchor 50)
+    (otherwise 40)))
+
+(defun decisive-context-authority-weight (domain kind)
+  (declare (ignore kind))
+  (case domain
+    (:workflow 20)
+    (:incident 18)
+    (:intent 14)
+    (:project 12)
+    (:workspace 10)
+    (:artifact 9)
+    (:conversation 6)
+    (otherwise 4)))
+
+(defun decisive-context-conflict-potential (kind ref)
+  (declare (ignore ref))
+  (case kind
+    (:blocker 18)
+    (:open-incident 16)
+    (:validation-obligation 14)
+    (:observed-consequence 10)
+    (:project-constraint 8)
+    (:intent-constraint 6)
+    (otherwise 0)))
+
+(defun decisive-context-validation-criticality (kind supporting-evidence)
+  (case kind
+    (:validation-obligation (+ 18 (length (or supporting-evidence '()))))
+    (:blocker 14)
+    (:open-incident 6)
+    (otherwise 0)))
+
+(defun decisive-context-recency-weight (kind supporting-evidence)
+  (cond
+    ((eq kind :observed-consequence)
+     (if supporting-evidence 10 6))
+    ((eq kind :history-anchor)
+     4)
+    (t
+     0)))
+
+(defun decisive-context-entry-score (domain kind ref supporting-evidence)
+  (+ (decisive-context-base-score kind)
+     (decisive-context-authority-weight domain kind)
+     (decisive-context-conflict-potential kind ref)
+     (decisive-context-validation-criticality kind supporting-evidence)
+     (decisive-context-recency-weight kind supporting-evidence)))
+
+(defun decisive-context-salience-summary (domain kind ref supporting-evidence)
+  (list :base-score (decisive-context-base-score kind)
+        :authority-weight (decisive-context-authority-weight domain kind)
+        :conflict-potential (decisive-context-conflict-potential kind ref)
+        :validation-criticality (decisive-context-validation-criticality kind supporting-evidence)
+        :recency-weight (decisive-context-recency-weight kind supporting-evidence)))
+
+(defun make-decisive-context-entry (domain kind label summary &key ref supporting-evidence)
+  (let* ((evidence (copy-tree (or supporting-evidence '())))
+         (salience (decisive-context-salience-summary domain kind ref evidence)))
+    (list :domain domain
+          :kind kind
+          :label label
+          :summary summary
+          :score (decisive-context-entry-score domain kind ref evidence)
+          :salience salience
+          :ref ref
+          :supporting-evidence evidence)))
+
+(defun dossier-decisive-workflow-entries (dossier)
+  (let ((entries '()))
+    (dolist (item (or (getf (retrieval-dossier-workflow-context dossier) :work-items) '()))
+      (let ((status (getf item :status))
+            (work-item-id (getf item :id))
+            (pending-validations (or (getf item :pending-validations) '())))
+        (when (member status '(:awaiting-approval :blocked :quarantined :awaiting-cold-validation)
+                      :test #'eq)
+          (push (make-decisive-context-entry
+                 :workflow
+                 :blocker
+                 "Blocked work-item"
+                 (format nil "Work-item ~A is currently ~S." (or work-item-id "<unknown>") status)
+                 :ref (list :type :work-item :id work-item-id :status status))
+                entries))
+        (when pending-validations
+          (push (make-decisive-context-entry
+                 :workflow
+                 :validation-obligation
+                 "Pending validation"
+                 (format nil "Work-item ~A still requires validations ~S." (or work-item-id "<unknown>")
+                         pending-validations)
+                 :ref (list :type :work-item :id work-item-id)
+                 :supporting-evidence pending-validations)
+                entries))))
+    (nreverse entries)))
+
+(defun dossier-decisive-incident-entries (dossier)
+  (let ((entries '()))
+    (dolist (incident (or (getf (retrieval-dossier-incident-context dossier) :incidents) '()))
+      (when (eq (getf incident :status) :open)
+        (push (make-decisive-context-entry
+               :incident
+               :open-incident
+               "Open incident"
+               (format nil "~A (~A) remains open."
+                       (or (getf incident :summary)
+                           (getf incident :title)
+                           (getf incident :id)
+                           "Incident")
+                       (or (getf incident :kind) :incident))
+               :ref (list :type :incident :id (getf incident :id) :kind (getf incident :kind)))
+              entries)))
+    (nreverse entries)))
+
+(defun dossier-decisive-source-entries (dossier)
+  (let ((source-context (retrieval-dossier-source-context dossier)))
+    (remove nil
+            (list
+             (when (and source-context (getf source-context :symbol-target))
+               (make-decisive-context-entry
+                :workspace
+                :runtime-target
+                "Symbol target"
+                (format nil "Source inspection is anchored on symbol target ~A."
+                        (getf source-context :symbol-target))
+                :ref (list :type :symbol :symbol (getf source-context :symbol-target))))))))
+
+(defun dossier-decisive-intent-entries (dossier)
+  (let* ((intent-context (retrieval-dossier-alignment-intent-context dossier))
+         (constraints (copy-list (or (getf intent-context :constraints) '()))))
+    (when constraints
+      (list (make-decisive-context-entry
+             :intent
+             :intent-constraint
+             "Intent constraints"
+             "Durable intent constraints narrow the safe solution space."
+             :ref (list :type :intent :id (getf intent-context :current-intent-id))
+             :supporting-evidence constraints)))))
+
+(defun dossier-decisive-project-entries (dossier)
+  (let* ((project-context (retrieval-dossier-project-context dossier))
+         (constraints (copy-list (or (and project-context
+                                          (getf (getf project-context :constitution) :constraints))
+                                     '()))))
+    (when constraints
+      (list (make-decisive-context-entry
+             :project
+             :project-constraint
+             "Project constraints"
+             "Project constitution constraints materially affect planning and mutation choices."
+             :ref (list :type :project :id (getf project-context :current-project-id))
+             :supporting-evidence constraints)))))
+
+(defun dossier-decisive-conversation-entries (dossier)
+  (let ((conversation-context (retrieval-dossier-conversation-context dossier)))
+    (remove nil
+            (list
+             (when (and conversation-context
+                        (getf conversation-context :transcript-memory))
+               (make-decisive-context-entry
+                :conversation
+                :history-anchor
+                "Relevant prior conversation"
+                "Transcript memory surfaced earlier turns that are likely to govern the current task."
+                :ref (list :type :thread
+                           :id (getf (getf conversation-context :thread) :id))
+                :supporting-evidence
+                (mapcar (lambda (entry)
+                          (list :entry-index (getf entry :entry-index)
+                                :match-score (getf entry :match-score)))
+                        (or (getf (getf conversation-context :transcript-memory) :entries) '()))))))))
+
+(defun dossier-decisive-observed-consequence-entries (dossier)
+  (mapcar (lambda (entry)
+            (make-decisive-context-entry
+             :artifact
+             :observed-consequence
+             "Observed mutation consequence"
+             (format nil "Observed ~A result with status ~A."
+                     (or (getf entry :action-type) :action)
+                     (or (getf entry :status) :completed))
+             :ref (list :type :action-result
+                        :action-type (getf entry :action-type)
+                        :tool-id (getf entry :tool-id))
+             :supporting-evidence (or (getf entry :paths) '())))
+          (or (retrieval-dossier-observed-consequences dossier) '())))
+
+(defun build-decisive-context-core (dossier)
+  (let* ((entries (sort (remove nil
+                               (append (dossier-decisive-workflow-entries dossier)
+                                       (dossier-decisive-incident-entries dossier)
+                                       (dossier-decisive-observed-consequence-entries dossier)
+                                       (dossier-decisive-source-entries dossier)
+                                       (dossier-decisive-intent-entries dossier)
+                                       (dossier-decisive-project-entries dossier)
+                                       (dossier-decisive-conversation-entries dossier)))
+                        #'>
+                        :key (lambda (entry) (or (getf entry :score) 0))))
+         (primary-entry (first entries)))
+    (list :entry-count (length entries)
+          :entries entries
+          :primary-entry primary-entry
+          :focus-labels (remove-duplicates (mapcar (lambda (entry) (getf entry :domain)) entries)
+                                           :test #'eq)
+          :explanation
+          (if primary-entry
+              "Decisive context core prioritizes authority-bearing, conflict-prone, validation-critical, and recent governing evidence ahead of broad dossier relevance."
+              "No decisive context core was derived beyond the broader dossier payload."))))
 
 (defparameter *retrieval-symbol-token-separators*
   '(#\Space #\Tab #\Newline #\Return #\( #\) #\[ #\] #\{ #\} #\, #\. #\; #\" #\' #\` #\? #\!))
@@ -726,12 +944,145 @@
                                   (copy-list (or (intent-record-linked-mutation-ids current-intent) '()))
                                   limit)))))
 
-(defun build-project-dossier-section (session plan)
+(defun project-prompt-alignment-field-tokens (value)
+  (labels ((project-search-text (value)
+             (cond
+               ((null value) "")
+               ((stringp value) value)
+               ((symbolp value) (string-downcase (string value)))
+               ((numberp value) (princ-to-string value))
+               ((listp value)
+                (with-output-to-string (stream)
+                  (dolist (entry value)
+                    (let ((text (project-search-text entry)))
+                      (when (> (length text) 0)
+                        (write-string text stream)
+                        (write-char #\Space stream))))))
+               (t
+                (princ-to-string value)))))
+    (remove-duplicates
+     (prompt-match-tokens
+      (string-downcase (project-search-text value)))
+     :test #'string=)))
+
+(defparameter +project-alignment-stopwords+
+  '("project" "context" "planning" "plan" "state" "runtime" "environment"
+    "provider" "response" "decisive" "evidence" "posture" "inspect" "detail"
+    "current" "govern" "governed" "changes" "change" "validate" "validation"
+    "explain" "identify" "should" "what" "which" "under" "with" "into"))
+
+(defun project-alignment-relevant-tokens (value)
+  (remove-if (lambda (token)
+               (or (< (length token) 4)
+                   (member token +project-alignment-stopwords+ :test #'string=)))
+             (project-prompt-alignment-field-tokens value)))
+
+(defun project-prompt-alignment-score (prompt project-summary &optional project-record)
+  (let* ((prompt-tokens (remove-duplicates (project-alignment-relevant-tokens prompt) :test #'string=))
+         (weighted-fields
+          (remove nil
+                  (list (list :weight 3
+                              :tokens (project-alignment-relevant-tokens
+                                       (list (getf project-summary :id)
+                                             (getf project-summary :title)
+                                             (getf project-summary :source-roots))))
+                        (and project-record
+                             (list :weight 2
+                                   :tokens (project-alignment-relevant-tokens
+                                            (project-record-constitution project-record))))
+                        (and project-record
+                             (list :weight 2
+                                   :tokens (project-alignment-relevant-tokens
+                                            (mapcar #'summarized-project-requirement
+                                                    (or (project-record-requirements project-record) '())))))
+                        (and project-record
+                             (list :weight 1
+                                   :tokens (project-alignment-relevant-tokens
+                                            (mapcar #'summarized-project-architecture-decision
+                                                    (or (project-record-architecture-decisions project-record) '())))))
+                        (and project-record
+                             (list :weight 1
+                                   :tokens (project-alignment-relevant-tokens
+                                            (mapcar #'summarized-project-feature-spec
+                                                    (or (project-record-feature-specifications project-record) '()))))))))
+         (field-matches
+          (mapcar (lambda (field)
+                    (let ((matches (loop for token in prompt-tokens
+                                         count (member token (getf field :tokens) :test #'string=))))
+                      (list :weight (getf field :weight)
+                            :match-count matches)))
+                  weighted-fields)))
+    (loop for field in field-matches
+          sum (* (getf field :weight) (getf field :match-count)))))
+
+(defun project-selection-posture-from-prompt (prompt current-project-summary project-summaries
+                                                &optional project-records)
+  (let* ((confidence-threshold 2)
+         (record-for-summary
+          (lambda (summary)
+            (find (getf summary :id)
+                  project-records
+                  :key #'project-record-id
+                  :test #'string=)))
+         (current-score (and current-project-summary
+                             (project-prompt-alignment-score prompt
+                                                             current-project-summary
+                                                             (funcall record-for-summary
+                                                                      current-project-summary))))
+         (linked-scores
+          (remove nil
+                  (mapcar (lambda (summary)
+                            (unless (and current-project-summary
+                                         (string= (getf summary :id)
+                                                  (getf current-project-summary :id)))
+                              (list :project-id (getf summary :id)
+                                    :title (getf summary :title)
+                                    :score (project-prompt-alignment-score prompt
+                                                                           summary
+                                                                           (funcall record-for-summary summary)))))
+                          (or project-summaries '()))))
+         (matching-linked-scores
+          (remove-if-not (lambda (entry) (> (or (getf entry :score) 0) 0))
+                         linked-scores))
+         (best-linked-score
+          (first (sort (copy-list matching-linked-scores)
+                       #'>
+                       :key (lambda (entry) (or (getf entry :score) 0)))))
+         (matching-linked-count (length matching-linked-scores))
+         (project-count (length (or project-summaries '())))
+         (selection-confident-p
+          (cond
+            ((<= project-count 1) t)
+            ((and (>= current-score confidence-threshold)
+                  (or (null best-linked-score)
+                      (> current-score (getf best-linked-score :score))))
+             t)
+            (t nil)))
+         (selection-basis
+          (cond
+            ((<= project-count 1) :single-project)
+            ((and (= current-score 0) (> matching-linked-count 0)) :prompt-mismatch)
+            ((and (>= current-score confidence-threshold)
+                  best-linked-score
+                  (= current-score (getf best-linked-score :score)))
+             :prompt-ambiguous)
+            ((>= current-score confidence-threshold) :prompt-aligned)
+            (t :weak-prompt-alignment))))
+    (list :selection-confident-p selection-confident-p
+          :selection-basis selection-basis
+          :prompt-match-score current-score
+          :matching-linked-project-count matching-linked-count
+          :best-linked-project-match best-linked-score)))
+
+(defun build-project-dossier-section (session prompt plan)
   (let* ((response (query-project-list-service session))
          (data (service-response-data response))
          (projects (or (getf data :projects) '()))
          (current-id (getf data :current-project-id))
-         (current-project (or (and current-id (find-project-record session current-id))
+         (explicit-selected-projects (context-chat-selected-project-records session))
+         (explicit-primary-project (context-chat-primary-project-record session))
+         (current-project (or explicit-primary-project
+                              (and current-id (find-project-record session current-id))
                               (current-project-record session)))
          (limit (retrieval-plan-limit plan :project 4))
          (linked-work-items
@@ -759,11 +1110,61 @@
          (quality-gate-evidence (and current-project
                                      (project-quality-gate-evidence-summary session current-project)))
          (readiness-summary (and current-project
-                                 (project-readiness-evidence-summary session current-project))))
+                                 (project-readiness-evidence-summary session current-project)))
+         (linked-projects
+           (compact-list
+            (or (and explicit-selected-projects
+                     (remove nil
+                             (mapcar (lambda (project)
+                                       (unless (and current-project
+                                                    (string= (project-record-id current-project)
+                                                             (project-record-id project)))
+                                         (project-summary project)))
+                                     explicit-selected-projects)))
+                (remove nil
+                        (mapcar (lambda (project)
+                                  (unless (and current-id
+                                               (string= (getf project :id) current-id))
+                                    project))
+                                projects)))
+            limit))
+         (selection-posture
+          (if explicit-selected-projects
+              (list :selection-confident-p t
+                    :selection-basis :explicit-context-chat-selection
+                    :prompt-match-score nil
+                    :matching-linked-project-count
+                    (max 0 (1- (length explicit-selected-projects)))
+                    :best-linked-project-match nil)
+              (project-selection-posture-from-prompt prompt
+                                                     (and current-project
+                                                          (project-summary current-project))
+                                                     projects
+                                                     (and session (list-project-records session))))))
     (when current-project
-      (list :current-project-id current-id
+      (list :current-project-id (project-record-id current-project)
             :project-count (length projects)
             :projects (compact-list projects limit)
+            :linked-projects linked-projects
+            :selected-project-ids
+            (if explicit-selected-projects
+                (mapcar #'project-record-id explicit-selected-projects)
+                (and current-project
+                     (list (project-record-id current-project))))
+            :primary-project-id (project-record-id current-project)
+            :selected-project-source (cond
+                                       (explicit-selected-projects :explicit-context-chat-selection)
+                                       (current-id :session-selection)
+                                       (t :none))
+            :ambiguity-risk (cond
+                              ((and explicit-selected-projects
+                                    (> (length explicit-selected-projects) 1))
+                               :explicit-multi-project)
+                              ((> (length projects) 1) :multi-project)
+                              ((= (length projects) 1) :single-project)
+                              (t :none))
+            :selection-confident-p (getf selection-posture :selection-confident-p)
+            :selection-posture selection-posture
             :summary (project-summary current-project)
             :constitution (copy-list (or (project-record-constitution current-project) '()))
             :requirements (mapcar #'summarized-project-requirement
@@ -940,7 +1341,7 @@
          (incident-context (when (find :incident domains)
                              (build-incident-dossier-section session plan)))
          (project-context (when (find :project domains)
-                            (build-project-dossier-section session plan)))
+                            (build-project-dossier-section session prompt plan)))
          (source-context (when (find :workspace domains)
                            (build-source-dossier-section session prompt plan)))
          (trace-context (when (or (find :intent domains)
@@ -1071,5 +1472,7 @@
                                                   intent
                                                   (build-retrieval-dossier-from-plan session prompt intent plan))))
     (setf (retrieval-dossier-ranking dossier)
-          (build-retrieval-ranking prompt dossier))
+          (build-retrieval-ranking prompt dossier)
+          (retrieval-dossier-decisive-context-core dossier)
+          (build-decisive-context-core dossier))
     dossier))

@@ -107,15 +107,32 @@
   (handler-case
       (funcall thunk)
     (error (condition)
-      (record-runtime-incident session
-                               condition
-                               :thread (runtime-incident-thread session)
-                               :turn *runtime-governance-turn*
-                               :operation *runtime-governance-operation*
-                               :kind kind
-                               :title title
-                               :summary (or summary (princ-to-string condition))
-                               :metadata metadata)
+      (ignore-errors
+        (with-open-file (out *runtime-eval-debug-log-path*
+                             :direction :output
+                             :if-exists :append
+                             :if-does-not-exist :create)
+          (format out "~&stage=ERROR-CAUGHT condition=~S~%" (type-of condition))))
+      ;; Incident capture is best-effort. A runtime failure must not block the
+      ;; originating command path while building incident artifacts or recovery
+      ;; plans.
+      (ignore-errors
+        (sb-ext:with-timeout 1
+          (record-runtime-incident session
+                                   condition
+                                   :thread (runtime-incident-thread session)
+                                   :turn *runtime-governance-turn*
+                                   :operation *runtime-governance-operation*
+                                   :kind kind
+                                   :title title
+                                   :summary (or summary (princ-to-string condition))
+                                   :metadata metadata)))
+      (ignore-errors
+        (with-open-file (out *runtime-eval-debug-log-path*
+                             :direction :output
+                             :if-exists :append
+                             :if-does-not-exist :create)
+          (format out "~&stage=ERROR-RERAISE condition=~S~%" (type-of condition))))
       (error condition))))
 
 (defun runtime-governance-work-item (session form-or-path kind policy-id &key result)

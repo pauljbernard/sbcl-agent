@@ -31,6 +31,7 @@ Service metadata should expose:
 - `:read-model` or `:command-model`
 - `:policy-id` when mutation governance applies
 - domain identifiers such as thread, turn, work-item, workflow-record, incident, runtime, or event family when relevant
+- project-selection or project-authority hints when project context materially shapes the result
 
 The `:binding` object is the key UX-facing stability point:
 
@@ -38,6 +39,12 @@ The `:binding` object is the key UX-facing stability point:
 - `:environment-id`
 
 That lets presentation clients associate data with the right governed runtime context without reaching into session structs.
+
+For context-engineering and planning surfaces, the hardening rule now also requires that clients can distinguish:
+
+- explicit project targeting vs inferred project alignment
+- environment authority vs compatibility fallback
+- capability readiness vs degraded or missing prerequisite posture
 
 ## Governance Rule
 
@@ -48,9 +55,19 @@ This is especially important for:
 - runtime mutation
 - approval flows
 - governed resumptions
+- provider routing and planning context preparation
+- project-aware execution and recovery paths
 
 ## Compatibility Rule
 
 Shell-facing payloads may remain compatibility-shaped while the service response metadata becomes stricter and more uniform.
 
 That preserves operator behavior while improving the active presentation boundary.
+
+The practical implication is that richer clients such as `sbcl-agent-desktop` should not need to infer core execution context from prose or summary text. Service responses should already carry enough metadata to orient the client around:
+
+- environment identity
+- project frame of reference
+- governance posture
+- capability posture
+- recovery or replay posture when a workflow command or supervised action is involved

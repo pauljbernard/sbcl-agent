@@ -636,26 +636,213 @@
   (eq :actor-supervision
       (getf (incident-metadata incident) :source)))
 
-(defun actor-supervision-incident-summary (incident)
+(defun payload-pending-action-ids (payload)
+  (remove-duplicates
+   (remove nil
+           (append (copy-list (or (and (listp payload)
+                                       (getf payload :pending-action-ids))
+                                  '()))
+                   (let ((pending-action-id (and (listp payload)
+                                                 (getf payload :pending-action-id))))
+                     (and pending-action-id
+                          (list pending-action-id)))))
+   :test #'string=))
+
+(defun recoverable-work-item-turn-resume-candidate (session
+                                                    &key pending-action-id
+                                                      work-item-id workflow-record-id turn-id)
+  (labels ((candidate-for-work-item (work-item)
+             (let* ((record (and work-item
+                                 (work-item-workflow-record session work-item)))
+                    (wait-report (and record
+                                      (work-item-wait-report session work-item)))
+                    (resume-payload (and (listp wait-report)
+                                         (getf wait-report :resume-payload)))
+                    (next-action (and (listp wait-report)
+                                      (getf wait-report :next-action)))
+                    (payload-pending-action-ids
+                      (append (payload-pending-action-ids resume-payload)
+                              (payload-pending-action-ids next-action)))
+                    (resolved-turn-id (or turn-id
+                                          (getf resume-payload :turn-id)
+                                          (getf next-action :turn-id)))
+                    (turn (and resolved-turn-id
+                               (find-turn session resolved-turn-id)))
+                    (checkpoint (and turn
+                                     (fboundp 'incomplete-turn-resume-checkpoint-for-turn)
+                                     (incomplete-turn-resume-checkpoint-for-turn
+                                      record
+                                      turn))))
+               (when (and record
+                          turn
+                          checkpoint
+                          (or (null pending-action-id)
+                              (member pending-action-id payload-pending-action-ids
+                                      :test #'string=)))
+                 (list :work-item work-item
+                       :workflow-record record
+                       :turn turn
+                       :checkpoint checkpoint
+                       :resume-payload resume-payload
+                       :next-action next-action)))))
+    (cond
+      (work-item-id
+       (candidate-for-work-item (find-work-item session work-item-id)))
+      (workflow-record-id
+       (let* ((record (find-workflow-record session workflow-record-id))
+              (work-item (and record
+                              (find-work-item session
+                                              (workflow-record-work-item-id record)))))
+         (candidate-for-work-item work-item)))
+      (pending-action-id
+       (loop for work-item in (agent-session-work-items session)
+             for candidate = (candidate-for-work-item work-item)
+             when candidate
+               return candidate)))))
+
+(defun supervision-checkpoint-recovery-summary (candidate)
+  (when candidate
+    (let* ((work-item (getf candidate :work-item))
+           (record (getf candidate :workflow-record))
+           (turn (getf candidate :turn))
+           (checkpoint (getf candidate :checkpoint)))
+      (list :recoverable-p t
+            :recovery-command :turn/resume
+            :work-item-id (and work-item (work-item-id work-item))
+            :workflow-record-id (and record (workflow-record-id record))
+            :turn-id (and turn (turn-id turn))
+            :checkpoint-kind (and checkpoint (getf checkpoint :kind))
+            :checkpoint-status (and checkpoint (getf checkpoint :status))
+            :checkpoint-captured-at (and checkpoint (getf checkpoint :captured-at))
+            :pending-action-count (and checkpoint
+                                       (getf checkpoint :pending-action-count))
+            :actor-execution-job-id (and checkpoint
+                                         (getf checkpoint :actor-execution-job-id))))))
+
+(defun find-work-item-for-supervision-metadata (session metadata)
+  (let ((work-item-id (getf metadata :work-item-id))
+        (workflow-record-id (getf metadata :workflow-record-id)))
+    (or (and work-item-id
+             (find-work-item session work-item-id))
+        (and workflow-record-id
+             (find workflow-record-id
+                   (agent-session-work-items session)
+                   :key #'work-item-workflow-record-ref
+                   :test #'string=)))))
+
+(defun supervision-work-item-recovery-options (status)
+  (case status
+    (:awaiting-cold-validation '(:complete-validations :quarantine :dead-letter))
+    (:failed '(:rollback-work-item :quarantine :dead-letter))
+    (:quarantined '(:resume-work-item :rollback-work-item :dead-letter))
+    (otherwise '(:dead-letter :quarantine :restart-child :replace-child))))
+
+(defun supervision-work-item-state-class (status)
+  (case status
+    (:awaiting-cold-validation :cold-validation-pending)
+    (:failed :failed-work-item)
+    (:quarantined :quarantined-work-item)
+    (:awaiting-approval :approval-blocked-work-item)
+    (otherwise :generic-mailbox-failure)))
+
+(defun supervision-work-item-recommended-action (status)
+  (case status
+    (:awaiting-cold-validation :complete-validations)
+    (:failed :rollback-work-item)
+    (:quarantined :resume-work-item)
+    (otherwise nil)))
+
+(defun supervision-work-item-replay-class (status)
+  (case status
+    (:awaiting-approval :approval-resume)
+    (:awaiting-cold-validation :validation-replay)
+    (:failed :rollback-replay)
+    (:quarantined :operator-review-replay)
+    (:resumed :workflow-resume)
+    (otherwise :state-restoration)))
+
+(defun supervision-workflow-recovery-policy (session metadata)
+  (let* ((work-item (find-work-item-for-supervision-metadata session metadata))
+         (workflow-record (and work-item
+                               (work-item-workflow-record session work-item)))
+         (turn-id (getf metadata :turn-id))
+         (candidate
+           (recoverable-work-item-turn-resume-candidate
+            session
+            :pending-action-id (getf metadata :pending-action-id)
+            :work-item-id (and work-item (work-item-id work-item))
+            :workflow-record-id (or (getf metadata :workflow-record-id)
+                                    (and workflow-record
+                                         (workflow-record-id workflow-record)))
+            :turn-id turn-id)))
+    (cond
+      (candidate
+       (let ((checkpoint (getf candidate :checkpoint)))
+         (list :workflow-state-class :checkpoint-resumable-turn
+               :recommended-supervision-action :resume-from-checkpoint
+               :recovery-options '(:resume-from-checkpoint :quarantine :dead-letter)
+               :recoverable-p t
+               :turn-id (getf candidate :turn-id)
+               :work-item-id (getf candidate :work-item-id)
+               :workflow-record-id (getf candidate :workflow-record-id)
+               :checkpoint-p (not (null checkpoint))
+               :checkpoint-status (and checkpoint (getf checkpoint :status))
+               :workflow-status (and workflow-record
+                                     (workflow-record-status workflow-record))
+               :work-item-status (and work-item
+                                      (work-item-status work-item)))))
+      (work-item
+       (let ((status (work-item-status work-item)))
+         (list :workflow-state-class (supervision-work-item-state-class status)
+               :recommended-supervision-action
+               (supervision-work-item-recommended-action status)
+               :recovery-options (supervision-work-item-recovery-options status)
+               :recoverable-p (not (null (member status
+                                                '(:awaiting-cold-validation :failed :quarantined)
+                                                :test #'eq)))
+               :replay-class (supervision-work-item-replay-class status)
+               :work-item-id (work-item-id work-item)
+               :workflow-record-id (and workflow-record
+                                        (workflow-record-id workflow-record))
+               :workflow-status (and workflow-record
+                                     (workflow-record-status workflow-record))
+               :work-item-status status
+               :plan-health (when (fboundp 'work-item-plan-health)
+                              (work-item-plan-health work-item))
+               :current-phase (when (fboundp 'work-item-plan-current-phase)
+                                (work-item-plan-current-phase work-item))
+               :next-action-type (getf (work-item-next-action work-item) :type)
+               :resume-command (getf (work-item-resume-payload work-item) :resume-command))))
+      (t
+       (list :workflow-state-class :generic-mailbox-failure
+             :recommended-supervision-action nil
+             :recovery-options '(:dead-letter :quarantine :restart-child :replace-child)
+             :recoverable-p nil)))))
+
+(defun actor-supervision-incident-summary (session incident)
   (append
    (incident-record-summary incident)
    (let ((metadata (incident-metadata incident)))
-     (list :incident-id (incident-id incident)
-           :actor-id (getf metadata :actor-id)
-           :actor-role (getf metadata :actor-role)
-           :parent-actor-id (getf metadata :parent-actor-id)
-           :open-p (eq (incident-status incident) :open)
-           :mailbox (getf metadata :mailbox)
-           :mailbox-entry-id (getf metadata :mailbox-entry-id)
-           :delivery-status (getf metadata :delivery-status)
-           :supervision-policy (getf metadata :supervision-policy)
-           :execution-policy (getf metadata :execution-policy)
-           :session-id (getf metadata :session-id)
-           :approval-id (getf metadata :approval-id)
-           :pending-action-id (getf metadata :pending-action-id)
-           :actor-message-id (getf metadata :actor-message-id)
+     (append
+      (list :incident-id (incident-id incident)
+            :actor-id (getf metadata :actor-id)
+            :actor-role (getf metadata :actor-role)
+            :parent-actor-id (getf metadata :parent-actor-id)
+            :open-p (eq (incident-status incident) :open)
+            :mailbox (getf metadata :mailbox)
+            :mailbox-entry-id (getf metadata :mailbox-entry-id)
+            :delivery-status (getf metadata :delivery-status)
+            :supervision-policy (getf metadata :supervision-policy)
+            :execution-policy (getf metadata :execution-policy)
+            :session-id (getf metadata :session-id)
+            :approval-id (getf metadata :approval-id)
+            :pending-action-id (getf metadata :pending-action-id)
+            :actor-message-id (getf metadata :actor-message-id)
            :request-id (getf metadata :request-id)
-           :supervision-action (getf metadata :supervision-action)))))
+           :supervision-action (getf metadata :supervision-action)
+           :requested-action (getf metadata :requested-action)
+           :resolution-action (getf metadata :resolution-action))
+      (supervision-workflow-recovery-policy session metadata)))))
 
 (defun record-actor-supervision-incident (session mailbox entry
                                           &key summary condition-string
@@ -699,6 +886,9 @@
            :session-id (actor-mailbox-entry-session-id entry)
            :approval-id (actor-mailbox-entry-approval-id entry)
            :pending-action-id (actor-mailbox-entry-pending-action-id entry)
+           :turn-id (getf (actor-mailbox-entry-metadata entry) :turn-id)
+           :work-item-id (getf (actor-mailbox-entry-metadata entry) :work-item-id)
+           :workflow-record-id (getf (actor-mailbox-entry-metadata entry) :workflow-record-id)
            :actor-message-id (actor-mailbox-entry-actor-message-id entry)
            :request-id (actor-mailbox-entry-request-id entry)
            :supervision-action supervision-action))))
@@ -770,7 +960,9 @@
      :desktop-task
      (if latest-only-p :supervision-incidents-latest :supervision-incidents)
      (list :incident-count (length selected)
-           :incidents (mapcar #'actor-supervision-incident-summary selected))
+           :incidents (mapcar (lambda (incident)
+                                (actor-supervision-incident-summary session incident))
+                              selected))
      :metadata (make-service-metadata :authority :environment
                                       :read-model (if latest-only-p
                                                       :desktop-task-supervision-incidents-latest-v1
@@ -831,10 +1023,78 @@
      :fail-mailbox-entry
      (list :mailbox mailbox
            :mailbox-entry (actor-mailbox-entry-summary entry)
-           :incident (actor-supervision-incident-summary incident))
+           :incident (actor-supervision-incident-summary session incident))
      :metadata (make-service-metadata :authority :environment
                                       :command-model :desktop-task-fail-mailbox-entry-v1
                                       :session session))))
+
+(defun resolve-supervision-action (session incident requested-action)
+  (if (eq requested-action :recommended)
+      (or (getf (supervision-workflow-recovery-policy session
+                                                      (incident-metadata incident))
+                :recommended-supervision-action)
+          (error "Supervision incident ~A does not have a recommended recovery action"
+                 (incident-id incident)))
+      requested-action))
+
+(defun apply-work-item-supervision-recovery-action (session mailbox mailbox-entry-id action note)
+  (let* ((failed-entry
+           (find-actor-mailbox-entry session
+                                     mailbox
+                                     :mailbox-entry-id mailbox-entry-id))
+         (metadata (and failed-entry
+                        (actor-mailbox-entry-metadata failed-entry)))
+         (work-item-id (or (and metadata (getf metadata :work-item-id))
+                           (error "Mailbox entry ~A does not identify a work item"
+                                  mailbox-entry-id)))
+         (response
+           (case action
+             (:resume-work-item
+              (command-work-item-resume-service session work-item-id :note note))
+             (:complete-validations
+              (command-work-item-complete-validations-service session work-item-id))
+             (:rollback-work-item
+              (command-work-item-rollback-service session
+                                                  work-item-id
+                                                  :reason :supervision-recovery
+                                                  :note note))
+             (otherwise
+              (error "Unsupported workflow supervision recovery action ~A" action))))
+         (workflow-result (service-response-data response)))
+    (values
+     (update-session-actor-mailbox-entry
+      session
+      mailbox
+      (lambda (current-entry)
+        (string= mailbox-entry-id
+                 (actor-mailbox-entry-id current-entry)))
+      (lambda (current-entry)
+        (setf (actor-mailbox-entry-delivery-status current-entry) :recovered
+              (actor-mailbox-entry-completed-at current-entry)
+              (or (actor-mailbox-entry-completed-at current-entry)
+                  (get-universal-time))
+              (actor-mailbox-entry-metadata current-entry)
+              (append (list :supervision-resolution-action action
+                            :supervision-resolution-note note
+                            :workflow-recovery-p t
+                            :recovery-origin :supervision
+                            :recovered-work-item-id work-item-id
+                            :recovered-work-item-status (getf workflow-result :status))
+                      (copy-tree (or (actor-mailbox-entry-metadata current-entry) '()))))
+        current-entry)
+      :reason :actor-supervision-workflow-recovery)
+     (list :recoverable-p t
+           :recovery-origin :supervision
+           :workflow-action action
+           :replay-class (case action
+                           (:complete-validations :validation-replay)
+                           (:rollback-work-item :rollback-replay)
+                           (:resume-work-item :operator-review-replay)
+                           (otherwise :state-restoration))
+           :work-item-id work-item-id
+           :work-item-status (getf workflow-result :status)
+           :workflow-record-id (getf workflow-result :workflow-record-id)
+           :workflow-result workflow-result))))
 
 (defun apply-supervision-action-to-mailbox-entry (session mailbox mailbox-entry-id action note)
   (ecase action
@@ -970,7 +1230,63 @@
        (append-session-actor-mailbox-entry session
                                            mailbox
                                            replacement-entry
-                                           :reason :actor-supervision-replace-child)))))
+                                           :reason :actor-supervision-replace-child)))
+    (:resume-from-checkpoint
+     (let* ((failed-entry
+              (find-actor-mailbox-entry session
+                                        mailbox
+                                        :mailbox-entry-id mailbox-entry-id))
+            (pending-action-id (and failed-entry
+                                    (actor-mailbox-entry-pending-action-id failed-entry)))
+            (metadata (and failed-entry
+                           (actor-mailbox-entry-metadata failed-entry)))
+            (candidate (recoverable-work-item-turn-resume-candidate
+                        session
+                        :pending-action-id pending-action-id
+                        :work-item-id (and metadata (getf metadata :work-item-id))
+                        :workflow-record-id (and metadata (getf metadata :workflow-record-id))
+                        :turn-id (and metadata (getf metadata :turn-id))))
+            (recovery-summary (supervision-checkpoint-recovery-summary candidate)))
+       (unless failed-entry
+         (error "Unknown mailbox entry ~A in ~A" mailbox-entry-id mailbox))
+       (unless candidate
+         (error "Mailbox entry ~A does not map to a recoverable workflow continuation checkpoint"
+                mailbox-entry-id))
+       (unless (fboundp 'recover-turn-resume-from-workflow-checkpoint)
+         (error "Workflow checkpoint recovery support is unavailable"))
+       (recover-turn-resume-from-workflow-checkpoint
+        session
+        (getf candidate :turn)
+        :recovery-origin :supervision)
+       (values
+        (update-session-actor-mailbox-entry
+         session
+         mailbox
+         (lambda (current-entry)
+           (string= mailbox-entry-id
+                    (actor-mailbox-entry-id current-entry)))
+         (lambda (current-entry)
+           (setf (actor-mailbox-entry-delivery-status current-entry) :recovered
+                 (actor-mailbox-entry-completed-at current-entry)
+                 (or (actor-mailbox-entry-completed-at current-entry)
+                     (get-universal-time))
+                 (actor-mailbox-entry-metadata current-entry)
+                 (append (list :supervision-resolution-action action
+                               :supervision-resolution-note note
+                               :checkpoint-recovery-p t
+                               :recovery-origin :supervision
+                               :recovered-turn-id (getf recovery-summary :turn-id)
+                               :recovered-work-item-id (getf recovery-summary :work-item-id))
+                         (copy-tree (or (actor-mailbox-entry-metadata current-entry) '()))))
+           current-entry)
+         :reason :actor-supervision-resume-from-checkpoint)
+        recovery-summary)))
+    ((:resume-work-item :complete-validations :rollback-work-item)
+     (apply-work-item-supervision-recovery-action session
+                                                  mailbox
+                                                  mailbox-entry-id
+                                                  action
+                                                  note))))
 
 (defun command-desktop-task-apply-supervision-action-service (session incident-id
                                                               &key (action :dead-letter)
@@ -985,41 +1301,62 @@
                         (error "Supervision incident ~A does not identify a mailbox" incident-id)))
            (mailbox-entry-id (or (getf metadata :mailbox-entry-id)
                                  (error "Supervision incident ~A does not identify a mailbox entry" incident-id)))
-           (entry (apply-supervision-action-to-mailbox-entry session
-                                                             mailbox
-                                                             mailbox-entry-id
-                                                             action
-                                                             note)))
+           (effective-action (resolve-supervision-action session incident action))
+           (entry nil)
+           (recovery-summary nil))
+      (multiple-value-setq (entry recovery-summary)
+        (apply-supervision-action-to-mailbox-entry session
+                                                   mailbox
+                                                   mailbox-entry-id
+                                                   effective-action
+                                                   note))
       (unless entry
         (error "Unknown mailbox entry ~A in ~A" mailbox-entry-id mailbox))
       (setf (incident-status incident)
-            (case action
+            (case effective-action
               (:quarantine :quarantined)
               (otherwise :resolved))
             (incident-metadata incident)
-            (append (list :resolution-action action
+            (append (list :resolution-action effective-action
+                          :requested-action action
                           :resolution-note note
+                          :recovery (copy-tree recovery-summary)
                           :resolved-at (get-universal-time))
                     (copy-tree metadata)))
       (when (fboundp 'append-session-event)
         (append-session-event session
                               :actor-supervision-action-applied
                               (list :incident-id incident-id
-                                    :action action
+                                    :action effective-action
+                                    :requested-action action
                                     :mailbox mailbox
-                                    :mailbox-entry-id mailbox-entry-id)
+                                    :mailbox-entry-id mailbox-entry-id
+                                    :recovery recovery-summary)
                               :family :actor
                               :entity-id incident-id
                               :metadata (list :mailbox mailbox
                                               :mailbox-entry-id mailbox-entry-id
-                                              :action action)))
+                                              :action effective-action
+                                              :requested-action action
+                                              :recovery-origin (and recovery-summary
+                                                                    :supervision)
+                                              :replay-class (and recovery-summary
+                                                                 (or (getf recovery-summary :replay-class)
+                                                                     (case effective-action
+                                                                       (:resume-from-checkpoint :turn-resume-replay)
+                                                                       (:complete-validations :validation-replay)
+                                                                       (:rollback-work-item :rollback-replay)
+                                                                       (:resume-work-item :operator-review-replay)
+                                                                       (otherwise nil)))))))
       (make-service-command-response
        :desktop-task
        :apply-supervision-action
-       (list :incident (actor-supervision-incident-summary incident)
+       (list :incident (actor-supervision-incident-summary session incident)
              :mailbox mailbox
              :mailbox-entry (actor-mailbox-entry-summary entry)
-             :action action)
+             :recovery recovery-summary
+             :requested-action action
+             :action effective-action)
        :metadata (make-service-metadata :authority :environment
                                         :command-model :desktop-task-apply-supervision-action-v1
                                         :session session)))))
@@ -1039,12 +1376,6 @@
       (case direction
         (:sender (actor-message-sender message))
         (otherwise (actor-message-receiver message))))))
-
-(defun actor-address-equal-p (left right)
-  (and left
-       right
-       (string= (actor-address-id left)
-                (actor-address-id right))))
 
 (defun actor-allocation-strategy-summary (strategy)
   (when strategy
@@ -1092,243 +1423,6 @@
           (actor-execution-policy-summary
            (actor-definition-execution-policy definition))
           :metadata (copy-tree (or (actor-definition-metadata definition) '())))))
-
-(defun make-default-actor-definition (role &key scope display-name parent-actor-id
-                                             capabilities llm-profile
-                                             (allocation-type :singleton)
-                                             shared-inbox-id
-                                             pool-size
-                                             consumption-policy
-                                             (handler-mode :serial)
-                                             (supervision-strategy :one-for-one)
-                                             (max-restarts 3)
-                                             (restart-window-seconds 60)
-                                             (on-failure :escalate)
-                                             escalation-target
-                                             (execution-model :thread-pool-worker)
-                                             thread-name
-                                             (mailbox-mode :serial-per-actor)
-                                             (max-concurrency 1)
-                                             metadata)
-  (let* ((address (make-standard-actor-address role
-                                               :scope scope
-                                               :display-name display-name))
-         (actor-id (actor-address-id address)))
-    (make-actor-definition
-     :id actor-id
-     :role (actor-address-role address)
-     :display-name (actor-address-display-name address)
-     :parent-actor-id parent-actor-id
-     :inbox-id (or shared-inbox-id
-                   (format nil "~A/inbox" actor-id))
-     :outbox-id (format nil "~A/outbox" actor-id)
-     :handler-mode handler-mode
-     :llm-profile llm-profile
-     :capabilities capabilities
-     :allocation-strategy
-     (make-actor-allocation-strategy
-      :type allocation-type
-      :shared-inbox-id shared-inbox-id
-      :pool-size pool-size
-      :consumption-policy consumption-policy
-      :metadata (copy-tree (or metadata '())))
-     :supervision-policy
-     (make-actor-supervision-policy
-      :strategy supervision-strategy
-      :max-restarts max-restarts
-      :restart-window-seconds restart-window-seconds
-      :on-failure on-failure
-      :escalation-target escalation-target
-      :metadata (copy-tree (or metadata '())))
-     :execution-policy
-     (make-actor-execution-policy
-      :model execution-model
-      :thread-name thread-name
-      :mailbox-mode mailbox-mode
-      :max-concurrency max-concurrency
-      :metadata (copy-tree (or metadata '())))
-     :metadata (append (copy-list (actor-address-metadata address))
-                       (copy-tree (or metadata '()))))))
-
-(defun actor-system-registry-definitions (session)
-  (let* ((session-id (agent-session-id session))
-         (system-id (make-actor-address-id :actor-system))
-         (definitions
-           (list
-            (make-actor-definition
-             :id system-id
-             :role :actor-system
-             :display-name "Actor System"
-             :parent-actor-id nil
-             :inbox-id (format nil "~A/inbox" system-id)
-             :outbox-id (format nil "~A/outbox" system-id)
-             :handler-mode :serial
-             :llm-profile nil
-             :capabilities '(:registry :routing :supervision)
-             :allocation-strategy
-             (make-actor-allocation-strategy
-              :type :singleton
-              :shared-inbox-id (format nil "~A/inbox" system-id)
-              :pool-size 1
-              :consumption-policy :sequential)
-             :supervision-policy
-             (make-actor-supervision-policy
-              :strategy :root
-              :max-restarts 0
-              :restart-window-seconds 0
-              :on-failure :quarantine
-              :escalation-target nil)
-             :execution-policy
-             (make-actor-execution-policy
-              :model :coordinator-thread
-              :thread-name "actor-system-root"
-              :mailbox-mode :serial-per-actor
-              :max-concurrency 1)
-             :metadata '(:actor-class :system-supervisor))
-            (make-default-actor-definition :context-chat
-                                           :scope session-id
-                                           :display-name "Context Chat"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:conversation :projection)
-                                           :llm-profile :default
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :restart
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/context-chat"
-                                           :metadata '(:actor-class :conversation-client))
-            (make-default-actor-definition :governance
-                                           :scope session-id
-                                           :display-name "Governance Actor"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:approval :authorization :policy)
-                                           :llm-profile :default
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :escalate
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/governance"
-                                           :metadata '(:actor-class :policy-gateway))
-            (make-default-actor-definition :runtime
-                                           :scope session-id
-                                           :display-name "Runtime Actor"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:runtime-eval :runtime-state)
-                                           :llm-profile :default
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :restart
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/runtime"
-                                           :metadata '(:actor-class :capability-server
-                                                       :runtime-id "runtime-primary"))
-            (make-default-actor-definition :editor
-                                           :scope session-id
-                                           :display-name "Editor Actor"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:workspace-write :buffer-mutation)
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :restart
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/editor"
-                                           :metadata '(:actor-class :capability-server))
-            (make-default-actor-definition :calculator
-                                           :scope session-id
-                                           :display-name "Calculator Actor"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:calculator-control)
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :restart
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/calculator"
-                                           :metadata '(:actor-class :capability-server))
-            (make-default-actor-definition :environment
-                                           :scope (or (and (session-bound-environment session)
-                                                           (environment-id
-                                                            (session-bound-environment session)))
-                                                      session-id)
-                                           :display-name "Environment Actor"
-                                           :parent-actor-id system-id
-                                           :capabilities '(:environment-state :persistence)
-                                           :supervision-strategy :one-for-one
-                                           :on-failure :escalate
-                                           :escalation-target system-id
-                                           :execution-model :thread-pool-worker
-                                           :thread-name "actor-pool/environment"
-                                           :metadata '(:actor-class :environment-gateway)))))
-    (dolist (manifest (list-registered-desktop-task-manifests :discoverable-only-p nil))
-      (let* ((target (desktop-task-manifest-target manifest))
-             (backend-ref (desktop-task-manifest-backend-ref manifest))
-             (backend-kind (desktop-task-manifest-backend-kind manifest))
-             (core-singleton-target-p
-               (and (eq backend-kind :internal)
-                    (member target '(:context-chat :governance :runtime :editor :calculator :environment)
-                            :test #'eq)))
-             (pooled-p (eq backend-kind :mcp))
-             (shared-inbox-id
-               (and pooled-p
-                    (format nil "actor/~(~A~)/pool/~A/inbox"
-                            target
-                            (or backend-ref "default"))))
-             (definition
-               (make-default-actor-definition
-                target
-                :scope (and backend-ref (princ-to-string backend-ref))
-                :display-name (or (desktop-task-manifest-description manifest)
-                                  (format nil "~A Actor" target))
-                :parent-actor-id system-id
-                :capabilities (list (desktop-task-manifest-capability manifest))
-                :allocation-type (if pooled-p :pool :singleton)
-                :shared-inbox-id shared-inbox-id
-                :pool-size (and pooled-p 4)
-                :consumption-policy (and pooled-p :competing-consumers)
-                :supervision-strategy (if pooled-p :one-for-all :one-for-one)
-                :on-failure (if pooled-p :replace-member :restart)
-                :escalation-target system-id
-                :execution-model :thread-pool-worker
-                :thread-name (format nil "actor-pool/~(~A~)" target)
-                :mailbox-mode :serial-per-actor
-                :max-concurrency 1
-                :metadata (list :actor-class :capability-server
-                                :manifest-id (desktop-task-manifest-id manifest)
-                                :backend-kind backend-kind
-                                :backend-ref backend-ref))))
-        (unless core-singleton-target-p
-          (push definition definitions))))
-    (nreverse
-     (delete-duplicates definitions
-                        :test (lambda (left right)
-                                (string= (actor-definition-id left)
-                                         (actor-definition-id right)))))))
-
-(defun ensure-environment-actor-registry-for-session (session)
-  (let ((environment (session-bound-environment session)))
-    (when environment
-      (setf (environment-agent-registry environment)
-            (actor-system-registry-definitions session))))
-  session)
-
-(defun find-actor-definition-for-address (session actor-address)
-  (let* ((environment (session-bound-environment session))
-         (definitions (or (and environment
-                               (environment-agent-registry environment))
-                          (actor-system-registry-definitions session))))
-    (or (find (actor-address-id actor-address)
-              definitions
-              :key #'actor-definition-id
-              :test #'string=)
-        (find (actor-address-role actor-address)
-              definitions
-              :key #'actor-definition-role
-              :test #'eq))))
-
-(defun canonical-actor-address-for-session (session actor-address)
-  (let ((definition (find-actor-definition-for-address session actor-address)))
-    (if definition
-        (actor-definition-address definition)
-        actor-address)))
 
 (defun desktop-task-capability-actor-addresses (session)
   (ensure-environment-actor-registry-for-session session)
@@ -1391,7 +1485,7 @@
        (list :actor-definition (actor-definition-summary definition)
              :allocation-strategy
              (actor-allocation-strategy-summary
-              (actor-definition-allocation-strategy definition))
+             (actor-definition-allocation-strategy definition))
              :supervision-policy
              (actor-supervision-policy-summary
               (actor-definition-supervision-policy definition))
@@ -1401,8 +1495,10 @@
              :parent-actor-id (actor-definition-parent-actor-id definition)
              :handler-mode (actor-definition-handler-mode definition)
              :llm-profile (actor-definition-llm-profile definition)
-             :capabilities (copy-list (or (actor-definition-capabilities definition) '()))))
+             :capabilities (copy-list (or (actor-definition-capabilities definition) '()))
+             :provenance :actor-registry))
      (list :mailbox-direction (if (eq role :context-chat) :outbox :inbox)
+           :projection-kind :desktop-task-mailbox-summary
            :received-count (length received-records)
            :sent-count (length sent-records)
            :message-count (length relevant-records)
@@ -1426,14 +1522,6 @@
            (mapcar (lambda (record)
                      (desktop-task-record-summary-with-audit session record))
                    recent-records)))))
-
-(defun actor-definition-address (definition)
-  (make-actor-address
-   :id (actor-definition-id definition)
-   :kind :internal
-   :role (actor-definition-role definition)
-   :display-name (actor-definition-display-name definition)
-   :metadata (copy-tree (or (actor-definition-metadata definition) '()))))
 
 (defun actor-summary-id (summary)
   (or (getf summary :id)
@@ -1560,10 +1648,11 @@
                       (and parent-id
                            actor-id
                            (list :parent-actor-id parent-id
-                                 :child-actor-id actor-id))))
+                                 :child-actor-id actor-id
+                                 :provenance :actor-registry))))
                   actors)))
 
-(defun actor-system-panel-workflow-edges (session &key session-id)
+(defun actor-system-panel-projected-workflow-edges (session &key session-id)
   (let ((edges (make-hash-table :test #'equal))
         (recent-threshold (- (get-universal-time) 300)))
     (dolist (record (list-desktop-task-records session))
@@ -1585,6 +1674,7 @@
                                            :to-actor-id (actor-address-id receiver)
                                            :from-role (actor-address-role sender)
                                            :to-role (actor-address-role receiver)
+                                           :provenance :desktop-task-record-projection
                                            :target (desktop-task-record-target record)
                                            :operation (desktop-task-record-operation record)
                                            :message-count 0
@@ -1611,6 +1701,62 @@
           :key (lambda (entry)
                  (or (getf entry :latest-created-at) 0)))))
 
+(defun actor-system-panel-native-workflow-edges (session &key session-id)
+  (let ((edges (make-hash-table :test #'equal)))
+    (dolist (record (agent-session-workflow-records session))
+      (when (or (null session-id)
+                (string= session-id (agent-session-id session)))
+        (dolist (edge (workflow-record-native-actor-links session record))
+          (let* ((key (list (getf edge :from-actor-id)
+                            (getf edge :to-actor-id)
+                            (getf edge :operation)))
+                 (bucket (or (gethash key edges)
+                             (setf (gethash key edges)
+                                   (list :from-actor-id (getf edge :from-actor-id)
+                                         :to-actor-id (getf edge :to-actor-id)
+                                         :from-role (getf edge :from-role)
+                                         :to-role (getf edge :to-role)
+                                         :provenance (getf edge :provenance)
+                                         :workflow-record-id (getf edge :workflow-record-id)
+                                         :work-item-id (getf edge :work-item-id)
+                                         :plan-id (getf edge :plan-id)
+                                         :phase (getf edge :phase)
+                                         :operation (getf edge :operation)
+                                         :message-count 0
+                                         :recent-count 0
+                                         :failed-count 0
+                                         :latest-status nil
+                                         :latest-created-at nil
+                                         :actor-execution-job-id nil)))))
+            (incf (getf bucket :message-count) (or (getf edge :message-count) 0))
+            (incf (getf bucket :recent-count) (or (getf edge :recent-count) 0))
+            (incf (getf bucket :failed-count) (or (getf edge :failed-count) 0))
+            (when (> (or (getf edge :latest-created-at) 0)
+                     (or (getf bucket :latest-created-at) 0))
+              (setf (getf bucket :latest-created-at) (getf edge :latest-created-at)
+                    (getf bucket :latest-status) (getf edge :latest-status)
+                    (getf bucket :actor-execution-job-id)
+                    (getf edge :actor-execution-job-id)
+                    (getf bucket :workflow-record-id)
+                    (getf edge :workflow-record-id)
+                    (getf bucket :work-item-id)
+                    (getf edge :work-item-id)
+                    (getf bucket :plan-id)
+                    (getf edge :plan-id)))))))
+    (sort (loop for edge being the hash-values of edges collect edge)
+          #'>
+          :key (lambda (entry)
+                 (or (getf entry :latest-created-at) 0)))))
+
+(defun actor-system-panel-workflow-edges (session &key session-id)
+  (let ((native-edges (actor-system-panel-native-workflow-edges session
+                                                                :session-id session-id))
+        (projected-edges (actor-system-panel-projected-workflow-edges session
+                                                                      :session-id session-id)))
+    (values (append native-edges projected-edges)
+            native-edges
+            projected-edges)))
+
 (defun query-desktop-task-actor-system-panel-service (session &key session-id)
   (ensure-environment-actor-registry-for-session session)
   (let* ((registered-actors
@@ -1635,8 +1781,9 @@
                                       (actor-summary-id summary))))))
                    addresses))
          (hierarchy-edges (actor-system-panel-hierarchy-edges actors))
-         (workflow-edges (actor-system-panel-workflow-edges session
-                                                            :session-id session-id))
+         (workflow-edges nil)
+         (native-workflow-edges nil)
+         (projected-workflow-edges nil)
          (runtime-execution
            (and (fboundp 'actor-runtime-state-summary)
                 (actor-runtime-state-summary session)))
@@ -1645,22 +1792,34 @@
             (query-desktop-task-supervision-incidents-service
              session
              :session-id session-id))))
+    (multiple-value-setq (workflow-edges native-workflow-edges projected-workflow-edges)
+      (actor-system-panel-workflow-edges session :session-id session-id))
     (make-service-query-response
      :desktop-task
      :actor-system-panel
      (list :root-actor-id "actor/actor-system"
            :session-id (or session-id
                            (agent-session-id session))
+           :topology-provenance
+           (list :actors :actor-registry+mailbox-projection
+                 :hierarchy-edges :actor-registry
+                 :workflow-edges :native+desktop-task-record-projection
+                 :native-workflow-edges :workflow-record
+                 :projected-workflow-edges :desktop-task-record-projection
+                 :runtime-execution :native-actor-runtime)
            :actor-count (length actors)
            :actors actors
            :hierarchy-edge-count (length hierarchy-edges)
            :hierarchy-edges hierarchy-edges
            :workflow-edge-count (length workflow-edges)
            :workflow-edges workflow-edges
+           :native-workflow-topology native-workflow-edges
+           :projected-workflow-topology projected-workflow-edges
            :runtime-execution runtime-execution
+           :native-runtime-execution runtime-execution
            :supervision-incidents supervision-incidents)
      :metadata (make-service-metadata :authority :environment
-                                      :read-model :desktop-task-actor-system-panel-v1
+                                      :read-model :desktop-task-actor-system-panel-v2
                                       :session session))))
 
 (defun actor-message-transport-event-p (event)
@@ -2027,6 +2186,8 @@
                                                         &key session-id status approval-status
                                                           latest-only-p)
   (let* ((mailboxes (ensure-session-actor-mailboxes session))
+         (project-selection (and session
+                                 (context-chat-project-selection-summary session)))
          (messages (remove-if-not
                     (lambda (entry)
                       (and (or (null session-id)
@@ -2056,6 +2217,7 @@
                                                      :scope effective-session-id
                                                      :metadata (when effective-session-id
                                                                  (list :session-id effective-session-id))))
+           :project-selection project-selection
            :message-count (length selected)
            :messages (mapcar #'actor-mailbox-entry-summary selected))
      :metadata (make-service-metadata :authority :environment
@@ -2096,6 +2258,8 @@
 (defun query-desktop-task-context-chat-approval-inbox-service (session
                                                                &key session-id latest-only-p)
   (let* ((mailboxes (ensure-session-actor-mailboxes session))
+         (project-selection (and session
+                                 (context-chat-project-selection-summary session)))
          (requests (remove-if-not
                     (lambda (entry)
                       (or (null session-id)
@@ -2118,12 +2282,43 @@
                                                      :scope effective-session-id
                                                      :metadata (when effective-session-id
                                                                  (list :session-id effective-session-id))))
+           :project-selection project-selection
            :request-count (length selected)
            :requests (mapcar #'actor-mailbox-entry-summary selected))
      :metadata (make-service-metadata :authority :environment
                                       :read-model (if latest-only-p
                                                       :desktop-task-context-chat-approval-inbox-latest-v1
                                                       :desktop-task-context-chat-approval-inbox-v1)
+                                      :session session))))
+
+(defun query-desktop-task-context-chat-context-service (session)
+  (make-service-query-response
+   :desktop-task
+   :context-chat-context
+   (append
+    (list :session-id (agent-session-id session)
+          :chat-actor (actor-address-summary
+                       (make-standard-actor-address :context-chat
+                                                    :scope (agent-session-id session)
+                                                    :metadata (list :session-id (agent-session-id session)))))
+    (context-chat-project-selection-summary session))
+   :metadata (make-service-metadata :authority :environment
+                                    :read-model :desktop-task-context-chat-context-v1
+                                    :session session)))
+
+(defun command-desktop-task-set-context-chat-projects-service (session project-ids
+                                                               &key primary-project-id)
+  (let ((selection
+          (set-context-chat-project-selection session
+                                              project-ids
+                                              :primary-project-id primary-project-id)))
+    (make-service-command-response
+     :desktop-task
+     :set-context-chat-projects
+     (append (list :session-id (agent-session-id session))
+             selection)
+     :metadata (make-service-metadata :authority :environment
+                                      :command-model :desktop-task-set-context-chat-projects-v1
                                       :session session))))
 
 (defun editor-authorization-summary (record)
@@ -2403,6 +2598,306 @@
      :metadata (make-service-metadata :authority :environment
                                       :command-model :desktop-task-ack-context-chat-approval-v1
                                       :session session))))
+
+(defun command-desktop-task-invoke-service (session
+                                            &key request
+                                              requester
+                                              target
+                                              operation
+                                              payload
+                                              capability
+                                              surface-context
+                                              surface-actions
+                                              metadata
+                                              actor-message
+                                              manifest
+                                              resolution
+                                              (register-record-p t)
+                                              retry-reason
+                                              thread-id
+                                              turn-id
+                                              conversation-operation-id)
+  (let* ((effective-request
+           (or request
+               (make-governed-desktop-task-request
+                :requester (or requester :kernel)
+                :target target
+                :operation operation
+                :payload payload
+                :capability capability
+                :surface-context surface-context
+                :surface-actions surface-actions
+                :metadata metadata
+                :actor-message actor-message)))
+         (effective-manifest
+           (or manifest
+               (desktop-task-manifest-for-request effective-request)))
+         (prepared-request
+           (ensure-governed-desktop-task-request-state
+            effective-request
+            :session-id (agent-session-id session)
+            :manifest effective-manifest))
+         (existing-record
+           (find-desktop-task-record-by-request-id
+            session
+            (desktop-task-request-id prepared-request)))
+         (task-record
+           (or existing-record
+               (and register-record-p
+                    (register-desktop-task-record
+                     session
+                     (make-desktop-task-record-for-request
+                      prepared-request
+                      effective-manifest
+                      :session-id (agent-session-id session)
+                      :thread-id thread-id
+                      :turn-id turn-id
+                      :conversation-operation-id conversation-operation-id)))))
+         (effective-resolution
+           (or resolution
+               (resolve-governed-desktop-task-request prepared-request session)))
+         (policy-id
+           (desktop-task-request-policy-id prepared-request effective-manifest))
+         (approval-required-p
+           (desktop-task-request-approval-required-p
+            prepared-request
+            effective-manifest
+            effective-resolution))
+         (approval-granted-p
+           (and approval-required-p
+                policy-id
+                (ignore-errors
+                  (policy-approved-p session policy-id))))
+         (record-metadata
+           (append (when policy-id
+                     (list :policy-id policy-id))
+                   (list :request-summary
+                         (desktop-task-request-summary prepared-request))))
+         (_record-resolution
+           (when task-record
+             (update-desktop-task-record
+              session
+              task-record
+              :resolution effective-resolution
+              :metadata record-metadata)))
+         (result-envelope
+           (cond
+             ((and task-record approval-required-p (not approval-granted-p))
+              (mark-desktop-task-record-awaiting-approval session
+                                                         task-record
+                                                         :policy-id policy-id)
+              (list :manifest effective-manifest
+                    :resolution effective-resolution
+                    :result (list :status :awaiting-approval
+                                  :summary (desktop-task-resolution-summary
+                                            effective-resolution))))
+             (t
+              (when task-record
+                (when approval-required-p
+                  (mark-desktop-task-record-approved session task-record))
+                (if (eq (desktop-task-record-status task-record) :retryable-failure)
+                    (mark-desktop-task-record-retrying
+                     session
+                     task-record
+                     :reason (or retry-reason
+                                 "Retrying governed desktop task through authoritative ingress."))
+                    (mark-desktop-task-record-executing session task-record)))
+              (handler-case
+                  (let ((envelope
+                          (invoke-governed-desktop-task-request
+                           prepared-request
+                           session
+                           :resolution effective-resolution
+                           :manifest effective-manifest)))
+                    (when task-record
+                      (mark-desktop-task-record-completed
+                       session
+                       task-record
+                       (make-desktop-task-record-completed-result
+                        prepared-request
+                        (getf envelope :resolution)
+                        (getf envelope :result))))
+                    envelope)
+                (error (condition)
+                  (when task-record
+                    (mark-desktop-task-record-failed
+                     session
+                     task-record
+                     (list :summary "Desktop task invocation failed."
+                           :error (princ-to-string condition)
+                           :failure-classification :execution)
+                     :retryable-p (desktop-task-retryable-p task-record)))
+                  (error condition))))))
+         (actual-manifest (getf result-envelope :manifest))
+         (actual-resolution (getf result-envelope :resolution))
+         (result (getf result-envelope :result))
+         (resolved-record
+           (or (find-desktop-task-record-by-request-id
+                session
+                (desktop-task-request-id prepared-request))
+               task-record))
+         (request-metadata (desktop-task-request-metadata prepared-request))
+         (resolved-record-metadata (and resolved-record
+                                        (desktop-task-record-metadata resolved-record)))
+         (actor-execution-job-id
+           (or (and (listp resolved-record-metadata)
+                    (getf resolved-record-metadata :actor-execution-job-id))
+               (and (listp request-metadata)
+                    (getf request-metadata :actor-execution-job-id))))
+         (actor-execution-authority
+           (or (and (listp resolved-record-metadata)
+                    (getf resolved-record-metadata :actor-execution-authority))
+               (and (listp request-metadata)
+                    (getf request-metadata :actor-execution-authority))))
+         (actor-execution-capability
+           (or (and (listp resolved-record-metadata)
+                    (getf resolved-record-metadata :actor-execution-capability))
+               (and (listp request-metadata)
+                    (getf request-metadata :actor-execution-capability)))))
+    (make-service-command-response
+     :desktop-task
+     :invoke
+     (list :request (desktop-task-request-summary prepared-request)
+           :manifest (desktop-task-manifest-summary actual-manifest)
+           :resolution (desktop-task-resolution-summary-data actual-resolution)
+           :result result
+           :task-record (and resolved-record
+                             (desktop-task-record-summary-with-audit session
+                                                                    resolved-record))
+           :policy-id policy-id
+           :approval-required-p approval-required-p
+           :actor-execution-job-id actor-execution-job-id
+           :actor-execution-authority actor-execution-authority
+           :actor-execution-capability actor-execution-capability)
+      :metadata (make-service-metadata :authority :environment
+                                       :command-model :desktop-task-invoke-v1
+                                       :session session
+                                       :policy-id policy-id
+                                       :thread-id thread-id
+                                       :turn-id turn-id
+                                       :work-item-id (or (getf request-metadata :work-item-id)
+                                                         (getf request-metadata :WORK-ITEM-ID))
+                                       :workflow-record-id (or (getf request-metadata :workflow-record-id)
+                                                               (getf request-metadata :WORKFLOW-RECORD-ID))))))
+
+(defun command-desktop-task-runtime-eval-service (session form
+                                                  &key package requester metadata
+                                                    register-record-p thread-id turn-id
+                                                    conversation-operation-id)
+  (let* ((response
+           (command-desktop-task-invoke-service
+            session
+            :requester (or requester :surface-runtime)
+            :target :runtime
+            :operation :evaluate-form
+            :payload (append (list :form form)
+                             (when package
+                               (list :package-name package
+                                     :reason :surface-runtime-eval)))
+            :metadata metadata
+            :register-record-p register-record-p
+            :thread-id thread-id
+            :turn-id turn-id
+            :conversation-operation-id conversation-operation-id))
+         (data (service-response-data response))
+         (result (copy-list (or (getf data :result) '()))))
+    (make-service-command-response
+     :runtime
+     :eval
+     (append result
+             (when (getf data :actor-execution-job-id)
+               (list :actor-execution-job-id (getf data :actor-execution-job-id)))
+             (when (getf data :actor-execution-authority)
+               (list :actor-execution-authority (getf data :actor-execution-authority)))
+             (when (getf data :actor-execution-capability)
+               (list :actor-execution-capability (getf data :actor-execution-capability)))
+             (when (getf data :task-record)
+               (list :task-record (getf data :task-record))))
+     :metadata (make-service-metadata :authority :environment
+                                      :command-model :runtime-command-v1
+                                      :session session
+                                      :runtime-id (default-runtime-id)
+                                      :policy-id :runtime-eval-safe))))
+
+(defun command-desktop-task-runtime-reload-file-service (session path
+                                                         &key requester metadata
+                                                           register-record-p thread-id turn-id
+                                                           conversation-operation-id)
+  (let* ((response
+           (command-desktop-task-invoke-service
+            session
+            :requester (or requester :surface-runtime)
+            :target :runtime
+            :operation :reload-file
+            :payload (list :path path)
+            :metadata metadata
+            :register-record-p register-record-p
+            :thread-id thread-id
+            :turn-id turn-id
+            :conversation-operation-id conversation-operation-id))
+         (data (service-response-data response))
+         (result (copy-list (or (getf data :result) '()))))
+    (make-service-command-response
+     :runtime
+     :reload-file
+     (append result
+             (when (getf data :actor-execution-job-id)
+               (list :actor-execution-job-id (getf data :actor-execution-job-id)))
+             (when (getf data :actor-execution-authority)
+               (list :actor-execution-authority (getf data :actor-execution-authority)))
+             (when (getf data :actor-execution-capability)
+               (list :actor-execution-capability (getf data :actor-execution-capability)))
+             (when (getf data :task-record)
+               (list :task-record (getf data :task-record))))
+     :metadata (make-service-metadata :authority :environment
+                                      :command-model :runtime-command-v1
+                                      :session session
+                                      :runtime-id (default-runtime-id)
+                                      :policy-id :runtime-reload))))
+
+(defun command-desktop-task-stage-source-change-service (session path content
+                                                         &key requester metadata
+                                                           register-record-p thread-id turn-id
+                                                           conversation-operation-id)
+  (let* ((response
+           (command-desktop-task-invoke-service
+            session
+            :requester (or requester :surface-source)
+            :target :workspace
+            :operation :apply-patch
+            :payload (list :operations
+                           (list (list :write path content)))
+            :metadata metadata
+            :register-record-p register-record-p
+            :thread-id thread-id
+            :turn-id turn-id
+            :conversation-operation-id conversation-operation-id))
+         (data (service-response-data response))
+         (result (copy-list (or (getf data :result) '())))
+         (patch (getf result :patch))
+         (first-write (and (listp patch) (first patch))))
+    (make-service-command-response
+     :source
+     :stage-change
+     (append result
+             (when first-write
+               (list :path (getf first-write :path)
+                     :bytes-written (getf first-write :bytes)
+                     :artifact-ids '()))
+             (unless first-write
+               (list :artifact-ids '()))
+             (when (getf data :actor-execution-job-id)
+               (list :actor-execution-job-id (getf data :actor-execution-job-id)))
+             (when (getf data :actor-execution-authority)
+               (list :actor-execution-authority (getf data :actor-execution-authority)))
+             (when (getf data :actor-execution-capability)
+               (list :actor-execution-capability (getf data :actor-execution-capability)))
+             (when (getf data :task-record)
+               (list :task-record (getf data :task-record))))
+     :metadata (make-service-metadata :authority :environment
+                                      :command-model :source-mutation-v1
+                                      :session session
+                                      :policy-id :workspace-write))))
 
 (defun command-desktop-task-consume-editor-authorization-service (session pending-action-id
                                                                   &key session-id mailbox-entry-id scope-id)
@@ -3186,6 +3681,9 @@
              session
              :session-id effective-session-id
              :latest-only-p latest-only-p)))
+         (context-chat-context
+           (service-response-data
+            (query-desktop-task-context-chat-context-service session)))
          (governance-state
            (service-response-data
             (query-desktop-task-governance-state-service
@@ -3252,6 +3750,7 @@
                                       (first (getf pending-approval :actor-message-ids))))
            :chat-actor (or (getf context-chat-mailbox :chat-actor)
                            (getf context-chat-approval-inbox :chat-actor))
+           :context-chat-context context-chat-context
            :governance-actor (or (getf governance-state :governance-actor)
                                  (getf governance-inbox :governance-actor)
                                  (getf governance-decisions :governance-actor))
@@ -3279,7 +3778,366 @@
                                           :actor-role actor-role
                                           :dead-letters-only-p t))
 
-(defun command-desktop-task-approve-actor-message-service (session provider actor-message-id
+(defun actorize-desktop-task-command-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (listp data)
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun actorize-desktop-task-query-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (and (listp data)
+                   (keywordp (first data)))
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun command-desktop-task-actor-system-panel-service (session &key session-id)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :actor-system-panel
+                                    :desktop-task/actor-system-panel
+                                    :payload (list :session-id session-id)
+                                    :metadata (list :session-id session-id))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task actor system panel."
+      "desktop-task/actor-system-panel"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :session-id session-id)))
+   :desktop-task/actor-system-panel
+   :actor-system-panel
+   :metadata (list :session-id session-id)))
+
+(defun command-desktop-task-runtime-state-service (session
+                                                   &key session-id package-name symbol-name)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :runtime-state
+                                    :desktop-task/runtime-state
+                                    :payload (list :session-id session-id
+                                                   :package-name package-name
+                                                   :symbol-name symbol-name)
+                                    :metadata (list :session-id session-id
+                                                    :package-name package-name
+                                                    :symbol-name symbol-name))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task runtime state."
+      "desktop-task/runtime-state"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :session-id session-id
+                     :package-name package-name
+                     :symbol-name symbol-name)))
+   :desktop-task/runtime-state
+   :runtime-state
+   :metadata (list :session-id session-id
+                   :package-name package-name
+                   :symbol-name symbol-name)))
+
+(defun command-desktop-task-supervision-incidents-service (session
+                                                           &key actor-id parent-actor-id mailbox
+                                                             mailbox-entry-id session-id
+                                                             open-only-p latest-only-p)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :supervision-incidents
+                                    :desktop-task/supervision-incidents
+                                    :payload (list :actor-id actor-id
+                                                   :parent-actor-id parent-actor-id
+                                                   :mailbox mailbox
+                                                   :mailbox-entry-id mailbox-entry-id
+                                                   :session-id session-id
+                                                   :open-only-p open-only-p
+                                                   :latest-only-p latest-only-p)
+                                    :metadata (list :session-id session-id
+                                                    :actor-id actor-id
+                                                    :mailbox mailbox))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task supervision incidents."
+      "desktop-task/supervision-incidents"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :actor-id actor-id
+                     :parent-actor-id parent-actor-id
+                     :mailbox mailbox
+                     :mailbox-entry-id mailbox-entry-id
+                     :session-id session-id
+                     :open-only-p open-only-p
+                     :latest-only-p latest-only-p)))
+   :desktop-task/supervision-incidents
+   :supervision-incidents
+   :metadata (list :session-id session-id
+                   :actor-id actor-id
+                   :mailbox mailbox)))
+
+(defun command-desktop-task-actor-trace-service (session
+                                                 &key actor-message-id actor-role phase
+                                                   latest-only-p dead-letters-only-p)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :actor-trace
+                                    :desktop-task/actor-trace
+                                    :payload (list :actor-message-id actor-message-id
+                                                   :actor-role actor-role
+                                                   :phase phase
+                                                   :latest-only-p latest-only-p
+                                                   :dead-letters-only-p dead-letters-only-p)
+                                    :metadata (list :actor-message-id actor-message-id
+                                                    :actor-role actor-role
+                                                    :phase phase))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task actor trace."
+      "desktop-task/actor-trace"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :actor-message-id actor-message-id
+                     :actor-role actor-role
+                     :phase phase
+                     :latest-only-p latest-only-p
+                     :dead-letters-only-p dead-letters-only-p)))
+   :desktop-task/actor-trace
+   :actor-trace
+   :metadata (list :actor-message-id actor-message-id
+                   :actor-role actor-role
+                   :phase phase)))
+
+(defun command-desktop-task-dead-letter-queue-service (session &key actor-role)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :dead-letter-queue
+                                    :desktop-task/dlq
+                                    :payload (list :actor-role actor-role)
+                                    :metadata (list :actor-role actor-role))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task dead letter queue."
+      "desktop-task/dlq"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :actor-role actor-role)))
+   :desktop-task/dlq
+   :dead-letter-queue
+   :metadata (list :actor-role actor-role)))
+
+(defun make-desktop-task-admin-request (session action capability &key payload metadata)
+  (make-governed-desktop-task-request
+   :requester :context-chat
+   :target :desktop-task-admin
+   :operation action
+   :capability capability
+   :payload payload
+   :metadata (append (list :session-id (agent-session-id session)
+                           :actor-slice :desktop-task-admin-v1)
+                     metadata)))
+
+(defun call-with-desktop-task-admin-actor (session request thunk capability action &key metadata)
+  (let ((actor-address (make-standard-actor-address :desktop-task-admin
+                                                    :scope (agent-session-id session))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-desktop-task-command-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability capability
+               :authority :environment
+               :target :desktop-task-admin
+               :operation action
+               :request-id (desktop-task-request-id request)
+               :metadata metadata))))
+
+(defun call-with-desktop-task-admin-query-actor (session request thunk capability action &key metadata)
+  (let ((actor-address (make-standard-actor-address :desktop-task-admin
+                                                    :scope (agent-session-id session))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-desktop-task-query-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability capability
+               :authority :environment
+               :target :desktop-task-admin
+               :operation action
+               :request-id (desktop-task-request-id request)
+               :metadata metadata))))
+
+(defun command-desktop-task-manifest-list-query-service (session)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :manifest-list
+                                    :desktop-task/manifests)
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task manifests."
+      "desktop-task/manifests"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload '()))
+   :desktop-task/manifests
+   :manifest-list))
+
+(defun command-desktop-task-record-list-query-service (session &key thread-id status approval-status)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :record-list
+                                    :desktop-task/records
+                                    :payload (list :thread-id thread-id
+                                                   :status status
+                                                   :approval-status approval-status)
+                                    :metadata (list :thread-id thread-id
+                                                    :status status
+                                                    :approval-status approval-status))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task records."
+      "desktop-task/records"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :thread-id thread-id
+                     :status status
+                     :approval-status approval-status)))
+   :desktop-task/records
+   :record-list
+   :metadata (list :thread-id thread-id
+                   :status status
+                   :approval-status approval-status)))
+
+(defun command-desktop-task-pending-approval-query-service (session)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :pending-approval
+                                    :desktop-task/pending-approval)
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task pending approval."
+      "desktop-task/pending-approval"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload '()))
+   :desktop-task/pending-approval
+   :pending-approval))
+
+(defun command-desktop-task-actor-flow-query-service (session
+                                                      &key session-id approval-id pending-action-id
+                                                        actor-message-id scope-id latest-only-p)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :actor-flow
+                                    :desktop-task/actor-flow
+                                    :payload (list :session-id session-id
+                                                   :approval-id approval-id
+                                                   :pending-action-id pending-action-id
+                                                   :actor-message-id actor-message-id
+                                                   :scope-id scope-id
+                                                   :latest-only-p latest-only-p)
+                                    :metadata (list :session-id session-id
+                                                    :approval-id approval-id
+                                                    :pending-action-id pending-action-id
+                                                    :actor-message-id actor-message-id
+                                                    :scope-id scope-id))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task actor flow."
+      "desktop-task/actor-flow"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :session-id session-id
+                     :approval-id approval-id
+                     :pending-action-id pending-action-id
+                     :actor-message-id actor-message-id
+                     :scope-id scope-id
+                     :latest-only-p latest-only-p)))
+   :desktop-task/actor-flow
+   :actor-flow
+   :metadata (list :session-id session-id
+                   :approval-id approval-id
+                   :pending-action-id pending-action-id
+                   :actor-message-id actor-message-id
+                   :scope-id scope-id)))
+
+(defun command-desktop-task-mcp-server-list-query-service (session)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :mcp-server-list
+                                    :desktop-task/mcp-servers)
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      "Inspect desktop-task MCP servers."
+      "desktop-task/mcp-servers"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload '()))
+   :desktop-task/mcp-servers
+   :mcp-server-list))
+
+(defun command-desktop-task-mcp-server-detail-query-service (session server-id)
+  (call-with-desktop-task-admin-query-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :mcp-server-detail
+                                    :desktop-task/mcp-server
+                                    :payload (list :server-id server-id)
+                                    :metadata (list :server-id server-id))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      (format nil "Inspect desktop-task MCP server ~A." server-id)
+      "desktop-task/mcp-server"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :server-id server-id)))
+   :desktop-task/mcp-server
+   :mcp-server-detail
+   :metadata (list :server-id server-id)))
+
+(defun perform-desktop-task-approve-actor-message-service (session provider actor-message-id
                                                             &key (source :say)
                                                               (operator-mode :conversation))
   (declare (ignore provider source operator-mode))
@@ -3375,6 +4233,24 @@
                                                     (getf editor-apply-data :task-record-summaries))
                                                (mapcar #'desktop-task-record-summary
                                                        reply-records)))
+             (actor-execution-job-ids
+               (remove-duplicates
+                (remove nil
+                        (mapcar (lambda (entry)
+                                  (or (getf entry :actor-execution-job-id)
+                                      (and (listp (getf entry :metadata))
+                                           (getf (getf entry :metadata) :actor-execution-job-id))))
+                                result-task-results))
+                :test #'string=))
+             (kernel-execution-ids
+               (remove-duplicates
+                (remove nil
+                        (mapcar (lambda (entry)
+                                  (or (getf entry :kernel-execution-id)
+                                      (and (listp (getf entry :metadata))
+                                           (getf (getf entry :metadata) :kernel-execution-id))))
+                                result-task-results))
+                :test #'string=))
              (assistant-message-text
                (or (and editor-apply-data
                         (getf editor-apply-data :assistant-message))
@@ -3415,6 +4291,8 @@
                :turn turn
                :assistant-message assistant-message-text
                :summary result-summary
+               :actor-execution-job-ids actor-execution-job-ids
+               :kernel-execution-ids kernel-execution-ids
                :desktop-task-results result-task-results
                :task-record-summaries result-task-record-summaries
                :replies (mapcar #'desktop-task-actor-reply-summary reply-records)
@@ -3429,7 +4307,45 @@
                                           :thread-id thread-id
                                           :turn-id turn-id))))))
 
-(defun command-desktop-task-approve-approval-service (session provider approval-id
+(defun command-desktop-task-approve-actor-message-service (session provider actor-message-id
+                                                            &key (source :say)
+                                                              (operator-mode :conversation))
+  (let* ((session-id (agent-session-id session))
+         (actor-address (make-standard-actor-address :governance
+                                                     :scope session-id))
+         (request
+           (make-governed-desktop-task-request
+            :requester :context-chat
+            :target :governance
+            :operation :approve-actor-message
+            :capability :approval
+            :payload (list :actor-message-id actor-message-id
+                           :source source
+                           :operator-mode operator-mode)
+            :metadata (list :session-id session-id
+                            :approval-id actor-message-id
+                            :actor-slice :governance-approval-control-v1))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-desktop-task-command-response
+        (perform-desktop-task-approve-actor-message-service
+         session
+         provider
+         actor-message-id
+         :source source
+         :operator-mode operator-mode)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :approval
+               :authority :governance
+               :target :governance
+               :operation :approve-actor-message
+               :request-id (desktop-task-request-id request)))))
+
+(defun perform-desktop-task-approve-approval-service (session provider approval-id
                                                       &key session-id
                                                         (source :say)
                                                         (operator-mode :conversation))
@@ -3464,12 +4380,52 @@
     (let ((actor-message (desktop-task-record-actor-message record)))
       (unless actor-message
         (error "Approval ~A does not have an actor message." approval-id))
-      (command-desktop-task-approve-actor-message-service
+      (perform-desktop-task-approve-actor-message-service
        session
        provider
        (actor-message-id actor-message)
        :source source
        :operator-mode operator-mode))))
+
+(defun command-desktop-task-approve-approval-service (session provider approval-id
+                                                      &key session-id
+                                                        (source :say)
+                                                        (operator-mode :conversation))
+  (let* ((effective-session-id (or session-id (agent-session-id session)))
+         (actor-address (make-standard-actor-address :governance
+                                                     :scope effective-session-id))
+         (request
+           (make-governed-desktop-task-request
+            :requester :context-chat
+            :target :governance
+            :operation :approve-approval
+            :capability :approval
+            :payload (list :approval-id approval-id
+                           :source source
+                           :operator-mode operator-mode)
+            :metadata (list :session-id effective-session-id
+                            :approval-id approval-id
+                            :actor-slice :governance-approval-control-v1))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-desktop-task-command-response
+        (perform-desktop-task-approve-approval-service
+         session
+         provider
+         approval-id
+         :session-id effective-session-id
+         :source source
+         :operator-mode operator-mode)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :approval
+               :authority :governance
+               :target :governance
+               :operation :approve-approval
+               :request-id (desktop-task-request-id request)))))
 
 (defun query-desktop-task-mcp-server-list-service (session)
   (declare (ignore session))
@@ -3496,7 +4452,7 @@
                                       :read-model :desktop-task-mcp-server-detail-v1
                                       :session session))))
 
-(defun command-desktop-task-configure-mcp-server-service (session &key server-id name transport command arguments
+(defun perform-desktop-task-configure-mcp-server-service (session &key server-id name transport command arguments
                                                                    environment-variables working-directory endpoint
                                                                    capabilities retry-policy health-status
                                                                    enabled-p discoverable-p metadata)
@@ -3531,7 +4487,58 @@
                                       :session session
                                       :read-model :desktop-task-mcp-server-detail-v1))))
 
-(defun command-desktop-task-remove-mcp-server-service (session server-id)
+(defun command-desktop-task-configure-mcp-server-service (session &key server-id name transport command arguments
+                                                                   environment-variables working-directory endpoint
+                                                                   capabilities retry-policy health-status
+                                                                   enabled-p discoverable-p metadata)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :configure-mcp-server
+                                    :desktop-task/configure-mcp-server
+                                    :payload (list :server-id server-id
+                                                   :name name
+                                                   :transport transport
+                                                   :command command
+                                                   :arguments arguments
+                                                   :environment-variables environment-variables
+                                                   :working-directory working-directory
+                                                   :endpoint endpoint
+                                                   :capabilities capabilities
+                                                   :retry-policy retry-policy
+                                                   :health-status health-status
+                                                   :enabled-p enabled-p
+                                                   :discoverable-p discoverable-p
+                                                   :metadata metadata)
+                                    :metadata (list :server-id server-id
+                                                    :name name))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      (format nil "Configure MCP server ~A." (or name server-id))
+      "desktop-task/configure-mcp-server"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :server-id server-id
+                     :name name
+                     :transport transport
+                     :command command
+                     :arguments arguments
+                     :environment-variables environment-variables
+                     :working-directory working-directory
+                     :endpoint endpoint
+                     :capabilities capabilities
+                     :retry-policy retry-policy
+                     :health-status health-status
+                     :enabled-p enabled-p
+                     :discoverable-p discoverable-p
+                     :metadata metadata)))
+   :desktop-task/configure-mcp-server
+   :configure-mcp-server
+   :metadata (list :server-id server-id
+                   :name name)))
+
+(defun perform-desktop-task-remove-mcp-server-service (session server-id)
   (let* ((environment (or (session-bound-environment session)
                           (error "No bound environment is available for MCP server removal.")))
          (config (remove-desktop-task-mcp-server-config server-id environment)))
@@ -3549,3 +4556,23 @@
      :metadata (make-service-metadata :authority :environment
                                       :session session
                                       :read-model :desktop-task-mcp-server-list-v1))))
+
+(defun command-desktop-task-remove-mcp-server-service (session server-id)
+  (call-with-desktop-task-admin-actor
+   session
+   (make-desktop-task-admin-request session
+                                    :remove-mcp-server
+                                    :desktop-task/remove-mcp-server
+                                    :payload (list :server-id server-id)
+                                    :metadata (list :server-id server-id))
+   (lambda ()
+     (command-kernel-invoke-service
+      session
+      (format nil "Remove MCP server ~A." server-id)
+      "desktop-task/remove-mcp-server"
+      :authority :environment
+      :environment (session-bound-environment session)
+      :payload (list :server-id server-id)))
+   :desktop-task/remove-mcp-server
+   :remove-mcp-server
+   :metadata (list :server-id server-id)))

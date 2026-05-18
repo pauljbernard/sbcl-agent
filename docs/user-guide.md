@@ -27,6 +27,15 @@ The current `Surface` desktop host that sits on top of these capabilities looks 
 
 These styles share the same provider, tool, session, policy, task, workflow, and execution-kernel layers. They should now be understood as coexisting modes inside one implemented Environment architecture rather than as separate products.
 
+They also now share the same context-engineering substrate. Conversation, workflow operations, and provider-bound planning all draw from a canonical packet that includes:
+
+- system identity and constraints
+- live capability and dependency posture
+- project authority
+- decisive evidence
+- uncertainty and inspection obligations
+- archetype-aware strategy defaults
+
 ## Installation Expectations
 
 The current project assumes:
@@ -254,6 +263,45 @@ If a governed runtime action fails, the system now records a durable incident li
 `incident/show` now behaves more like a recovery workspace than a plain failure record. In addition to the linked failure graph, it exposes runtime context such as the active package, recent runtime history, checkpoint and observation counts, and a structured recovery plan. When an incident has actionable follow-through, the system also records a recovery-plan artifact so the remediation path becomes durable evidence rather than an implicit suggestion.
 
 `review/mutation` is the mutation-closure surface. It consolidates the turn, mutation operations, artifacts, work-item governance, wait reason, evidence, and incident linkage into one view so the operator can see what changed and what closes the loop next without jumping across multiple commands.
+
+## Context Chat Project Targeting
+
+Context Chat can now be explicitly associated with zero, one, or many projects.
+
+This matters because project authority is now part of the planning substrate. The system distinguishes:
+
+- no selected project
+- ambient or inferred project context
+- explicit Context Chat project targeting
+
+Inspect the current chat context:
+
+```lisp
+(desktop-task/context-chat-context)
+```
+
+Set explicit project targeting:
+
+```lisp
+(desktop-task/set-context-chat-projects
+  :project-ids '("project-a" "project-b")
+  :primary-project-id "project-a")
+```
+
+Clear explicit project targeting:
+
+```lisp
+(desktop-task/set-context-chat-projects :project-ids '())
+```
+
+The resulting project frame of reference is carried through:
+
+- environment summary
+- retrieval dossier project context
+- provider environment context
+- planner `authority-state`
+
+If prompt evidence, active governed work, and explicit selection disagree, that contradiction is now surfaced to the planning layer rather than silently ignored.
 
 The runtime navigation commands deepen the symbolic side of the environment without introducing editor-centric metaphors. `runtime/find-definition` searches workspace source for defining forms and relates them to the live image, `runtime/callers` finds source-level caller sites, `runtime/methods` exposes generic-function methods in the image, and `runtime/source-image-divergence` makes source-only, runtime-only, and potentially drifted symbols explicit.
 

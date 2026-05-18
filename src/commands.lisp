@@ -20,7 +20,7 @@
                                    "provider/show" "provider/list" "provider/use" "provider/configure" "provider/routing" "provider/route"
                                    "platform/manifest" "platform/package" "platform/show-package" "platform/validate-package" "platform/import-package" "platform/list-packages" "platform/show-imported-package" "platform/activate-package" "platform/deactivate-package" "platform/active-packages" "platform/profile" "platform/install-package" "platform/simulate-package" "platform/history" "platform/audit" "platform/harness" "platform/run-harness"
                                    "execution/show" "execution/control" "compatibility/list" "compatibility/show" "compatibility/apps" "compatibility/app-show" "compatibility/launch" "compatibility/relaunch" "compatibility/windows"
-                                   "workspace/show" "desktop/show" "desktop-task/manifests" "desktop-task/manifest" "desktop-task/records" "desktop-task/actors" "desktop-task/actor" "desktop-task/actor-system-panel" "desktop-task/supervision-incidents" "desktop-task/fail-mailbox-entry" "desktop-task/apply-supervision-action" "desktop-task/inbox" "desktop-task/outbox" "desktop-task/message" "desktop-task/editor-mailbox" "desktop-task/editor-pending-mutations" "desktop-task/context-chat-mailbox" "desktop-task/context-chat-approval-inbox" "desktop-task/ack-context-chat-approval" "desktop-task/editor-authorizations" "desktop-task/consume-editor-authorization" "desktop-task/apply-editor-authorization" "desktop-task/actor-trace" "desktop-task/dlq" "desktop-task/replies" "desktop-task/latest-reply" "desktop-task/approve-message" "desktop-task/approve-approval" "desktop-task/pending-approval" "desktop-task/governance-state" "desktop-task/governance-inbox" "desktop-task/governance-decisions" "desktop-task/show" "desktop-task/mcp-servers" "desktop-task/mcp-server" "desktop-task/configure-mcp-server" "desktop-task/remove-mcp-server" "desktop/panel" "desktop/select" "desktop/restore" "desktop/action" "surface/list" "surface/select" "surface/step" "display/list" "display/show" "display/select" "display/step" "display/control" "open" "focus/show" "focus/set" "governance/queue" "governance/select" "object-browser" "object-browser/select" "inspector/show"
+                                   "workspace/show" "desktop/show" "desktop-task/manifests" "desktop-task/manifest" "desktop-task/records" "desktop-task/actors" "desktop-task/actor" "desktop-task/actor-system-panel" "desktop-task/supervision-incidents" "desktop-task/fail-mailbox-entry" "desktop-task/apply-supervision-action" "desktop-task/inbox" "desktop-task/outbox" "desktop-task/message" "desktop-task/editor-mailbox" "desktop-task/editor-pending-mutations" "desktop-task/context-chat-mailbox" "desktop-task/context-chat-context" "desktop-task/set-context-chat-projects" "desktop-task/context-chat-approval-inbox" "desktop-task/ack-context-chat-approval" "desktop-task/editor-authorizations" "desktop-task/consume-editor-authorization" "desktop-task/apply-editor-authorization" "desktop-task/actor-trace" "desktop-task/dlq" "desktop-task/replies" "desktop-task/latest-reply" "desktop-task/approve-message" "desktop-task/approve-approval" "desktop-task/pending-approval" "desktop-task/governance-state" "desktop-task/governance-inbox" "desktop-task/governance-decisions" "desktop-task/show" "desktop-task/mcp-servers" "desktop-task/mcp-server" "desktop-task/configure-mcp-server" "desktop-task/remove-mcp-server" "desktop/panel" "desktop/select" "desktop/restore" "desktop/action" "surface/list" "surface/select" "surface/step" "display/list" "display/show" "display/select" "display/step" "display/control" "open" "focus/show" "focus/set" "governance/queue" "governance/select" "object-browser" "object-browser/select" "inspector/show"
                                    "thread/new" "thread/list" "thread/use" "thread/show" "turn/status" "turn/resume" "incident/list" "incident/show" "incident/condition" "incident/restarts"
                                    "environment/status" "review/mutation"
                                    "integration/rgp-bind" "integration/rgp-show" "integration/rgp-workspace" "integration/rgp-export" "integration/rgp-artifacts" "integration/rgp-approvals" "integration/rgp-approve" "integration/rgp-resume"
@@ -29,7 +29,7 @@
                                    "session/save" "session/load" "session/reset" "describe-session"
                                    "enqueue-task" "list-tasks" "describe-task" "cancel-task"
                                    "run-next-task" "start-worker" "stop-worker"
-                                   "list-workers" "describe-worker" "monitor-task" "list-work-items" "describe-work-item" "describe-work-item-plan" "list-workflow-records" "describe-workflow-record" "request-work-item-approval" "quarantine-work-item" "resume-work-item" "steer-work-item-plan" "why-waiting" "list-replay-groups" "list-image-reconciliations" "replay-validator-task" "replay-validator-set" "reconcile-image-only-source")
+                                   "list-workers" "describe-worker" "monitor-task" "list-work-items" "describe-work-item" "describe-work-item-plan" "list-workflow-records" "describe-workflow-record" "list-orchestrations" "list-orchestration-inbox" "describe-orchestration-focus" "request-work-item-approval" "quarantine-work-item" "resume-work-item" "steer-work-item-plan" "why-waiting" "list-replay-groups" "list-image-reconciliations" "replay-validator-task" "replay-validator-set" "reconcile-image-only-source")
                         :test #'string=)))
        (make-command :kind :eval :form form :arguments (list form)))
       ((string= operator "ask")
@@ -146,10 +146,16 @@
        (make-command :kind :desktop-task-editor-pending-mutations :form form :arguments (rest form)))
       ((string= operator "desktop-task/context-chat-mailbox")
        (make-command :kind :desktop-task-context-chat-mailbox :form form :arguments (rest form)))
+      ((string= operator "desktop-task/context-chat-context")
+       (make-command :kind :desktop-task-context-chat-context :form form :arguments (rest form)))
+      ((string= operator "desktop-task/set-context-chat-projects")
+       (make-command :kind :desktop-task-set-context-chat-projects :form form :arguments (rest form)))
       ((string= operator "desktop-task/context-chat-approval-inbox")
        (make-command :kind :desktop-task-context-chat-approval-inbox :form form :arguments (rest form)))
       ((string= operator "desktop-task/ack-context-chat-approval")
        (make-command :kind :desktop-task-ack-context-chat-approval :form form :arguments (rest form)))
+      ((string= operator "desktop-task/dequeue-governance-approval")
+       (make-command :kind :desktop-task-dequeue-governance-approval :form form :arguments (rest form)))
       ((string= operator "desktop-task/editor-authorizations")
        (make-command :kind :desktop-task-editor-authorizations :form form :arguments (rest form)))
       ((string= operator "desktop-task/consume-editor-authorization")
@@ -348,6 +354,12 @@
        (make-command :kind :list-workflow-records :form form :arguments (rest form)))
       ((string= operator "describe-workflow-record")
        (make-command :kind :describe-workflow-record :form form :arguments (rest form)))
+      ((string= operator "list-orchestrations")
+       (make-command :kind :list-orchestrations :form form :arguments (rest form)))
+      ((string= operator "list-orchestration-inbox")
+       (make-command :kind :list-orchestration-inbox :form form :arguments (rest form)))
+      ((string= operator "describe-orchestration-focus")
+       (make-command :kind :describe-orchestration-focus :form form :arguments (rest form)))
       ((string= operator "request-work-item-approval")
        (make-command :kind :request-work-item-approval :form form :arguments (rest form)))
       ((string= operator "quarantine-work-item")

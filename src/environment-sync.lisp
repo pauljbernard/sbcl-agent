@@ -74,6 +74,8 @@
         (environment-policy-state environment)
         (list :approved-policies (session-approved-policies session)
               :capability-grants (session-capability-grants-summary session)))
+  (unless (environment-metadata-value environment :agent-constitution)
+    (set-environment-agent-constitution environment (default-agent-constitution)))
   (update-environment-root-summaries-from-session environment session))
 
 (defun sync-environment-runtime-history-from-session (environment session)
@@ -85,7 +87,9 @@
   (sync-environment-runtime-domain-from-session environment session)
   (setf (environment-conversation-state environment)
         (make-environment-conversation-state-from-session session))
-  (let ()
+  (let* ((plans (session-plan-set session))
+         (active-plan-id (session-active-plan-id session))
+         (plan-summaries (session-plan-summaries session)))
     (setf (environment-workflow-state environment)
           (make-environment-workflow-state-from-session session))
     (setf (environment-agent-state environment)
@@ -93,8 +97,13 @@
            :agents (environment-agent-registry environment)
            :subscriptions '()
            :memory (environment-memory environment)
-           :plan (agent-session-plan session)
+           :plan (session-active-plan session)
+           :plans plans
+           :active-plan-id active-plan-id
+           :plan-summaries plan-summaries
            :actor-mailboxes (agent-session-actor-mailboxes session)
+           :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
+                               (serializable-actor-runtime-state session))
            :pending-actions (agent-session-pending-actions session)
            :desktop-tasks (mapcar #'serializable-desktop-task-record
                                   (agent-session-desktop-tasks session))
@@ -103,7 +112,10 @@
            :workers (serializable-worker-states session)
            :summaries (list :agent-count (length (environment-agent-registry environment))
                             :subscription-count 0
-                            :has-plan-p (not (null (agent-session-plan session)))
+                            :has-plan-p (not (null active-plan-id))
+                            :active-plan-id active-plan-id
+                            :plan-count (length plans)
+                            :plan-summaries plan-summaries
                             :pending-action-count (length (agent-session-pending-actions session))
                             :desktop-task-count (length (agent-session-desktop-tasks session))
                             :incident-count (length (agent-session-incidents session))
@@ -114,6 +126,26 @@
                             :task-count (length (agent-session-tasks session))
                             :worker-count (length (agent-session-workers session))
                             :active-worker-count (active-worker-count session)
+                            :actor-runtime-history-count
+                            (length (or (and (fboundp 'serializable-actor-runtime-state)
+                                             (getf (serializable-actor-runtime-state session)
+                                                   :recent-executions))
+                                        '()))
+                            :actor-runtime-submitted-job-count
+                            (or (and (fboundp 'serializable-actor-runtime-state)
+                                     (getf (serializable-actor-runtime-state session)
+                                           :submitted-job-count))
+                                0)
+                            :actor-runtime-completed-job-count
+                            (or (and (fboundp 'serializable-actor-runtime-state)
+                                     (getf (serializable-actor-runtime-state session)
+                                           :completed-job-count))
+                                0)
+                            :actor-runtime-failed-job-count
+                            (or (and (fboundp 'serializable-actor-runtime-state)
+                                     (getf (serializable-actor-runtime-state session)
+                                           :failed-job-count))
+                                0)
                             :memory-entry-count (length (environment-memory environment))))))
   environment)
 
@@ -134,13 +166,21 @@
 
 (defun ensure-environment-agent-state (environment session)
   (or (environment-agent-state environment)
-      (let ((agent-state
+      (let* ((plans (session-plan-set session))
+             (active-plan-id (session-active-plan-id session))
+             (plan-summaries (session-plan-summaries session))
+             (agent-state
               (make-environment-agent-state
                :agents (environment-agent-registry environment)
                :subscriptions '()
                :memory (environment-memory environment)
-               :plan (agent-session-plan session)
+               :plan (session-active-plan session)
+               :plans plans
+               :active-plan-id active-plan-id
+               :plan-summaries plan-summaries
                :actor-mailboxes (agent-session-actor-mailboxes session)
+               :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
+                                   (serializable-actor-runtime-state session))
                :pending-actions (agent-session-pending-actions session)
                :desktop-tasks (agent-session-desktop-tasks session)
                :incidents (agent-session-incidents session)
@@ -148,7 +188,10 @@
                :workers (serializable-worker-states session)
                :summaries (list :agent-count (length (environment-agent-registry environment))
                                 :subscription-count 0
-                                :has-plan-p (not (null (agent-session-plan session)))
+                                :has-plan-p (not (null active-plan-id))
+                                :active-plan-id active-plan-id
+                                :plan-count (length plans)
+                                :plan-summaries plan-summaries
                                 :pending-action-count (length (agent-session-pending-actions session))
                                 :desktop-task-count (length (agent-session-desktop-tasks session))
                                 :incident-count (length (agent-session-incidents session))
@@ -159,20 +202,52 @@
                                 :task-count (length (agent-session-tasks session))
                                 :worker-count (length (agent-session-workers session))
                                 :active-worker-count (active-worker-count session)
+                                :actor-runtime-history-count
+                                (length (or (and (fboundp 'serializable-actor-runtime-state)
+                                                 (getf (serializable-actor-runtime-state session)
+                                                       :recent-executions))
+                                            '()))
+                                :actor-runtime-submitted-job-count
+                                (or (and (fboundp 'serializable-actor-runtime-state)
+                                         (getf (serializable-actor-runtime-state session)
+                                               :submitted-job-count))
+                                    0)
+                                :actor-runtime-completed-job-count
+                                (or (and (fboundp 'serializable-actor-runtime-state)
+                                         (getf (serializable-actor-runtime-state session)
+                                               :completed-job-count))
+                                    0)
+                                :actor-runtime-failed-job-count
+                                (or (and (fboundp 'serializable-actor-runtime-state)
+                                         (getf (serializable-actor-runtime-state session)
+                                               :failed-job-count))
+                                    0)
                                 :memory-entry-count (length (environment-memory environment))))))
         (setf (environment-agent-state environment) agent-state)
         agent-state)))
 
 (defun refresh-environment-agent-domain (environment session)
-  (let ((agent-state (ensure-environment-agent-state environment session)))
+  (let* ((agent-state (ensure-environment-agent-state environment session))
+         (plans (session-plan-set session))
+         (active-plan-id (session-active-plan-id session))
+         (plan-summaries (session-plan-summaries session)))
     (setf (environment-agent-state-agents agent-state)
           (environment-agent-registry environment)
           (environment-agent-state-memory agent-state)
           (environment-memory environment)
           (environment-agent-state-plan agent-state)
-          (agent-session-plan session)
+          (session-active-plan session)
+          (environment-agent-state-plans agent-state)
+          plans
+          (environment-agent-state-active-plan-id agent-state)
+          active-plan-id
+          (environment-agent-state-plan-summaries agent-state)
+          plan-summaries
           (environment-agent-state-actor-mailboxes agent-state)
           (agent-session-actor-mailboxes session)
+          (environment-agent-state-actor-runtime agent-state)
+          (and (fboundp 'serializable-actor-runtime-state)
+               (serializable-actor-runtime-state session))
           (environment-agent-state-pending-actions agent-state)
           (agent-session-pending-actions session)
           (environment-agent-state-desktop-tasks agent-state)
@@ -185,7 +260,10 @@
           (environment-agent-state-summaries agent-state)
           (list :agent-count (length (environment-agent-registry environment))
                 :subscription-count (length (environment-agent-state-subscriptions agent-state))
-                :has-plan-p (not (null (environment-agent-state-plan agent-state)))
+                :has-plan-p (not (null active-plan-id))
+                :active-plan-id active-plan-id
+                :plan-count (length plans)
+                :plan-summaries plan-summaries
                 :pending-action-count (length (environment-agent-state-pending-actions agent-state))
                 :desktop-task-count (length (environment-agent-state-desktop-tasks agent-state))
                 :incident-count (length (environment-agent-state-incidents agent-state))
@@ -196,6 +274,26 @@
                 :task-count (length (environment-agent-state-tasks agent-state))
                 :worker-count (length (environment-agent-state-workers agent-state))
                 :active-worker-count (active-worker-count session)
+                :actor-runtime-history-count
+                (length (or (and (environment-agent-state-actor-runtime agent-state)
+                                 (getf (environment-agent-state-actor-runtime agent-state)
+                                       :recent-executions))
+                            '()))
+                :actor-runtime-submitted-job-count
+                (or (and (environment-agent-state-actor-runtime agent-state)
+                         (getf (environment-agent-state-actor-runtime agent-state)
+                               :submitted-job-count))
+                    0)
+                :actor-runtime-completed-job-count
+                (or (and (environment-agent-state-actor-runtime agent-state)
+                         (getf (environment-agent-state-actor-runtime agent-state)
+                               :completed-job-count))
+                    0)
+                :actor-runtime-failed-job-count
+                (or (and (environment-agent-state-actor-runtime agent-state)
+                         (getf (environment-agent-state-actor-runtime agent-state)
+                               :failed-job-count))
+                    0)
                 :memory-entry-count (length (environment-memory environment))))
     environment))
 

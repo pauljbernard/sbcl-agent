@@ -27,6 +27,8 @@ Implemented now:
 - canonical provider-event normalization in `src/provider-protocol.lisp`
 - shell handling for event-driven streamed behavior
 - turn orchestration that can translate assistant activity into operation and artifact records
+- actor-origin event annotations and recovery metadata on key governed execution paths
+- replay and recovery classification on workflow-owned continuation and supervision-driven recovery
 
 Still transitional:
 
@@ -44,6 +46,8 @@ Assistant-visible streaming contains only assistant-visible text.
 ### Rule 2
 
 Tool intents, operation progress, approvals, checkpoints, and artifact creation are sibling events, not hidden fragments inside the visible text stream.
+
+Project-context shifts, recovery posture, and resumable continuation should also remain explicit sibling facts rather than being flattened into assistant prose.
 
 ### Rule 3
 
@@ -80,6 +84,14 @@ Practical expectations:
 - `entity-id` points at the primary object being described
 - `payload` carries structured details
 - `visibility` lets renderers distinguish user-facing output from operator or internal evidence
+
+The service-facing and renderer-facing event model now also benefits from stable optional metadata for:
+
+- actor origin
+- workflow-record id
+- project id when governed project work is involved
+- recovery origin
+- replay class
 
 ## Event Families
 
@@ -135,6 +147,8 @@ Examples:
 - `:workflow/reconciliation-created`
 - `:workflow/rollback-started`
 - `:workflow/rollback-completed`
+- `:workflow/control-state-recovered`
+- `:workflow/recovery-classified`
 
 ## Processing Contract
 
@@ -151,6 +165,7 @@ The turn orchestrator consumes provider events and updates:
 - operation records
 - artifact linkage
 - approval and resumability state
+- recovery or replay posture when interrupted continuation is resumed or reconstructed
 
 ### Durable state to renderer
 
@@ -178,6 +193,13 @@ Show:
 - final turn summary
 
 Both renderers should consume the same event truth.
+
+They should also be able to distinguish:
+
+- normal forward execution
+- approval-gated pause
+- interrupted work
+- checkpoint-backed recovery or replay
 
 ## Backward Compatibility
 

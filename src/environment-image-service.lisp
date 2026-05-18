@@ -489,7 +489,26 @@
                                                                   :read-model :environment-image-registry-v1
                                                                   :environment active-environment))))
 
-(defun command-environment-save-image-service (name &key overwrite environment)
+(defun command-environment-image-registry-query-service (&optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-environment-query-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :image-registry-query
+                                       :environment/image-registry
+                                       :payload '())
+     (lambda ()
+       (command-kernel-invoke-service
+        (environment-control-session active-environment)
+        "Inspect environment image registry."
+        "environment/image-registry"
+        :authority :environment
+        :environment active-environment
+        :payload '()))
+     :environment/image-registry
+     :image-registry-query)))
+
+(defun perform-environment-save-image-service (name &key overwrite environment)
   (let* ((active-environment (ensure-environment environment))
          (record (save-environment-as-image name
                                             :overwrite overwrite
@@ -503,7 +522,30 @@
                                                                     :command-model :environment-image-command-v1
                                                                     :environment active-environment))))
 
-(defun command-environment-load-image-service (image-id-or-name &optional environment)
+(defun command-environment-save-image-service (name &key overwrite environment)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-environment-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :save-image
+                                       :environment/checkpoint
+                                       :payload (list :name name
+                                                      :overwrite overwrite)
+                                       :metadata (list :image-name name
+                                                       :overwrite overwrite))
+     (lambda ()
+       (command-kernel-invoke-service
+        (environment-session active-environment)
+        (format nil "Save environment image ~A." name)
+        "environment/save-image"
+        :authority :environment
+        :environment active-environment
+        :payload (list :name name
+                       :overwrite overwrite)))
+     :environment/checkpoint
+     :save-image)))
+
+(defun perform-environment-load-image-service (image-id-or-name &optional environment)
   (let ((loaded-environment (load-environment-image image-id-or-name environment)))
     (when (fboundp 'notify-provider-request-snapshot-environment-change)
       (notify-provider-request-snapshot-environment-change
@@ -524,7 +566,31 @@
                                                                     :command-model :environment-image-command-v1
                                                                     :environment loaded-environment))))
 
-(defun command-environment-revert-image-service (&optional environment)
+(defun command-environment-load-image-service (image-id-or-name &optional environment)
+  (let* ((active-environment (ensure-environment environment))
+         (session (or (environment-session active-environment)
+                      *current-session*
+                      (error "Environment image load requires a bound session."))))
+    (declare (ignore session))
+    (call-with-environment-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :load-image
+                                       :environment/checkpoint
+                                       :payload (list :image-id-or-name image-id-or-name)
+                                       :metadata (list :image-id-or-name image-id-or-name))
+     (lambda ()
+       (command-kernel-invoke-service
+        session
+        (format nil "Load environment image ~A." image-id-or-name)
+        "environment/load-image"
+        :authority :environment
+        :environment active-environment
+        :payload (list :image-id-or-name image-id-or-name)))
+     :environment/checkpoint
+     :load-image)))
+
+(defun perform-environment-revert-image-service (&optional environment)
   (let ((loaded-environment (revert-environment-to-current-image environment)))
     (when (fboundp 'notify-provider-request-snapshot-environment-change)
       (notify-provider-request-snapshot-environment-change
@@ -543,3 +609,23 @@
                                    :metadata (make-service-metadata :authority :environment
                                                                     :command-model :environment-image-command-v1
                                                                     :environment loaded-environment))))
+
+(defun command-environment-revert-image-service (&optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-environment-actor
+     active-environment
+     (make-environment-control-request active-environment
+                                       :revert-image
+                                       :environment/checkpoint
+                                       :payload '()
+                                       :metadata '())
+     (lambda ()
+       (command-kernel-invoke-service
+        (environment-session active-environment)
+        "Revert environment to current image."
+        "environment/revert-image"
+        :authority :environment
+        :environment active-environment
+        :payload '()))
+     :environment/checkpoint
+     :revert-image)))

@@ -31,6 +31,15 @@
                  "code change intent should include the workflow domain")
     (assert-true (sbcl-agent::retrieval-intent-source-context-p intent)
                  "code change intent should request source context")
+    (assert-equal :implement-change
+                  (sbcl-agent::retrieval-intent-task-archetype intent)
+                  "code change intent should expose an implementation archetype")
+    (assert-equal :code-change
+                  (sbcl-agent::retrieval-intent-requested-deliverable intent)
+                  "code change intent should expose a code-change deliverable")
+    (assert-equal :mutate
+                  (sbcl-agent::retrieval-intent-phase-intent intent)
+                  "code change intent should expose a mutate phase")
     (assert-true (sbcl-agent::retrieval-intent-mutation-likely-p intent)
                  "code change intent should mark mutation likely")))
 
@@ -67,6 +76,21 @@
                          (string-downcase (sbcl-agent::retrieval-intent-explanation intent)))
                  "project-governance intent should explain the classification")))
 
+(defun retrieval-intent-project-governance-mutation-test ()
+  (let* ((prompt "please create governed project artifacts")
+         (intent (sbcl-agent::classify-retrieval-intent
+                  prompt
+                  :operator-mode :conversation)))
+    (assert-equal :project-governance
+                  (sbcl-agent::retrieval-intent-category intent)
+                  "governed project authoring prompts should classify as project governance")
+    (assert-true (sbcl-agent::retrieval-intent-mutation-likely-p intent)
+                 "governed project authoring prompts should be treated as mutation-likely")
+    (assert-false (sbcl-agent::lightweight-conversation-request-p
+                   prompt
+                   :operator-mode :conversation)
+                  "governed project authoring prompts should not be treated as lightweight conversation requests")))
+
 (defun retrieval-intent-alignment-analysis-test ()
   (let* ((intent (sbcl-agent::classify-retrieval-intent
                   "Compare runtime behavior to the current intent, explain divergence, and reconcile the misalignment."
@@ -79,6 +103,43 @@
     (assert-true (search "intent"
                          (string-downcase (sbcl-agent::retrieval-intent-explanation intent)))
                  "alignment intent should explain durable intent classification")))
+
+(defun retrieval-intent-plan-before-change-test ()
+  (let ((intent (sbcl-agent::classify-retrieval-intent
+                 "Review the incident, inspect the code path, and plan the change before patching anything."
+                 :operator-mode :conversation)))
+    (assert-equal :plan-before-change
+                  (sbcl-agent::retrieval-intent-task-archetype intent)
+                  "plan-before-change prompts should expose a planning archetype")
+    (assert-equal :change-plan
+                  (sbcl-agent::retrieval-intent-requested-deliverable intent)
+                  "plan-before-change prompts should request a planning deliverable")
+    (assert-equal :plan
+                  (sbcl-agent::retrieval-intent-phase-intent intent)
+                  "plan-before-change prompts should stay in the planning phase")
+    (assert-true (find :incident (sbcl-agent::retrieval-intent-domains intent))
+                 "plan-before-change prompts should retain incident context for planning")))
+
+(defun retrieval-intent-compound-implementation-validation-test ()
+  (let ((intent (sbcl-agent::classify-retrieval-intent
+                 "Implement the fix, run the regression tests, and validate the result."
+                 :operator-mode :conversation)))
+    (assert-equal :code-change
+                  (sbcl-agent::retrieval-intent-primary-intent intent)
+                  "compound implementation prompts should preserve code change as the primary intent")
+    (assert-equal :implement-and-validate
+                  (sbcl-agent::retrieval-intent-task-archetype intent)
+                  "compound implementation prompts should expose an implement-and-validate archetype")
+    (assert-equal :code-change-with-validation
+                  (sbcl-agent::retrieval-intent-requested-deliverable intent)
+                  "compound implementation prompts should request a code-change-with-validation deliverable")
+    (assert-equal :mutate
+                  (sbcl-agent::retrieval-intent-phase-intent intent)
+                  "compound implementation prompts should remain mutate-oriented for the current turn")
+    (assert-true (member :testing-feedback
+                         (sbcl-agent::retrieval-intent-secondary-intents intent)
+                         :test #'eq)
+                 "compound implementation prompts should preserve validation as a secondary intent")))
 
 (defun retrieval-plan-compact-first-test ()
   (let* ((plan (sbcl-agent::build-retrieval-plan
@@ -591,7 +652,7 @@
                    :operator-mode :conversation))
          (project-context (sbcl-agent::retrieval-dossier-project-context dossier))
          (trace-context (sbcl-agent::retrieval-dossier-trace-context dossier)))
-    (declare (ignore project _constitution _design-system _style-guide _requirement _nfr
+    (declare (ignore _constitution _design-system _style-guide _requirement _nfr
                      _journey _feature-spec _adr _bound-work-item _bound-project
                      _bound-testing-one _bound-testing-two _testing-artifacts _quality-gate
                      _source-root-one _source-root-two))
@@ -770,6 +831,7 @@
             "Compare runtime behavior to the current intent and summarize alignment risk."
             :operator-mode :conversation))
          (packet (sbcl-agent::service-response-data packet-response)))
+    (declare (ignore _completed))
     (assert-equal :retrieval
                   (getf packet-response :domain)
                   "alignment context packet service should report the retrieval domain")
@@ -864,6 +926,7 @@
             "Compare runtime behavior to the current intent and summarize alignment state."
             :operator-mode :conversation))
          (aligned-state (sbcl-agent::service-response-data aligned-response)))
+    (declare (ignore _completed _aligned-intent))
     (assert-equal :alignment
                   (getf aligned-response :domain)
                   "alignment state service should report the alignment domain")
@@ -1084,10 +1147,113 @@
                    "reasoning brief should surface environment-backed facts")
       (assert-true (> (length (getf brief :blockers)) 0)
                    "reasoning brief should surface current blockers")
+      (assert-true (> (length (getf brief :conflict-candidates)) 0)
+                   "reasoning brief should surface environment conflict candidates, not just raw gaps")
       (assert-true (> (length (getf brief :validation-obligations)) 0)
                    "reasoning brief should surface validation obligations")
+      (assert-true (> (length (getf brief :next-inspection-obligations)) 0)
+                   "reasoning brief should surface next-inspection obligations for planning")
       (assert-true (> (length (getf brief :evidence-actions)) 0)
                    "reasoning brief should suggest evidence-oriented next actions"))))
+
+(defun reasoning-brief-uncertainty-arbitration-test ()
+  (let* ((dossier
+           (list :gaps (list (list :type :missing-linked-event
+                                   :event-id "evt-1"
+                                   :severity :medium)
+                             (list :type :source-divergence
+                                   :detail "workspace drift"
+                                   :severity :high)
+                             (list :type :testing-failures-present
+                                   :failure-count 2
+                                   :severity :high))
+                 :project-context (list :current-project-id "proj-1"
+                                        :project-count 2
+                                        :readiness-summary
+                                        (list :status :ready)
+                                        :linked-work-items '()
+                                        :linked-projects
+                                        (list (list :id "proj-2"
+                                                    :title "Sibling Project")))
+                 :source-context (list :symbol-target "SBCL-AGENT::TEST-FN")
+                 :decisive-context-core
+                 (list :entry-count 0
+                       :entries '()
+                       :primary-entry nil)))
+         (brief (sbcl-agent::build-reasoning-brief
+                 '(:current-thread-id "thread-1"
+                   :pending-action-count 0
+                   :open-incident-count 1)
+                 '(:environment-id "env-1"
+                   :work-item-count 1
+                   :capability-inventory
+                   (:missing-prerequisites
+                    ((:kind :missing-qlot
+                      :severity :medium
+                      :statement "Qlot is not currently available."))))
+                 dossier)))
+    (assert-true (> (length (getf brief :missing-authority-facts)) 0)
+                 "reasoning brief should surface missing authority facts from structured retrieval gaps")
+    (assert-true (> (length (getf brief :decisive-unknowns)) 0)
+                 "reasoning brief should surface decisive unknowns rather than only generic missing-context entries")
+    (assert-true (> (length (getf brief :conflict-candidates)) 0)
+                 "reasoning brief should surface conflict candidates from source divergence and dirty validation state")
+    (assert-true (> (length (getf brief :authority-conflicts)) 0)
+                 "reasoning brief should surface authoritative contradictions between live posture and retrieved authority state")
+    (assert-true (> (length (getf brief :stale-context-suspicions)) 0)
+                 "reasoning brief should surface stale-context suspicions when decisive or incident context is thin")
+    (assert-true (find :multi-project-ambiguity
+                       (getf brief :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should surface multi-project ambiguity as an authority conflict")
+    (assert-true (find :project-readiness-vs-capability-posture
+                       (getf brief :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should surface project readiness vs capability posture contradictions")
+    (assert-true (find :project-work-item-linkage-gap
+                       (getf brief :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should surface project authority that is not linked to the active governed work")
+    (assert-true (find :project-selection-low-confidence
+                       (getf brief :authority-conflicts)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should surface low-confidence project selection as an authority conflict")
+    (assert-true (> (length (getf brief :next-inspection-obligations)) 0)
+                 "reasoning brief should derive concrete next inspection obligations from conflicts and missing authority")
+    (assert-true (find :resolve-authoritative-context
+                       (getf brief :evidence-actions)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should turn missing authority into an explicit evidence action")
+    (assert-true (find :arbitrate-conflicts
+                       (getf brief :evidence-actions)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should turn conflict candidates into an explicit arbitration action")
+    (assert-true (find :resolve-authority-conflicts
+                       (getf brief :evidence-actions)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should turn authoritative contradictions into an explicit arbitration action")
+    (assert-true (find :refresh-context
+                       (getf brief :evidence-actions)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should request context refresh when retrieved context looks stale")
+    (assert-true (find :inspect-authority-conflicts
+                       (getf brief :next-inspection-obligations)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should derive inspection obligations for authority conflicts")
+    (assert-true (find :refresh-stale-context
+                       (getf brief :next-inspection-obligations)
+                       :key (lambda (entry) (getf entry :kind))
+                       :test #'eq)
+                 "reasoning brief should derive refresh obligations for stale context")))
 
 (defun planning-brief-grounding-test ()
   (let* ((session (make-test-session :cwd "/tmp/planning-brief-grounding/"))
@@ -1167,17 +1333,80 @@
                     (sbcl-agent::provider-environment-context session)
                     dossier
                     :session session))
+           (decisive-core (getf dossier :decisive-context-core))
            (focus-plan (sbcl-agent::cognition-bundle-retrieval-focus-plan bundle))
            (focus-labels (getf focus-plan :focus-labels)))
+      (assert-true (listp decisive-core)
+                   "retrieval dossier should expose a decisive context core")
+      (assert-true (> (or (getf decisive-core :entry-count) 0) 0)
+                   "decisive context core should surface governing evidence entries")
+      (assert-true (member (getf (getf decisive-core :primary-entry) :kind)
+                           '(:blocker :validation-obligation :open-incident)
+                           :test #'eq)
+                   "decisive context core should prioritize blocker-grade governance evidence")
       (assert-true (getf focus-plan :ranking-enabled-p)
                    "retrieval focus plan should preserve ranking enablement")
       (assert-true (> (getf focus-plan :entry-count) 0)
                    "retrieval focus plan should surface ranked focus entries")
+      (assert-equal :decisive-context-first
+                    (getf focus-plan :strategy)
+                    "retrieval focus plan should prioritize decisive context before generic ranking")
       (assert-true (or (member :incident focus-labels :test #'eq)
                        (member :workflow focus-labels :test #'eq))
                    "retrieval focus plan should carry the governance-ranked focus labels into cognition")
       (assert-true (listp (getf focus-plan :primary-focus))
                    "retrieval focus plan should expose a primary focus candidate"))))
+
+(defun decisive-context-salience-weighting-test ()
+  (let* ((dossier (sbcl-agent::make-retrieval-dossier
+                   :workflow-context
+                   (list :work-items
+                         (list (list :id "wi-1"
+                                     :status :awaiting-cold-validation
+                                     :pending-validations '(:cold :live))))
+                   :incident-context
+                   (list :incidents
+                         (list (list :id "inc-1"
+                                     :status :open
+                                     :kind :runtime-eval-failure
+                                     :summary "Runtime mutation failed")))
+                   :project-context
+                   (list :current-project-id "proj-1"
+                         :constitution (list :constraints
+                                             (list "Do not bypass validation.")))
+                   :observed-consequences
+                   (list (list :action-type :patch
+                               :status :completed
+                               :paths '("/tmp/example.lisp")))))
+         (decisive-core (sbcl-agent::build-decisive-context-core dossier))
+         (entries (getf decisive-core :entries))
+         (primary-entry (getf decisive-core :primary-entry))
+         (validation-entry (find :validation-obligation entries
+                                 :key (lambda (entry) (getf entry :kind))
+                                 :test #'eq))
+         (project-entry (find :project-constraint entries
+                              :key (lambda (entry) (getf entry :kind))
+                              :test #'eq))
+         (focus-plan (sbcl-agent::build-retrieval-focus-plan
+                      (list :decisive-context-core decisive-core
+                            :ranking '(:enabled-p t :top-candidates ()))))
+         (primary-focus (getf focus-plan :primary-focus)))
+    (assert-equal :blocker
+                  (getf primary-entry :kind)
+                  "decisive context core should still prioritize blocker-grade workflow evidence first")
+    (assert-true (> (getf (getf primary-entry :salience) :authority-weight) 0)
+                 "decisive context entries should expose authority weighting")
+    (assert-true (> (getf (getf primary-entry :salience) :conflict-potential) 0)
+                 "decisive context entries should expose conflict potential")
+    (assert-true (> (getf (getf validation-entry :salience) :validation-criticality) 0)
+                 "validation entries should expose explicit validation criticality")
+    (assert-true (> (getf validation-entry :score)
+                    (getf project-entry :score))
+                 "validation-critical evidence should outrank lower-authority project constraints")
+    (assert-true (search "authority-bearing" (string-downcase (getf decisive-core :explanation)))
+                 "decisive context explanation should describe the new salience model")
+    (assert-true (listp (getf primary-focus :salience))
+                 "retrieval focus plan should carry decisive salience metadata into cognition")))
 
 (defun action-agenda-grounding-test ()
   (let* ((session (make-test-session :cwd "/tmp/action-agenda-grounding/"))

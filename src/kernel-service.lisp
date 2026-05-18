@@ -133,6 +133,7 @@
         (:runtime/reload-file :runtime-reload)
         (:runtime/set-package :runtime-package-switch)
         (:workspace/patch :workspace-write)
+        (:editor/append-text :workspace-write)
         (otherwise nil))
       (let ((normalized (kernel-capability-name capability)))
         (cond
@@ -169,6 +170,7 @@
       ((string= normalized "runtime/reload-file") :runtime-reload)
       ((string= normalized "runtime/set-package") :runtime-package-switch)
       ((string= normalized "workspace/patch") :workspace-mutation)
+      ((string= normalized "editor/append-text") :workspace-mutation)
       ((string= normalized "workflow/request-approval") :approval-request)
       ((string= normalized "rgp/approve") :approval-request)
       ((string= normalized "authority/grant") :authority-grant)
@@ -403,6 +405,22 @@
                                     :thread thread
                                     :turn turn
                                     :operation operation))
+      ((string= normalized "editor/append-text")
+       (let ((*runtime-governance-thread* thread)
+             (*runtime-governance-turn* turn)
+             (*runtime-governance-operation* operation))
+         (declare (special *runtime-governance-thread*
+                           *runtime-governance-turn*
+                           *runtime-governance-operation*))
+         (command-editor-append-text-service
+          session
+          :text (or (getf payload :text)
+                    (error "Kernel invoke for editor/append-text requires :text"))
+          :scope-id (getf payload :scope-id)
+          :buffer-id (getf payload :buffer-id)
+          :package-name (or (getf payload :package-name)
+                            (getf payload :package))
+          :pending-action-id (getf payload :pending-action-id))))
       ((string= normalized "workflow/request-approval")
        (command-request-work-item-approval-service session
                                                    (or (getf payload :work-item-id)
@@ -410,22 +428,199 @@
                                                    (or (getf payload :policy)
                                                        (error "Kernel invoke for workflow/request-approval requires :policy"))
                                                    :reason (getf payload :reason)))
+      ((string= normalized "workflow/work-item-list")
+       (query-work-item-list-service session))
+      ((string= normalized "workflow/work-item-detail")
+       (query-work-item-detail-service
+        session
+        (or (getf payload :work-item-id)
+            (error "Kernel invoke for workflow/work-item-detail requires :work-item-id"))))
+      ((string= normalized "workflow/work-item-plan")
+       (query-work-item-plan-service
+        session
+        (or (getf payload :work-item-id)
+            (error "Kernel invoke for workflow/work-item-plan requires :work-item-id"))))
+      ((string= normalized "workflow/work-item-wait")
+       (query-work-item-wait-service
+        session
+        (or (getf payload :work-item-id)
+            (error "Kernel invoke for workflow/work-item-wait requires :work-item-id"))))
+      ((string= normalized "workflow/record-detail")
+       (query-workflow-record-detail-service
+        session
+        (or (getf payload :workflow-record-id)
+            (error "Kernel invoke for workflow/record-detail requires :workflow-record-id"))))
+      ((string= normalized "workflow/orchestration-list")
+       (query-orchestration-list-service session))
+      ((string= normalized "workflow/orchestration-inbox")
+       (query-orchestration-inbox-service session))
+      ((string= normalized "workflow/orchestration-focus")
+       (query-orchestration-focus-service
+        session
+        :plan-id (getf payload :plan-id)
+        :workflow-record-id (getf payload :workflow-record-id)
+        :work-item-id (getf payload :work-item-id)))
+      ((string= normalized "workflow/active-plan")
+       (query-active-plan-service session))
+      ((string= normalized "workflow/plan-linked-workflow")
+       (query-plan-linked-workflow-service session
+                                           (getf payload :plan-id)))
+      ((string= normalized "workflow/orchestration-snapshot")
+       (query-orchestration-snapshot-service session
+                                             (getf payload :plan-id)))
+      ((string= normalized "workflow/plan-verification")
+       (query-plan-verification-service session
+                                        (getf payload :plan-id)))
+      ((string= normalized "incident/list")
+       (apply #'query-incident-list-service session payload))
+      ((string= normalized "incident/detail")
+       (query-incident-detail-service
+        session
+        (or (getf payload :incident-id)
+            (error "Kernel invoke for incident/detail requires :incident-id"))))
+      ((string= normalized "project/list")
+       (query-project-list-service session))
+      ((string= normalized "project/detail")
+       (query-project-detail-service
+        session
+        (or (getf payload :project-id)
+            (error "Kernel invoke for project/detail requires :project-id"))))
+      ((string= normalized "project/testing-harness-inventory")
+       (make-service-query-response
+        :project
+        :testing-harness-inventory
+        (testing-harness-inventory)
+        :metadata (make-service-metadata :authority :environment
+                                         :read-model :testing-harness-inventory-v1
+                                         :session session)))
+      ((string= normalized "rgp/workspace")
+       (query-rgp-workspace-service session environment))
+      ((string= normalized "rgp/artifacts")
+       (query-rgp-artifacts-service session environment))
+      ((string= normalized "rgp/artifact-detail")
+       (query-rgp-artifact-detail-service
+        session
+        (or (getf payload :artifact-id)
+            (error "Kernel invoke for rgp/artifact-detail requires :artifact-id"))
+        environment))
+      ((string= normalized "rgp/approvals")
+       (query-rgp-approvals-service session environment))
       ((string= normalized "environment/provider-configure")
-       (command-environment-provider-configure-service
+       (perform-environment-provider-configure-service
         (or (getf payload :profile-name)
             (error "Kernel invoke for environment/provider-configure requires :profile-name"))
         (or (getf payload :options)
             (error "Kernel invoke for environment/provider-configure requires :options"))
         (session-bound-environment session)))
       ((string= normalized "environment/provider-use")
-       (command-environment-provider-use-service
+       (perform-environment-provider-use-service
         (or (getf payload :profile-name)
             (error "Kernel invoke for environment/provider-use requires :profile-name"))
         (session-bound-environment session)))
       ((string= normalized "environment/provider-routing")
-       (command-environment-provider-routing-service
+       (perform-environment-provider-routing-service
         (getf payload :mode)
         (session-bound-environment session)))
+      ((string= normalized "environment/preferences")
+       (perform-environment-set-desktop-preferences-service
+        (or (getf payload :preferences)
+            (error "Kernel invoke for environment/preferences requires :preferences"))
+        (session-bound-environment session)))
+      ((string= normalized "environment/preferences-read")
+       (query-environment-desktop-preferences-service
+        (or environment
+            (session-bound-environment session))))
+      ((string= normalized "environment/provider")
+       (query-environment-provider-service
+        (or environment
+            (session-bound-environment session))))
+      ((string= normalized "environment/image-registry")
+       (query-environment-image-registry-service
+        (or environment
+            (session-bound-environment session))))
+      ((string= normalized "environment/summary")
+       (query-environment-summary-service
+        (or environment
+            (session-bound-environment session))
+        :include-alignment-state-p (if (member :include-alignment-state-p payload)
+                                       (getf payload :include-alignment-state-p)
+                                       t)
+        :include-reconciliation-decision-p
+        (if (member :include-reconciliation-decision-p payload)
+            (getf payload :include-reconciliation-decision-p)
+            t)))
+      ((string= normalized "environment/status")
+       (query-environment-status-service
+        (or environment
+            (session-bound-environment session))
+        :include-alignment-state-p (if (member :include-alignment-state-p payload)
+                                       (getf payload :include-alignment-state-p)
+                                       t)
+        :include-reconciliation-decision-p
+        (if (member :include-reconciliation-decision-p payload)
+            (getf payload :include-reconciliation-decision-p)
+            t)))
+      ((string= normalized "runtime/summary")
+       (query-runtime-summary-service session))
+      ((string= normalized "runtime/telemetry")
+       (query-runtime-telemetry-service session))
+      ((string= normalized "runtime/package-browser")
+       (runtime-package-browser-query-service
+        session
+        (or (getf payload :package-name)
+            (agent-session-package session))))
+      ((string= normalized "runtime/symbol-page")
+       (query-runtime-symbol-page-service
+        session
+        :package-scope (getf payload :package-scope)
+        :kinds (getf payload :kinds)
+        :visibility (or (getf payload :visibility) :all)
+        :search (getf payload :search)
+        :offset (getf payload :offset)
+        :limit (getf payload :limit)))
+      ((string= normalized "runtime/inspect-symbol")
+       (query-runtime-inspect-symbol-service
+        session
+        (or (getf payload :symbol-name)
+            (getf payload :symbol)
+            (error "Kernel invoke for runtime/inspect-symbol requires :symbol-name"))
+        :package (or (getf payload :package)
+                     (getf payload :package-name))
+        :mode (or (getf payload :mode)
+                  (error "Kernel invoke for runtime/inspect-symbol requires :mode"))))
+      ((string= normalized "runtime/entity-detail")
+       (query-runtime-entity-detail-service
+        session
+        (or (getf payload :symbol-name)
+            (getf payload :symbol)
+            (error "Kernel invoke for runtime/entity-detail requires :symbol-name"))
+        :package (or (getf payload :package)
+                     (getf payload :package-name))))
+      ((string= normalized "memory/list")
+       (query-memory-list-service session))
+      ((string= normalized "memory/detail")
+       (query-memory-detail-service
+        session
+        (or (getf payload :memory-id)
+            (error "Kernel invoke for memory/detail requires :memory-id"))))
+      ((string= normalized "console/stream")
+       (query-console-log-stream-service
+        :environment (session-bound-environment session)
+        :after-cursor (getf payload :after-cursor)
+        :limit (getf payload :limit)
+        :type (getf payload :type)
+        :source (getf payload :source)))
+      ((string= normalized "environment/events")
+       (query-environment-events-service
+        :tail (getf payload :tail)
+        :environment (session-bound-environment session)))
+      ((string= normalized "environment/event-stream")
+       (query-service-event-stream
+        :environment (session-bound-environment session)
+        :after-cursor (getf payload :after-cursor)
+        :limit (getf payload :limit)
+        :family (getf payload :family)
+        :visibility (getf payload :visibility)))
       ((string= normalized "session/save")
        (command-session-save-service session
                                      (or (getf payload :path)
@@ -435,14 +630,30 @@
         (or (getf payload :path)
             (error "Kernel invoke for session/load requires :path"))))
       ((string= normalized "environment/save")
-       (command-environment-save-service
+       (perform-environment-save-service
         (or (getf payload :path)
             (error "Kernel invoke for environment/save requires :path"))
         (session-bound-environment session)))
       ((string= normalized "environment/load")
-       (command-environment-load-service
+       (perform-environment-load-service
         (or (getf payload :path)
             (error "Kernel invoke for environment/load requires :path"))))
+      ((string= normalized "environment/save-image")
+       (perform-environment-save-image-service
+        (or (getf payload :name)
+            (error "Kernel invoke for environment/save-image requires :name"))
+        :overwrite (getf payload :overwrite)
+        :environment (session-bound-environment session)))
+      ((string= normalized "environment/load-image")
+       (perform-environment-load-image-service
+        (or (getf payload :image-id-or-name)
+            (getf payload :name)
+            (getf payload :image-id)
+            (error "Kernel invoke for environment/load-image requires :image-id-or-name"))
+        (session-bound-environment session)))
+      ((string= normalized "environment/revert-image")
+       (perform-environment-revert-image-service
+        (session-bound-environment session)))
       ((string= normalized "desktop-task/manifests")
        (query-desktop-task-manifest-list-service session))
       ((string= normalized "desktop-task/manifest")
@@ -452,6 +663,36 @@
             (error "Kernel invoke for desktop-task/manifest requires :target"))
         (or (getf payload :operation)
             (error "Kernel invoke for desktop-task/manifest requires :operation"))))
+      ((string= normalized "desktop-task/invoke")
+       (command-desktop-task-invoke-service
+        session
+        :request (getf payload :request)
+        :requester (or (getf payload :requester)
+                       :kernel)
+        :target (or (getf payload :target)
+                    (and (not (getf payload :request))
+                         (error "Kernel invoke for desktop-task/invoke requires :target when :request is not supplied")))
+        :operation (or (getf payload :operation)
+                       (and (not (getf payload :request))
+                            (error "Kernel invoke for desktop-task/invoke requires :operation when :request is not supplied")))
+        :payload (getf payload :payload)
+        :capability (getf payload :capability)
+        :surface-context (getf payload :surface-context)
+        :surface-actions (getf payload :surface-actions)
+        :metadata (getf payload :metadata)
+        :actor-message (getf payload :actor-message)
+        :manifest (getf payload :manifest)
+        :resolution (getf payload :resolution)
+        :register-record-p (if (member :register-record-p payload :test #'eq)
+                               (not (null (getf payload :register-record-p)))
+                               t)
+        :thread-id (or (getf payload :thread-id)
+                       (and thread (thread-id thread)))
+        :turn-id (or (getf payload :turn-id)
+                     (and turn (turn-id turn)))
+        :conversation-operation-id (or (getf payload :conversation-operation-id)
+                                       (and operation
+                                            (operation-id operation)))))
       ((string= normalized "desktop-task/records")
        (query-desktop-task-record-list-service
         session
@@ -558,6 +799,17 @@
         :approval-status (getf payload :approval-status)
         :latest-only-p (not (null (or (getf payload :latest-only-p)
                                       (getf payload :latest-only))))))
+      ((string= normalized "desktop-task/context-chat-context")
+       (query-desktop-task-context-chat-context-service
+        session))
+      ((string= normalized "desktop-task/set-context-chat-projects")
+       (command-desktop-task-set-context-chat-projects-service
+        session
+        (or (getf payload :project-ids)
+            (getf payload :projects)
+            '())
+        :primary-project-id (or (getf payload :primary-project-id)
+                                (getf payload :primary-id))))
       ((string= normalized "desktop-task/context-chat-approval-inbox")
        (query-desktop-task-context-chat-approval-inbox-service
         session
@@ -570,6 +822,17 @@
         session
         (or (getf payload :approval-id)
             (error "Kernel invoke for desktop-task/ack-context-chat-approval requires :approval-id"))
+        :session-id (or (getf payload :session-id)
+                        (getf payload :chat-session-id))
+        :mailbox-entry-id (or (getf payload :mailbox-entry-id)
+                              (getf payload :entry-id))
+        :actor-message-id (or (getf payload :actor-message-id)
+                              (getf payload :message-id))))
+      ((string= normalized "desktop-task/dequeue-governance-approval")
+       (command-desktop-task-dequeue-governance-approval-service
+        session
+        (or (getf payload :approval-id)
+            (error "Kernel invoke for desktop-task/dequeue-governance-approval requires :approval-id"))
         :session-id (or (getf payload :session-id)
                         (getf payload :chat-session-id))
         :mailbox-entry-id (or (getf payload :mailbox-entry-id)
@@ -733,7 +996,7 @@
         (or (getf payload :server-id)
             (error "Kernel invoke for desktop-task/mcp-server requires :server-id"))))
       ((string= normalized "desktop-task/configure-mcp-server")
-       (command-desktop-task-configure-mcp-server-service
+       (perform-desktop-task-configure-mcp-server-service
         session
         :server-id (getf payload :server-id)
         :name (getf payload :name)
@@ -750,20 +1013,210 @@
         :discoverable-p (getf payload :discoverable-p)
         :metadata (getf payload :metadata)))
       ((string= normalized "desktop-task/remove-mcp-server")
-       (command-desktop-task-remove-mcp-server-service
+       (perform-desktop-task-remove-mcp-server-service
         session
         (or (getf payload :server-id)
             (error "Kernel invoke for desktop-task/remove-mcp-server requires :server-id"))))
+      ((string= normalized "shell/desktop-panel")
+       (perform-shell-desktop-panel-service
+        session
+        (or (getf payload :panel-id)
+            (error "Kernel invoke for shell/desktop-panel requires :panel-id"))
+        :environment (or environment
+                         (session-bound-environment session))))
+      ((string= normalized "shell/desktop-model")
+       (query-shell-desktop-model-service
+        session
+        :environment (or environment
+                         (session-bound-environment session))))
+      ((string= normalized "shell/desktop-select")
+       (perform-shell-desktop-select-service
+        session
+        (or (getf payload :panel-id)
+            (error "Kernel invoke for shell/desktop-select requires :panel-id"))
+        :index (getf payload :index)
+        :execution-id (getf payload :execution-id)
+        :app-id (getf payload :app-id)
+        :object-kind (getf payload :object-kind)
+        :environment (or environment
+                         (session-bound-environment session))))
+      ((string= normalized "shell/desktop-restore")
+       (perform-shell-desktop-restore-service
+        session
+        :panel-id (getf payload :panel-id)
+        :panel-state (getf payload :panel-state)
+        :environment (or environment
+                         (session-bound-environment session))))
+      ((string= normalized "shell/desktop-control")
+       (perform-shell-desktop-action-service
+        session
+        (or payload
+            (error "Kernel invoke for shell/desktop-control requires action payload"))
+        :environment (or environment
+                         (session-bound-environment session))))
       ((string= normalized "conversation/create-thread")
-       (command-conversation-create-thread-service session
-                                                  :title (getf payload :title)
-                                                  :summary (getf payload :summary)
-                                                  :metadata (getf payload :metadata)))
+       (perform-conversation-create-thread-service session
+                                                   :title (getf payload :title)
+                                                   :summary (getf payload :summary)
+                                                   :metadata (getf payload :metadata)))
+      ((string= normalized "conversation/update-thread")
+       (perform-conversation-update-thread-service
+        session
+        (or (getf payload :thread-id)
+            (error "Kernel invoke for conversation/update-thread requires :thread-id"))
+        :title (getf payload :title)
+        :summary (getf payload :summary)
+        :metadata (getf payload :metadata)))
       ((string= normalized "conversation/use-thread")
-       (command-conversation-use-thread-service
+       (perform-conversation-use-thread-service
         session
         (or (getf payload :thread-id)
             (error "Kernel invoke for conversation/use-thread requires :thread-id"))))
+      ((string= normalized "conversation/thread-list")
+       (query-conversation-thread-list-service session))
+      ((string= normalized "conversation/thread-detail")
+       (query-conversation-thread-detail-service
+        session
+        (getf payload :thread-id)))
+      ((string= normalized "conversation/turn-detail")
+       (query-conversation-turn-detail-service
+        session
+        (getf payload :turn-id)))
+      ((string= normalized "conversation/latency")
+       (query-conversation-latency-service
+        session
+        (getf payload :turn-id)))
+      ((string= normalized "memory/update")
+       (perform-memory-update-service
+        session
+        (or (getf payload :memory-id)
+            (error "Kernel invoke for memory/update requires :memory-id"))
+        :category (getf payload :category)
+        :attribute (getf payload :attribute)
+        :value (getf payload :value)
+        :summary (getf payload :summary)
+        :confidence (getf payload :confidence)))
+      ((string= normalized "memory/delete")
+       (perform-memory-delete-service
+        session
+        (or (getf payload :memory-id)
+            (error "Kernel invoke for memory/delete requires :memory-id"))))
+      ((string= normalized "intent/create")
+       (perform-intent-create-service
+        session
+        :description (getf payload :description)
+        :scope (getf payload :scope)
+        :constraints (getf payload :constraints)
+        :expected-behaviors (getf payload :expected-behaviors)
+        :non-goals (getf payload :non-goals)
+        :priority (getf payload :priority)
+        :version (or (getf payload :version) 1)
+        :status (or (getf payload :status) :active)
+        :linked-runtime-objects (getf payload :linked-runtime-objects)
+        :linked-source-artifacts (getf payload :linked-source-artifacts)
+        :linked-event-ids (getf payload :linked-event-ids)
+        :linked-mutation-ids (getf payload :linked-mutation-ids)
+        :metadata (getf payload :metadata)))
+      ((string= normalized "intent/update")
+       (perform-intent-update-service
+        session
+        (or (getf payload :intent-id)
+            (error "Kernel invoke for intent/update requires :intent-id"))
+        :description (getf payload :description)
+        :scope (getf payload :scope)
+        :constraints (getf payload :constraints)
+        :expected-behaviors (getf payload :expected-behaviors)
+        :non-goals (getf payload :non-goals)
+        :priority (getf payload :priority)
+        :version (getf payload :version)
+        :status (getf payload :status)
+        :linked-runtime-objects (getf payload :linked-runtime-objects)
+        :linked-source-artifacts (getf payload :linked-source-artifacts)
+        :linked-event-ids (getf payload :linked-event-ids)
+        :linked-mutation-ids (getf payload :linked-mutation-ids)
+        :metadata (getf payload :metadata)))
+      ((string= normalized "intent/select")
+       (perform-intent-select-service
+        session
+        (or (getf payload :intent-id)
+            (error "Kernel invoke for intent/select requires :intent-id"))))
+      ((string= normalized "calculator/set-expression")
+       (perform-calculator-set-expression-service
+        session
+        (or (getf payload :expression)
+            (error "Kernel invoke for calculator/set-expression requires :expression"))))
+      ((string= normalized "calculator/append-token")
+       (perform-calculator-append-token-service
+        session
+        (or (getf payload :token)
+            (error "Kernel invoke for calculator/append-token requires :token"))))
+      ((string= normalized "calculator/backspace")
+       (perform-calculator-backspace-service session))
+      ((string= normalized "calculator/clear")
+       (perform-calculator-clear-service session))
+      ((string= normalized "calculator/set-mode")
+       (perform-calculator-set-mode-service
+        session
+        (or (getf payload :mode)
+            (error "Kernel invoke for calculator/set-mode requires :mode"))))
+      ((string= normalized "calculator/set-base")
+       (perform-calculator-set-base-service
+        session
+        (or (getf payload :base)
+            (error "Kernel invoke for calculator/set-base requires :base"))))
+      ((string= normalized "calculator/set-word-size")
+       (perform-calculator-set-word-size-service
+        session
+        (or (getf payload :word-size)
+            (error "Kernel invoke for calculator/set-word-size requires :word-size"))))
+      ((string= normalized "calculator/set-angle-unit")
+       (perform-calculator-set-angle-unit-service
+        session
+        (or (getf payload :angle-unit)
+            (error "Kernel invoke for calculator/set-angle-unit requires :angle-unit"))))
+      ((string= normalized "calculator/evaluate")
+       (perform-calculator-evaluate-service
+        session
+        (or (getf payload :expression)
+            intention)
+        :mode (or (getf payload :mode) :basic)
+        :base (or (getf payload :base) 10)
+        :word-size (or (getf payload :word-size) 64)
+        :angle-unit (or (getf payload :angle-unit) :radians)))
+      ((string= normalized "calculator/summary")
+       (query-calculator-summary-service session))
+      ((string= normalized "package-management/summary")
+       (query-package-management-summary-service session))
+      ((string= normalized "planning/plans")
+       (query-plan-list-service session))
+      ((string= normalized "planning/orchestrations")
+       (query-orchestration-list-service session))
+      ((string= normalized "planning/orchestration-inbox")
+       (query-orchestration-inbox-service session))
+      ((string= normalized "planning/orchestration-focus")
+       (query-orchestration-focus-service session
+                                          :plan-id (or (getf payload :plan-id)
+                                                       (getf payload :id))
+                                          :workflow-record-id (getf payload :workflow-record-id)
+                                          :work-item-id (getf payload :work-item-id)))
+      ((string= normalized "planning/plan")
+       (query-plan-service session
+                           (or (getf payload :plan-id)
+                               (getf payload :id))))
+      ((string= normalized "planning/active-plan")
+       (query-active-plan-service session))
+      ((string= normalized "planning/linked-workflow")
+       (query-plan-linked-workflow-service session
+                                           (or (getf payload :plan-id)
+                                               (getf payload :id))))
+      ((string= normalized "planning/orchestration-snapshot")
+       (query-orchestration-snapshot-service session
+                                             (or (getf payload :plan-id)
+                                                 (getf payload :id))))
+      ((string= normalized "planning/verification")
+       (query-plan-verification-service session
+                                        (or (getf payload :plan-id)
+                                            (getf payload :id))))
       ((string= normalized "authority/grant")
        (command-approve-policy-service
         session

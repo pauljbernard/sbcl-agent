@@ -2,6 +2,8 @@
 
 (defparameter +environment-project-records-key+ :project-records)
 (defparameter +environment-current-project-id-key+ :current-project-id)
+(defparameter +environment-context-chat-project-ids-key+ :context-chat-project-ids)
+(defparameter +environment-context-chat-primary-project-id-key+ :context-chat-primary-project-id)
 (defparameter +project-testing-strategy-key+ :testing-strategy)
 (defparameter +project-release-readiness-key+ :release-readiness)
 (defparameter +project-readiness-obligations-key+ :readiness-obligations)
@@ -302,7 +304,11 @@
             (mapcar #'project-record->plist
                     (or (agent-session-projects session) '()))
             (getf (environment-metadata environment) +environment-current-project-id-key+)
-            (agent-session-current-project-id session))))
+            (agent-session-current-project-id session)
+            (getf (environment-metadata environment) +environment-context-chat-project-ids-key+)
+            (copy-list (or (agent-session-context-chat-project-ids session) '()))
+            (getf (environment-metadata environment) +environment-context-chat-primary-project-id-key+)
+            (agent-session-context-chat-primary-project-id session))))
   session)
 
 (defun copy-project-string-list (values)
@@ -336,9 +342,24 @@
                (null (agent-session-current-project-id session))
                (stringp (getf (environment-metadata environment) +environment-current-project-id-key+)))
       (setf (agent-session-current-project-id session)
-            (getf (environment-metadata environment) +environment-current-project-id-key+))))
+            (getf (environment-metadata environment) +environment-current-project-id-key+)))
+    (when (and environment
+               (null (agent-session-context-chat-project-ids session))
+               (listp (getf (environment-metadata environment) +environment-context-chat-project-ids-key+)))
+      (setf (agent-session-context-chat-project-ids session)
+            (copy-project-string-list
+             (getf (environment-metadata environment) +environment-context-chat-project-ids-key+))))
+    (when (and environment
+               (null (agent-session-context-chat-primary-project-id session))
+               (stringp (getf (environment-metadata environment)
+                              +environment-context-chat-primary-project-id-key+)))
+      (setf (agent-session-context-chat-primary-project-id session)
+            (getf (environment-metadata environment)
+                  +environment-context-chat-primary-project-id-key+))))
   (unless (listp (agent-session-projects session))
     (setf (agent-session-projects session) '()))
+  (unless (listp (agent-session-context-chat-project-ids session))
+    (setf (agent-session-context-chat-project-ids session) '()))
   (unless (or (null (agent-session-projects-tail session))
               (consp (agent-session-projects-tail session)))
     (setf (agent-session-projects-tail session) nil))
@@ -358,6 +379,57 @@
   (let ((current-id (agent-session-current-project-id session)))
     (or (and current-id (find-project-record session current-id))
         (first (list-project-records session)))))
+
+(defun context-chat-selected-project-records (session)
+  (ensure-projects-session-slots session)
+  (remove nil
+          (mapcar (lambda (project-id)
+                    (find-project-record session project-id))
+                  (or (agent-session-context-chat-project-ids session) '()))))
+
+(defun context-chat-primary-project-record (session)
+  (ensure-projects-session-slots session)
+  (let ((primary-id (agent-session-context-chat-primary-project-id session)))
+    (or (and primary-id (find-project-record session primary-id))
+        (first (context-chat-selected-project-records session)))))
+
+(defun context-chat-project-selection-summary (session)
+  (ensure-projects-session-slots session)
+  (let* ((selected-projects (context-chat-selected-project-records session))
+         (primary-project (context-chat-primary-project-record session))
+         (selected-project-ids
+           (copy-list (or (agent-session-context-chat-project-ids session) '()))))
+    (list :selected-project-ids selected-project-ids
+          :primary-project-id (and primary-project
+                                   (project-record-id primary-project))
+          :project-count (length selected-project-ids)
+          :selection-source (if selected-project-ids :explicit :none)
+          :selected-projects (mapcar #'project-summary selected-projects)
+          :primary-project-summary (and primary-project
+                                        (project-summary primary-project)))))
+
+(defun set-context-chat-project-selection (session project-ids &key primary-project-id)
+  (ensure-projects-session-slots session)
+  (let* ((normalized-project-ids (copy-project-string-list project-ids))
+         (resolved-projects
+           (mapcar (lambda (project-id)
+                     (or (find-project-record session project-id)
+                         (error "Unknown project ~A" project-id)))
+                   normalized-project-ids))
+         (effective-primary-project-id
+           (cond
+             ((null normalized-project-ids) nil)
+             (primary-project-id
+              (unless (member primary-project-id normalized-project-ids :test #'string=)
+                (error "Primary context chat project ~A must be one of the selected projects."
+                       primary-project-id))
+              primary-project-id)
+             (t
+              (project-record-id (first resolved-projects))))))
+    (setf (agent-session-context-chat-project-ids session) normalized-project-ids
+          (agent-session-context-chat-primary-project-id session) effective-primary-project-id)
+    (sync-projects-to-environment session)
+    (context-chat-project-selection-summary session)))
 
 (defun project-summary (project)
   (list :id (project-record-id project)

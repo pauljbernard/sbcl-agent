@@ -128,7 +128,108 @@
                                                                     :session session
                                                                     :incident-id incident-id)))))
 
-(defun command-incident-remediation-plan-service (session incident-id remediation-plan)
+(defun make-incident-control-actor-address (session)
+  (make-standard-actor-address :incident
+                               :scope (agent-session-id session)))
+
+(defun actorize-incident-command-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (listp data)
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun actorize-incident-query-response (response &key actor-execution-job-id)
+  (if (and actor-execution-job-id
+           (listp response))
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+              (getf response :metadata) metadata)
+        (when (and (listp data)
+                   (keywordp (first data)))
+          (let ((updated-data (copy-list data)))
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun command-incident-list-query-service (session &key thread-id turn-id)
+  (let* ((payload (append (when thread-id (list :thread-id thread-id))
+                          (when turn-id (list :turn-id turn-id))))
+         (metadata (append (list :session-id (agent-session-id session)
+                                 :actor-slice :incident-query-v1)
+                           (when thread-id (list :thread-id thread-id))
+                           (when turn-id (list :turn-id turn-id))))
+         (actor-address (make-incident-control-actor-address session))
+         (request (make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :incident
+                   :operation :incident-list-query
+                   :capability :incident/list
+                   :payload payload
+                   :metadata metadata)))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-incident-query-response
+        (command-kernel-invoke-service session
+                                       "Read incident list."
+                                       "incident/list"
+                                       :authority :operator
+                                       :payload payload)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :incident/list
+               :authority :operator
+               :target :incident
+               :operation :incident-list-query
+               :request-id (desktop-task-request-id request)
+               :metadata metadata))))
+
+(defun command-incident-detail-query-service (session incident-id)
+  (let* ((payload (list :incident-id incident-id))
+         (metadata (list :session-id (agent-session-id session)
+                         :incident-id incident-id
+                         :actor-slice :incident-query-v1))
+         (actor-address (make-incident-control-actor-address session))
+         (request (make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :incident
+                   :operation :incident-detail-query
+                   :capability :incident/detail
+                   :payload payload
+                   :metadata metadata)))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-incident-query-response
+        (command-kernel-invoke-service session
+                                       "Read incident detail."
+                                       "incident/detail"
+                                       :authority :operator
+                                       :payload payload)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :incident/detail
+               :authority :operator
+               :target :incident
+               :operation :incident-detail-query
+               :request-id (desktop-task-request-id request)
+               :metadata metadata))))
+
+(defun perform-incident-remediation-plan-service (session incident-id remediation-plan)
   (let ((incident (find-incident session incident-id)))
     (unless incident
       (error "Unknown incident ~A" incident-id))
@@ -140,3 +241,40 @@
                                                                     :command-model :incident-command-v1
                                                                     :session session
                                                                     :incident-id incident-id))))
+
+(defun command-incident-remediation-plan-service (session incident-id remediation-plan)
+  (let* ((incident (or (find-incident session incident-id)
+                       (error "Unknown incident ~A" incident-id)))
+         (actor-address (make-incident-control-actor-address session))
+         (request (make-governed-desktop-task-request
+                   :requester :context-chat
+                   :target :incident
+                   :operation :set-remediation-plan
+                   :capability :incident/remediation
+                   :payload (list :incident-id incident-id
+                                  :remediation-plan remediation-plan)
+                   :metadata (append (list :session-id (agent-session-id session)
+                                           :incident-id incident-id
+                                           :actor-slice :incident-control-v1)
+                                     (when (incident-work-item-id incident)
+                                       (list :work-item-id (incident-work-item-id incident)))
+                                     (when (incident-workflow-record-id incident)
+                                       (list :workflow-record-id
+                                             (incident-workflow-record-id incident)))))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (actorize-incident-command-response
+        (perform-incident-remediation-plan-service session incident-id remediation-plan)
+        :actor-execution-job-id (current-actor-execution-job-id)))
+     :context (make-actor-execution-context
+               :actor-id (actor-address-id actor-address)
+               :capability :incident/remediation
+               :authority :governance
+               :target :incident
+               :operation :set-remediation-plan
+               :request-id (desktop-task-request-id request)
+               :work-item-id (incident-work-item-id incident)
+               :workflow-record-id (incident-workflow-record-id incident)
+               :metadata (list :incident-id incident-id)))))

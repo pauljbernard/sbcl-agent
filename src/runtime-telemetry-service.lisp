@@ -229,3 +229,17 @@
                                                                 :read-model :runtime-telemetry-v1
                                                                 :session session
                                                                 :runtime-id (default-runtime-id))))
+
+(defun command-runtime-telemetry-query-service (session)
+  (call-with-runtime-actor
+   session
+   (make-runtime-query-request session
+                               :telemetry
+                               :runtime/telemetry)
+   (lambda ()
+     (command-kernel-invoke-service session
+                                    "Read current runtime telemetry."
+                                    "runtime/telemetry"
+                                    :authority :environment))
+   :runtime/telemetry
+   :telemetry))

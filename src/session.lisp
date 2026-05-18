@@ -35,6 +35,8 @@
   projects
   projects-tail
   current-project-id
+  context-chat-project-ids
+  context-chat-primary-project-id
   trace-links
   trace-links-tail
   work-items
@@ -84,6 +86,8 @@
    :projects '()
    :projects-tail nil
    :current-project-id nil
+   :context-chat-project-ids '()
+   :context-chat-primary-project-id nil
    :trace-links '()
    :trace-links-tail nil
    :work-items '()
@@ -208,7 +212,7 @@
   session)
 
 (defun update-session-plan (session goal)
-  (setf (agent-session-plan session) goal)
+  (set-session-active-plan session goal)
   (append-session-event session :plan goal)
   (refresh-bound-environment-agent-state session)
   goal)
@@ -568,7 +572,11 @@
                   :artifact-summary (or (bound-session-environment-state-summary environment-summary :artifact-summary)
                                         (session-artifact-summary session))
                   :plan (or (bound-session-environment-state-summary environment-summary :plan)
-                            (agent-session-plan session))
+                            (session-plan-display-value session))
+                  :active-plan-id (or (bound-session-environment-state-summary environment-summary :active-plan-id)
+                                      (session-active-plan-id session))
+                  :plan-count (or (bound-session-environment-state-summary environment-summary :plan-count)
+                                  (length (session-plan-set session)))
                   :shell-focus-object-id (agent-session-shell-focus-object-id session)
                   :shell-active-panel-id (agent-session-shell-active-panel-id session)
                   :approved-policies (or (and policy-state (getf policy-state :approved-policies))
@@ -686,17 +694,21 @@
    :operations (agent-session-operations session)
    :artifacts (agent-session-artifacts session)
    :transcript nil
-   :plan (agent-session-plan session)
+   :plan (session-active-plan session)
    :shell-focus-object-id (agent-session-shell-focus-object-id session)
    :shell-active-panel-id (agent-session-shell-active-panel-id session)
    :events (serializable-session-events session)
    :capability-grants (agent-session-capability-grants session)
    :actor-mailboxes (agent-session-actor-mailboxes session)
+   :actor-runtime-state (and (fboundp 'serializable-actor-runtime-state)
+                             (serializable-actor-runtime-state session))
    :pending-actions (agent-session-pending-actions session)
    :desktop-tasks (agent-session-desktop-tasks session)
    :tasks (agent-session-tasks session)
    :projects (agent-session-projects session)
    :current-project-id (agent-session-current-project-id session)
+   :context-chat-project-ids (copy-list (or (agent-session-context-chat-project-ids session) '()))
+   :context-chat-primary-project-id (agent-session-context-chat-primary-project-id session)
    :trace-links (serializable-session-trace-links session)
    :work-items (agent-session-work-items session)
    :workflow-records (agent-session-workflow-records session)
@@ -750,6 +762,128 @@
                                     :recovery-state :interrupted)))
   operation)
 
+(defun incomplete-turn-resume-checkpoint-for-turn (record turn)
+  (let ((checkpoint (and record
+                         (latest-workflow-record-continuation-checkpoint record))))
+    (when (and checkpoint
+               (eq (getf checkpoint :kind) :turn-resume)
+               (eq (getf checkpoint :status) :started)
+               (string= (or (getf checkpoint :turn-id) "")
+                        (turn-id turn)))
+      checkpoint)))
+
+(defun checkpoint-turn-resume-payload (checkpoint turn)
+  (let ((payload (copy-tree (or (getf checkpoint :resume-payload) '()))))
+    (when (or (null payload)
+              (null (getf payload :resume-command)))
+      (setf payload (list :resume-command :turn/resume)))
+    (when (eq (getf payload :resume-command) :resume-turn)
+      (setf (getf payload :resume-command) :turn/resume))
+    (unless (getf payload :turn-id)
+      (setf (getf payload :turn-id) (turn-id turn)))
+    (unless (getf payload :thread-id)
+      (setf (getf payload :thread-id) (turn-thread-id turn)))
+    payload))
+
+(defun recover-turn-resume-operation-from-workflow-checkpoint (operation checkpoint
+                                                                        &key (recovery-origin :session-load))
+  (when (and (member (operation-status operation) '(:interrupted :running) :test #'eq)
+             (member (operation-id operation)
+                     (or (getf checkpoint :pending-action-operation-ids) '())
+                     :test #'string=))
+    (setf (operation-status operation) :staged
+          (operation-completed-at operation) nil
+           (operation-metadata operation)
+           (append-recovery-metadata
+            (operation-metadata operation)
+            :recovered-from-workflow-checkpoint-p t
+            :workflow-continuation-checkpoint-kind :turn-resume
+            :workflow-continuation-checkpoint-status :started
+            :recovery-origin recovery-origin
+            :recovery-state :resumable-from-checkpoint)))
+  operation)
+
+(defun recover-turn-resume-from-workflow-checkpoint (session turn
+                                                     &key (recovery-origin :session-load))
+  (let* ((work-item-id (getf (turn-metadata turn) :work-item-id))
+         (work-item (and work-item-id
+                         (find-work-item session work-item-id)))
+         (record (and work-item
+                      (work-item-workflow-record session work-item)))
+         (checkpoint (incomplete-turn-resume-checkpoint-for-turn record turn)))
+    (when checkpoint
+      (let* ((operations (list-turn-operations session (turn-id turn)))
+             (restaged-count 0))
+        (dolist (operation operations)
+          (let ((previous-status (operation-status operation)))
+            (recover-turn-resume-operation-from-workflow-checkpoint
+             operation
+             checkpoint
+             :recovery-origin recovery-origin)
+            (when (and (not (eq previous-status (operation-status operation)))
+                       (eq (operation-status operation) :staged))
+              (incf restaged-count))))
+        (when (or (plusp restaged-count)
+                  (and work-item
+                       (or (null (work-item-resume-payload work-item))
+                           (null (work-item-next-action work-item))))
+                  (and record
+                       (or (null (workflow-record-resume-payload record))
+                           (null (workflow-record-next-action record))
+                           (not (eq (workflow-record-status record) :resumed))))
+                  (not (eq (turn-status turn) :awaiting-approval))
+                  (turn-completed-at turn)
+                  (turn-error-state turn))
+          (let ((resume-payload (checkpoint-turn-resume-payload checkpoint turn)))
+            (when work-item
+              (when (null (work-item-resume-payload work-item))
+                (setf (work-item-resume-payload work-item)
+                      (if (fboundp 'enrich-work-item-control-payload)
+                          (enrich-work-item-control-payload work-item
+                                                            (copy-tree resume-payload))
+                          (copy-tree resume-payload))
+                      (work-item-updated-at work-item) (get-universal-time)))
+              (when (null (work-item-next-action work-item))
+                (setf (work-item-next-action work-item)
+                      (list :type :resume-turn
+                            :turn-id (turn-id turn)
+                            :suggested-step :continue-turn)
+                      (work-item-updated-at work-item) (get-universal-time))))
+            (when record
+              (setf (workflow-record-status record) :resumed
+                    (workflow-record-waiting-on record) nil
+                    (workflow-record-next-action record)
+                    (list :type :resume-turn
+                          :turn-id (turn-id turn)
+                          :operator-step :continue-turn)
+                    (workflow-record-updated-at record) (get-universal-time))
+              (when (null (workflow-record-resume-payload record))
+                (setf (workflow-record-resume-payload record)
+                      (list :resume-command :resume-turn
+                            :turn-id (turn-id turn)
+                            :thread-id (turn-thread-id turn))
+                      (workflow-record-updated-at record) (get-universal-time)))
+              (when (fboundp 'mark-workflow-record-turn-resume-recovered)
+                (mark-workflow-record-turn-resume-recovered session
+                                                            record
+                                                            turn
+                                                            checkpoint
+                                                            :restaged-count restaged-count
+                                                            :recovery-origin recovery-origin))))
+          (setf (turn-status turn) :awaiting-approval
+                (turn-completed-at turn) nil
+                (turn-error-state turn) nil
+                (turn-metadata turn)
+                (append-recovery-metadata
+                 (turn-metadata turn)
+                 :recovered-from-workflow-checkpoint-p t
+                 :workflow-continuation-checkpoint-kind :turn-resume
+                 :workflow-continuation-checkpoint-status :started
+                 :recovery-origin recovery-origin
+                 :recovery-state :resumable-from-checkpoint
+                 :recovered-pending-action-count restaged-count))))))
+  turn)
+
 (defun normalize-loaded-turn-recovery-state (session turn)
   (let* ((operations (list-turn-operations session (turn-id turn)))
          (interrupted-operations (remove-if-not (lambda (operation)
@@ -774,6 +908,13 @@
     (normalize-loaded-operation-recovery-state operation))
   (dolist (turn (agent-session-turns session))
     (normalize-loaded-turn-recovery-state session turn))
+  (dolist (work-item (agent-session-work-items session))
+    (when (fboundp 'recover-work-item-control-state)
+      (recover-work-item-control-state session work-item
+                                       :recovery-origin :session-load)))
+  (dolist (turn (agent-session-turns session))
+    (recover-turn-resume-from-workflow-checkpoint session turn
+                                                  :recovery-origin :session-load))
   session)
 
 (defun load-session (path)
@@ -788,6 +929,12 @@
       (rebuild-agent-session-tails session)
       (rebuild-conversation-tails session)
       (rebuild-workflow-record-tails session)
+      (when (and (agent-session-actor-runtime-state session)
+                 (listp (agent-session-actor-runtime-state session))
+                 (fboundp 'rehydrate-actor-runtime-state))
+        (setf (agent-session-actor-runtime-state session)
+              (rehydrate-actor-runtime-state
+               (agent-session-actor-runtime-state session))))
       (normalize-loaded-session-recovery-state session)
       (setf (agent-session-workers session)
             (serializable-worker-states session))

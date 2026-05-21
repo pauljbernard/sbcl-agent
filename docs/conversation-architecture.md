@@ -242,6 +242,91 @@ In the current architecture, the orchestrator also has to preserve actor-native 
 3. attach runtime or editor actor-flow state to the resulting turn payload
 4. project actor replies back into conversation records without making the transcript the routing backbone
 
+## End-To-End Conversational Planning And Mutation Flow
+
+The most important thing to understand about the current implementation is that conversation, planning, code creation, and code mutation are not separate products stitched together at the UI layer. They are one end-to-end environment process.
+
+At a high level, the system currently works like this:
+
+1. a user or operator submits an intent through the shell or Surface conversation interface
+2. `ContextChatActor` establishes thread and turn continuity
+3. the runtime builds a planning-context packet from live environment, workflow, project, capability, and retrieval truth
+4. the provider responds inside that authority frame rather than from transcript alone
+5. proposed work is routed into actor-governed execution paths
+6. runtime, editor, workspace, environment, package, project, or workflow mutations execute through the shared execution substrate
+7. governance decides whether effects are allowed, paused, blocked, or require approval
+8. the result is recorded as conversation state plus execution records, artifacts, evidence, approvals, incidents, or recovery state
+9. the environment is updated and becomes the source of truth for the next turn
+
+That means code creation and mutation are not "tool side effects" hanging off a chat system. They are governed environment transitions that happen within the same continuity model as the conversation.
+
+### End-To-End Sequence
+
+```mermaid
+flowchart LR
+    Intent["User Intent"]
+    Thread["Thread / Turn Continuity"]
+    Context["Planning Context Packet"]
+    Provider["Provider Response"]
+    Route["Actor-Governed Routing"]
+    Execute["invoke / inspect / control"]
+    Govern["Policy / Approval / Validation"]
+    Record["Records / Artifacts / Evidence / Incidents"]
+    Update["Updated Environment Truth"]
+
+    Intent --> Thread
+    Thread --> Context
+    Context --> Provider
+    Provider --> Route
+    Route --> Execute
+    Execute --> Govern
+    Govern --> Record
+    Record --> Update
+    Update --> Context
+```
+
+The important closure is the last step: updated environment truth is not archived passively. It directly shapes the next planning frame.
+
+## Why This Is More Robust Than Traditional External File-Based Agents
+
+Traditional file-based external coding agents usually operate through a looser chain:
+
+1. read files from outside the runtime
+2. infer intent from transcript and repo state
+3. call external tools or shells
+4. modify files
+5. reconstruct the consequences from logs, test output, and follow-up inspection
+
+That model is useful, but it is structurally weaker in several ways:
+
+- runtime state is indirect
+  - the agent usually does not inhabit the same runtime it is trying to understand
+- workflow state is fragmented
+  - approvals, incidents, work-items, and evidence often live in different systems
+- continuity is lossy
+  - each step has to be reconstructed from tool output and transcript
+- governance is bolted on
+  - execution policy often sits outside the place where work is actually executed
+- mutation consequences are delayed
+  - the next reasoning step depends on serializing tool output back into context
+
+The `sbcl-agent` architecture was designed specifically to avoid those weaknesses.
+
+Its stronger properties are:
+
+- one introspective environment
+  - source, image, workflow, evidence, and policy live in one inspectable system
+- actor-mediated continuity
+  - long-running or interrupted work can remain attached to actor, thread, turn, and workflow identity
+- governed execution at the work boundary
+  - policy and approval are enforced where effects are produced
+- immediate re-materialization of context
+  - execution consequences become environment truth for the next planning step
+- durable engineering memory
+  - artifacts, incidents, approvals, and validation are not just narrated; they become structured state
+
+This is why the architecture is not just "chat plus tools" and not just "Lisp IDE plus AI." It is a self-hosted conversational engineering environment whose planning loop, mutation loop, and evidence loop all live inside the same system.
+
 ## `ask` and `say`
 
 The migration strategy is compatibility first.

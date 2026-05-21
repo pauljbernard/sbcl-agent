@@ -234,6 +234,35 @@ This means the integrated agent now receives a stronger statement of:
 
 That is a substantive architectural change from earlier transcript-heavy prompt assembly.
 
+### Current Context Search And Selection Pipeline
+
+```mermaid
+flowchart LR
+    Request["Incoming Request"]
+    Snapshot["Request Snapshot"]
+    Ambient["Ambient Environment State"]
+    Explicit["Explicit Project / Thread / Turn Targeting"]
+    Dossier["Broad Retrieval Dossier"]
+    Filter["Authority / Conflict / Validation Filters"]
+    Rank["Salience Ranking"]
+    Core["Decisive Context Core"]
+    Unknowns["Uncertainty / Contradiction Layer"]
+    Packet["Planning Context Packet"]
+
+    Request --> Snapshot
+    Snapshot --> Dossier
+    Ambient --> Dossier
+    Explicit --> Dossier
+    Dossier --> Filter
+    Filter --> Rank
+    Rank --> Core
+    Filter --> Unknowns
+    Core --> Packet
+    Unknowns --> Packet
+```
+
+This is the current-stage search and selection model. The system first gathers broadly, then filters by authority and validation significance, then ranks for salience, then preserves the remaining uncertainty as part of the planning packet instead of discarding it.
+
 ### Canonical Runtime / Governance Flow
 
 ```mermaid
@@ -269,6 +298,55 @@ sequenceDiagram
 
     Chat-->>UI: render reply / failure / continuation
 ```
+
+### Provider Routing And Execution Selection
+
+```mermaid
+flowchart LR
+    Intent["Task / Turn Intent"]
+    Authority["Authority State"]
+    Capability["Capability Inventory"]
+    Context["Planning Context Packet"]
+    Routing["Provider Routing: auto or manual"]
+    Candidate["Candidate Providers"]
+    Ranked["Ranked Viable Route"]
+    Execute["Provider Execution"]
+
+    Intent --> Routing
+    Authority --> Routing
+    Capability --> Routing
+    Context --> Routing
+    Routing --> Candidate
+    Candidate --> Ranked
+    Ranked --> Execute
+```
+
+Provider selection is therefore context-shaped, not a static startup choice. The current route depends on what the task is, what authority exists, what providers are viable, and what the current context packet says about risk, cognition, and execution posture.
+
+### Evidence And Incident Return Path
+
+```mermaid
+flowchart LR
+    Action["Actor-Governed Action"]
+    Effects["Candidate Effects"]
+    Governance["Govern / Approve / Block / Pause"]
+    Records["Execution Record"]
+    Evidence["Artifacts / Evidence / Events"]
+    Incident["Incident / Recovery State"]
+    Environment["Updated Environment Truth"]
+    Next["Next Planning Packet"]
+
+    Action --> Effects --> Governance
+    Governance --> Records
+    Governance --> Evidence
+    Governance --> Incident
+    Records --> Environment
+    Evidence --> Environment
+    Incident --> Environment
+    Environment --> Next
+```
+
+This is what makes the system iterative in a meaningful architectural sense: action does not merely return output text. It updates the environment's evidence, incident, and execution record so the next plan is built from the consequences of the previous step.
 
 ### Actor System Observability
 
@@ -394,6 +472,82 @@ The current implementation adds a stronger operational rule above the kernel:
 - the React tier projects actor-system state; it does not own routing or continuity
 
 This matters because the earlier hybrid model let continuity leak across transcript state, bridge state, and renderer state. The actor-system refactor is explicitly trying to collapse that ambiguity.
+
+## Actors As Internal Tools
+
+One of the important architectural decisions is that the primary execution tools inside `sbcl-agent` are actor-governed runtime services, not raw MCP server calls.
+
+MCP still matters. It is the right shape for discoverable external integrations and remote capability surfaces. But inside the self-hosted environment, direct MCP calls are not the main execution model.
+
+Instead, the environment treats actors as the primary tool boundary:
+
+- an actor owns an address, inbox, continuity state, and supervision relationship
+- a capability request is routed as actor work or actor-governed execution
+- governance is enforced inside that execution path
+- replies, incidents, approvals, and artifacts return through the same environment
+
+This gives the system several properties that a direct MCP-first model does not naturally provide:
+
+- canonical identity
+  - the same actor address can own continuity across turns, workflow stages, and retries
+- governed execution
+  - policy, approval, and effect boundaries are resolved where the work actually runs
+- supervision
+  - failure becomes part of actor/system state rather than just one failed remote call
+- observability
+  - mailbox pressure, reply state, incidents, and recovery can be projected as environment truth
+- composability
+  - higher-order workflows can coordinate actor messages instead of wiring UI logic directly to provider or tool endpoints
+
+The key point is that actors are not just "another integration." They are the internal execution grammar of the environment.
+
+## Why Actor-Mediated Tools Scale Better Than Direct MCP Surfaces
+
+Direct MCP invocation scales well for integration discovery, but it scales less well as the primary internal operating model for a governed engineering environment.
+
+That is because as the system grows, it needs more than endpoint reachability:
+
+- it needs durable continuity across turns and long-running work
+- it needs native approval and governance handling
+- it needs supervision and recovery
+- it needs shared observability over workflow state
+- it needs bounded concurrency rather than ad hoc tool-call fanout
+
+Actors fit that better because the runtime can scale by adding:
+
+- more actor identities
+- more pooled workers
+- more actor-local state projections
+- more governed message flows
+
+without turning the UI or transcript layer into the real control plane.
+
+In other words:
+
+- MCP is a good boundary for external capability exposure
+- actors are a better boundary for internal governed execution at system scale
+
+## Why The Development Loop Is Tighter
+
+This also explains why the development loop is tighter than what is usually possible with an externalized coding agent.
+
+In the self-hosted model:
+
+1. the agent inspects the live environment directly
+2. the agent acts inside that same environment
+3. governance, incidents, approvals, and artifacts are emitted into that same environment
+4. the environment is immediately available for re-inspection
+5. the next turn is planned from those new facts
+
+That loop is shorter and less lossy than:
+
+1. inspect an external repo or remote target
+2. call an external tool
+3. serialize the result back into transcript
+4. infer what changed
+5. repeat
+
+The difference is not that external agents are impossible. The difference is that they must continually reconstruct context across boundaries they do not own. `sbcl-agent` reduces that reconstruction cost because the agent, the runtime, the workflow record, and the evidence trail all live inside one introspective environment.
 
 ## Current Runtime Shape
 

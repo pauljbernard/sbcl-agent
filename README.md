@@ -15,6 +15,14 @@ The current architecture is layered:
 
 The integrated agent runs in the same environment it is operating on. Context is not gathered from a separate external model of the system. It is gathered from the live environment itself, and native policy-based governance is part of the execution substrate rather than an afterthought.
 
+That point is more important than a generic claim of "introspection." The environment is an active part of the agent's dynamic context loop:
+
+- the environment exposes the runtime, workflow, evidence, and governance state the agent reasons from
+- the agent acts inside that same environment rather than supervising it from the outside
+- the effects of those actions return new runtime state, artifacts, approvals, incidents, and evidence back into that same environment
+
+In other words, the system is designed as a self-hosted feedback cycle. The agent is not merely looking at the environment. The agent is one of the environment's active participants, and the environment itself is part of the context the agent uses to decide what to do next.
+
 ## Licensing
 
 This repository is licensed under the [Apache License 2.0](LICENSES/APACHE-2.0.txt).

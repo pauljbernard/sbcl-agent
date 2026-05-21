@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the introspective runtime and persistence substrate, a shared concurrency and execution core as the handle/queue/worker substrate, an address-based actor system as the primary execution, workflow, and governance layer, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, governance is native to actor execution and effect handling, and provider-bound planning now flows through a canonical planning-context packet with explicit authority, capability, project, evidence, and uncertainty sections.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the introspective runtime and persistence substrate, a shared concurrency and execution core as the handle/queue/worker substrate, an address-based actor system as the primary execution, workflow, and governance layer, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, governance is native to actor execution and effect handling, and provider-bound planning now flows through a canonical planning-context packet with explicit authority, capability, project, evidence, and uncertainty sections. The environment is not passive background state: it is part of the agent's live dynamic context, and the agent's actions feed new runtime and workflow truth back into that same environment.</div>
 
 ## Start Here
 
@@ -31,6 +31,13 @@ The current `Surface` desktop host for `sbcl-agent` looks like this:
 ## Current Layered Architecture
 
 The current stack is no longer just “shell over kernel.” It is now a self-hosted introspective environment with a distinct actor-system layer above a shared concurrency and execution substrate.
+
+That means the environment should be understood as part of the reasoning loop itself, not just as the object being inspected. The agent, the runtime, the workflow state, the evidence state, and the governance state all participate in one feedback cycle:
+
+- the environment exposes the current runtime and workflow truth
+- the planning/context layer turns that live truth into a usable decision frame
+- the agent reasons and acts from inside that same environment
+- the results of those actions become new environment state, which then shapes the next turn
 
 ```mermaid
 flowchart TB

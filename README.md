@@ -23,6 +23,20 @@ That point is more important than a generic claim of "introspection." The enviro
 
 In other words, the system is designed as a self-hosted feedback cycle. The agent is not merely looking at the environment. The agent is one of the environment's active participants, and the environment itself is part of the context the agent uses to decide what to do next.
 
+One useful metaphor is the shift from markup-driven word processing to WYSIWYG word processing. Older software engineering workflows, and many external coding-agent workflows, are still closer to markup editing:
+
+- modify files indirectly
+- run external tools
+- infer what the system now is from serialized outputs
+
+`sbcl-agent` is trying to do for software engineering and agentic development what WYSIWYG word processors did for document editing:
+
+- let the operator and the agent work inside the thing as it actually exists now
+- keep live structure, behavior, and consequences visible during the edit loop
+- shorten the distance between intention, mutation, inspection, and correction
+
+The analogy is not perfect, but it is directionally right. The project is moving from "edit representations of the system from the outside" toward "work inside the live engineering environment directly."
+
 ## Licensing
 
 This repository is licensed under the [Apache License 2.0](LICENSES/APACHE-2.0.txt).

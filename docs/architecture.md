@@ -549,6 +549,24 @@ That loop is shorter and less lossy than:
 
 The difference is not that external agents are impossible. The difference is that they must continually reconstruct context across boundaries they do not own. `sbcl-agent` reduces that reconstruction cost because the agent, the runtime, the workflow record, and the evidence trail all live inside one introspective environment.
 
+Another useful analogy is the historical move from markup-driven word processing to WYSIWYG word processing.
+
+Traditional file-based engineering, and many external coding-agent systems, still behave like markup-era tooling:
+
+- edit text representations
+- run external processors
+- inspect rendered consequences later
+- iterate by reconstructing what the system became
+
+`sbcl-agent` is trying to provide the WYSIWYG equivalent for software engineering and agentic development:
+
+- inspect the live system directly
+- mutate it through governed operations inside that same environment
+- observe the resulting runtime, workflow, and evidence state immediately
+- continue from the system's current truth rather than from a delayed reconstruction
+
+That metaphor helps explain why the architecture is environment-first. The goal is not only faster editing. The goal is a more direct and less lossy engineering loop in which the agent and operator act closer to the running truth of the system itself.
+
 ## Current Runtime Shape
 
 The codebase still exposes one shell-facing session handle, but the internal architecture now spans several real layers. That shell-facing handle is now best understood as a transitional composition root on the path toward a fuller Environment object.

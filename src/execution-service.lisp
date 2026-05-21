@@ -721,6 +721,7 @@
   (declare (ignore session))
   (let* ((operation (desktop-task-request-operation request))
          (payload (desktop-task-request-payload request))
+         (request-metadata (desktop-task-request-metadata request))
          (surface-context (desktop-task-request-surface-context request))
          (editor-context (and (listp surface-context)
                               (getf surface-context :editor))))
@@ -748,37 +749,36 @@
                                         (getf editor-context :PACKAGENAME)))
                                nil)))
          (make-desktop-task-resolution-native
-          request
-          "Append text to the active editor buffer."
-          (lambda (active-session)
-            (let* ((response (command-kernel-invoke-service active-session
-                                                            "Append governed text to the active editor buffer."
-                                                            :editor/append-text
-                                                            :authority :governed-desktop-task
-                                                            :context (append (when pending-action-id
-                                                                               (list :pending-action-id pending-action-id))
-                                                                             (when scope-id
-                                                                               (list :scope-id scope-id))
-                                                                             (when buffer-id
-                                                                               (list :buffer-id buffer-id))
-                                                                             (when package-name
-                                                                               (list :package-name package-name)))
-                                                            :payload (append (list :text text)
-                                                                             (when scope-id
-                                                                               (list :scope-id scope-id))
-                                                                             (when buffer-id
-                                                                               (list :buffer-id buffer-id))
-                                                                             (when package-name
-                                                                               (list :package-name package-name))
-                                                                             (when pending-action-id
-                                                                               (list :pending-action-id pending-action-id)))))
+         request
+         "Append text to the active editor buffer."
+         (lambda (active-session)
+            (let* ((*runtime-governance-thread*
+                     (and (or (getf request-metadata :thread-id)
+                              (getf request-metadata :THREAD-ID))
+                          (find-thread active-session
+                                       (or (getf request-metadata :thread-id)
+                                           (getf request-metadata :THREAD-ID)))))
+                   (*runtime-governance-turn*
+                     (and (or (getf request-metadata :turn-id)
+                              (getf request-metadata :TURN-ID))
+                          (find-turn active-session
+                                     (or (getf request-metadata :turn-id)
+                                         (getf request-metadata :TURN-ID)))))
+                   (*runtime-governance-operation* nil))
+              (declare (special *runtime-governance-thread*
+                                *runtime-governance-turn*
+                                *runtime-governance-operation*))
+              (let* ((response (command-editor-append-text-service
+                                active-session
+                                :text text
+                                :scope-id scope-id
+                                :buffer-id buffer-id
+                                :package-name package-name
+                                :pending-action-id pending-action-id))
                    (command-result (service-response-data response))
-                   (kernel-metadata (service-response-metadata response))
-                   (execution-id (getf kernel-metadata :execution-id)))
-              (append command-result
-                      (list :kernel-execution-id execution-id
-                            :kernel-governance-preflight
-                            (getf kernel-metadata :governance-preflight)))))
+                   (execution-metadata (service-response-metadata response)))
+                (append command-result
+                        (execution-response-metadata-extension execution-metadata))))))
           :metadata (append (list :text text)
                             '(:receiver-actor :editor
                               :receiver-mode :actor-server
@@ -786,18 +786,19 @@
                             (when pending-action-id (list :pending-action-id pending-action-id))
                             (when scope-id (list :scope-id scope-id))
                             (when buffer-id (list :buffer-id buffer-id))
-                            (when package-name (list :package-name package-name))))))
+                            (when package-name (list :package-name package-name)))))
       (otherwise
        (error "Unsupported editor desktop task operation ~S" operation)))))
 
 (defun resolve-runtime-desktop-task-request (request session)
   (declare (ignore session))
   (let* ((operation (desktop-task-request-operation request))
-         (payload (desktop-task-request-payload request))
-         (request-metadata (desktop-task-request-metadata request)))
+         (payload (desktop-task-request-payload request)))
     (case operation
       (:evaluate-form
        (let ((form (getf payload :form))
+             (mutating (or (getf payload :mutating)
+                           (getf payload :MUTATING)))
              (package-name (or (getf payload :package)
                                (getf payload :PACKAGE)
                                (getf payload :package-name)
@@ -809,32 +810,20 @@
           request
           (format nil "Evaluate ~A in the active runtime." form)
           (lambda (active-session)
-            (let* ((response (command-kernel-invoke-service active-session
-                                                            (format nil "Evaluate ~A in the live runtime." form)
-                                                            :runtime/eval
-                                                            :authority :governed-desktop-task
-                                                            :context (append (when (or (getf request-metadata :thread-id)
-                                                                                       (getf request-metadata :THREAD-ID))
-                                                                               (list :thread-id (or (getf request-metadata :thread-id)
-                                                                                                    (getf request-metadata :THREAD-ID))))
-                                                                             (when (or (getf request-metadata :turn-id)
-                                                                                       (getf request-metadata :TURN-ID))
-                                                                               (list :turn-id (or (getf request-metadata :turn-id)
-                                                                                                  (getf request-metadata :TURN-ID)))))
-                                                            :payload (append (list :form form)
-                                                                             (when package-name
-                                                                               (list :package package-name)))))
+            (let* ((response (command-runtime-eval-service active-session
+                                                           form
+                                                           :package package-name
+                                                           :mutating mutating))
                    (command-result (service-response-data response))
-                   (kernel-metadata (service-response-metadata response))
-                   (summary (runtime-eval-assistant-message command-result reason))
-                   (execution-id (getf kernel-metadata :execution-id)))
-              (append command-result
-                      (list :summary summary
-                            :kernel-execution-id execution-id
-                            :kernel-governance-preflight
-                            (getf kernel-metadata :governance-preflight)))))
+                   (execution-metadata (service-response-metadata response))
+                   (summary (runtime-eval-assistant-message command-result reason)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary summary)))
           :metadata (append (list :form form
                                   :reason reason
+                                  :mutating (not (null mutating))
                                   :receiver-actor :runtime
                                   :receiver-mode :actor-server
                                   :actor-slice :context-chat-runtime-v1)
@@ -851,27 +840,37 @@
           request
           (format nil "Reload ~A into the active runtime." path)
           (lambda (active-session)
-            (let* ((response (command-kernel-invoke-service active-session
-                                                            (format nil "Reload ~A into the live runtime." path)
-                                                            :runtime/reload-file
-                                                            :authority :governed-desktop-task
-                                                            :context (append (when (or (getf request-metadata :thread-id)
-                                                                                       (getf request-metadata :THREAD-ID))
-                                                                               (list :thread-id (or (getf request-metadata :thread-id)
-                                                                                                    (getf request-metadata :THREAD-ID))))
-                                                                             (when (or (getf request-metadata :turn-id)
-                                                                                       (getf request-metadata :TURN-ID))
-                                                                               (list :turn-id (or (getf request-metadata :turn-id)
-                                                                                                  (getf request-metadata :TURN-ID)))))
-                                                            :payload (list :path path)))
+            (let* ((response (command-runtime-reload-file-service active-session path))
                    (command-result (service-response-data response))
-                   (kernel-metadata (service-response-metadata response))
-                   (execution-id (getf kernel-metadata :execution-id)))
+                   (execution-metadata (service-response-metadata response)))
               (append command-result
-                      (list :kernel-execution-id execution-id
-                            :kernel-governance-preflight
-                            (getf kernel-metadata :governance-preflight)))))
+                      (execution-response-metadata-extension execution-metadata))))
           :metadata (append (list :path path
+                                  :receiver-actor :runtime
+                                  :receiver-mode :actor-server
+                                  :actor-slice :context-chat-runtime-v1)
+                            (when (fboundp 'default-runtime-id)
+                              (list :runtime-id (default-runtime-id)))))))
+      (:set-package
+       (let ((package-name (or (getf payload :package)
+                               (getf payload :PACKAGE)
+                               (getf payload :package-name)
+                               (getf payload :PACKAGE-NAME))))
+         (unless package-name
+           (error "Runtime package-switch desktop task requires a package payload."))
+         (make-desktop-task-resolution-native
+          request
+          (format nil "Switch the active runtime package to ~A." package-name)
+          (lambda (active-session)
+            (let* ((response (command-runtime-set-package-service active-session package-name))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (or (getf command-result :summary)
+                            (format nil "Switched the active runtime package to ~A." package-name)))))
+          :metadata (append (list :package-name package-name
                                   :receiver-actor :runtime
                                   :receiver-mode :actor-server
                                   :actor-slice :context-chat-runtime-v1)
@@ -879,6 +878,53 @@
                               (list :runtime-id (default-runtime-id)))))))
       (otherwise
        (error "Unsupported runtime desktop task operation ~S" operation)))))
+
+(defun resolve-compatibility-desktop-task-request (request session)
+  (declare (ignore session))
+  (let* ((operation (desktop-task-request-operation request))
+         (payload (desktop-task-request-payload request))
+         (request-metadata (desktop-task-request-metadata request)))
+    (case operation
+      (:launch-app
+       (let ((app-id (or (getf payload :app-id)
+                         (getf payload :APP-ID)))
+             (app-args (or (getf payload :app-arguments)
+                           (getf payload :APP-ARGUMENTS)
+                           (getf payload :arguments)
+                           (getf payload :ARGUMENTS)
+                           '())))
+         (unless app-id
+           (error "Compatibility launch desktop task requires an :app-id payload."))
+         (make-desktop-task-resolution-native
+          request
+          (format nil "Launch compatibility app ~A." app-id)
+          (lambda (active-session)
+            (let* ((response (command-invoke-compatibility-app-service
+                              active-session
+                              app-id
+                              app-args
+                              :thread (let ((thread-id (or (getf request-metadata :thread-id)
+                                                           (getf request-metadata :THREAD-ID))))
+                                        (and thread-id
+                                             (find-thread active-session thread-id)))
+                              :turn (let ((turn-id (or (getf request-metadata :turn-id)
+                                                       (getf request-metadata :TURN-ID))))
+                                      (and turn-id
+                                           (find-turn active-session turn-id)))
+                              :operation :compatibility-launch))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (or (getf command-result :summary)
+                            (format nil "Launched compatibility app ~A." app-id)))))
+          :metadata (list :app-id app-id
+                          :receiver-actor :compatibility
+                          :receiver-mode :actor-server
+                          :actor-slice :context-chat-compatibility-v1))))
+      (otherwise
+       (error "Unsupported compatibility desktop task operation ~S" operation)))))
 
 (defun workspace-patch-summary (results)
   (let ((count (length (or results '()))))
@@ -890,6 +936,193 @@
       (t
        "Applied a governed workspace patch."))))
 
+(defun workspace-promotion-summary (results)
+  (let ((count (length (or results '()))))
+    (cond
+      ((= count 1)
+       "Promoted a verified workspace patch for 1 file.")
+      ((> count 1)
+       (format nil "Promoted a verified workspace patch for ~D files." count))
+     (t
+       "Promoted a verified workspace patch."))))
+
+(defun execution-response-metadata-extension (metadata)
+  (let ((execution-id (getf metadata :execution-id))
+        (governance-preflight (getf metadata :governance-preflight)))
+    (list :execution-id execution-id
+          :governance-preflight governance-preflight)))
+
+(defun extend-command-result-with-execution-metadata (command-result metadata
+                                                       &rest extra-fields)
+  (append command-result
+          extra-fields
+          (execution-response-metadata-extension metadata)))
+
+(defun platform-desktop-task-summary (operation payload result)
+  (declare (ignore result))
+  (case operation
+    (:package
+     "Exported a governed platform package.")
+    (:import-package
+     (format nil "Imported platform package ~A."
+             (or (getf payload :path)
+                 "package")))
+    (:activate-package
+     (format nil "Activated platform package ~A."
+             (or (getf payload :package-id)
+                 "package")))
+    (:deactivate-package
+     (format nil "Deactivated platform package ~A."
+             (or (getf payload :package-id)
+                 "package")))
+    (:install-package
+     (format nil "Installed platform package ~A."
+             (or (getf payload :path)
+                 "package")))
+    (:run-harness
+     (format nil "Ran platform harness ~A."
+             (or (getf payload :harness-id)
+                 :internal-evaluations)))
+    (otherwise
+     "Executed a governed platform operation.")))
+
+(defun resolve-platform-desktop-task-request (request session)
+  (declare (ignore session))
+  (let* ((operation (desktop-task-request-operation request))
+         (payload (desktop-task-request-payload request)))
+    (flet ((metadata (&rest extra)
+             (append extra
+                     '(:receiver-actor :platform
+                       :receiver-mode :actor-server
+                       :actor-slice :context-chat-platform-v1))))
+      (case operation
+        (:package
+         (unless (listp payload)
+           (error "Platform package desktop task requires a payload plist, got ~S" payload))
+         (make-desktop-task-resolution-native
+          request
+          "Export a governed platform package."
+          (lambda (active-session)
+            (let* ((response (command-platform-package-service
+                              (getf payload :output-path)
+                              :package-id (getf payload :package-id)
+                              :package-version (getf payload :package-version)
+                              :title (getf payload :title)
+                              :capability-ids (or (getf payload :capability-ids)
+                                                  (getf payload :capabilities))
+                              :session active-session
+                              :publisher (getf payload :publisher)
+                              :build-system (getf payload :build-system)
+                              :source-repository (getf payload :source-repository)
+                              :build-kind (getf payload :build-kind)
+                              :release-status (getf payload :release-status)
+                              :replacement-package-id (getf payload :replacement-package-id)
+                              :rollback-strategy (getf payload :rollback-strategy)
+                              :failure-mode (getf payload :failure-mode)
+                              :backup-required-p (getf payload :backup-required-p)
+                              :recovery-runbook (getf payload :recovery-runbook)
+                              :attested-p (getf payload :attested-p)))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata)))
+        (:import-package
+         (unless (getf payload :path)
+           (error "Platform import desktop task requires :path"))
+         (make-desktop-task-resolution-native
+          request
+          "Import a governed platform package."
+          (lambda (active-session)
+            (let* ((response (command-platform-import-package-service
+                              (getf payload :path)
+                              :session active-session
+                              :allow-downgrade-p (getf payload :allow-downgrade)
+                              :allow-untrusted-p (getf payload :allow-untrusted)
+                              :allow-deprecated-p (getf payload :allow-deprecated)
+                              :allow-manual-recovery-p (getf payload :allow-manual-recovery)))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata :path (getf payload :path))))
+        (:activate-package
+         (unless (getf payload :package-id)
+           (error "Platform activate desktop task requires :package-id"))
+         (make-desktop-task-resolution-native
+          request
+          "Activate a governed platform package."
+          (lambda (active-session)
+            (let* ((response (command-platform-activate-package-service
+                              (getf payload :package-id)
+                              :session active-session))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata :package-id (getf payload :package-id))))
+        (:deactivate-package
+         (unless (getf payload :package-id)
+           (error "Platform deactivate desktop task requires :package-id"))
+         (make-desktop-task-resolution-native
+          request
+          "Deactivate a governed platform package."
+          (lambda (active-session)
+            (let* ((response (command-platform-deactivate-package-service
+                              (getf payload :package-id)
+                              :session active-session))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata :package-id (getf payload :package-id))))
+        (:install-package
+         (unless (getf payload :path)
+           (error "Platform install desktop task requires :path"))
+         (make-desktop-task-resolution-native
+          request
+          "Install a governed platform package."
+          (lambda (active-session)
+            (let* ((response (command-platform-install-package-service
+                              (getf payload :path)
+                              :session active-session
+                              :allow-downgrade-p (getf payload :allow-downgrade)
+                              :allow-untrusted-p (getf payload :allow-untrusted)
+                              :allow-deprecated-p (getf payload :allow-deprecated)
+                              :allow-manual-recovery-p (getf payload :allow-manual-recovery)))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata :path (getf payload :path))))
+        (:run-harness
+         (make-desktop-task-resolution-native
+          request
+          "Run a governed platform harness."
+          (lambda (active-session)
+            (let* ((response (command-platform-run-harness-service
+                              :harness-id (getf payload :harness-id)
+                              :session active-session))
+                   (command-result (service-response-data response))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               command-result
+               execution-metadata
+               :summary (platform-desktop-task-summary operation payload command-result))))
+          :metadata (metadata :harness-id (getf payload :harness-id))))
+        (otherwise
+         (error "Unsupported platform desktop task operation ~S" operation))))))
+
 (defun resolve-workspace-desktop-task-request (request session)
   (declare (ignore session))
   (let* ((operation (desktop-task-request-operation request))
@@ -897,44 +1130,76 @@
          (request-metadata (desktop-task-request-metadata request)))
     (case operation
       (:apply-patch
-       (let ((operations (cond
-                           ((option-present-p payload :operations)
-                            (getf payload :operations))
-                           ((option-present-p payload :OPERATIONS)
-                            (getf payload :OPERATIONS))
-                           (t payload))))
+       (let* ((operations (cond
+                            ((option-present-p payload :operations)
+                             (getf payload :operations))
+                            ((option-present-p payload :OPERATIONS)
+                             (getf payload :OPERATIONS))
+                            (t payload)))
+              (patch-request (if (or (option-present-p payload :operations)
+                                     (option-present-p payload :OPERATIONS))
+                                 payload
+                                 operations)))
          (unless (listp operations)
            (error "Workspace patch desktop task requires a list of operations, got ~S" operations))
          (make-desktop-task-resolution-native
           request
           "Apply a governed workspace patch."
           (lambda (active-session)
-            (let* ((response (command-kernel-invoke-service active-session
-                                                            "Apply a governed workspace patch."
-                                                            :workspace/patch
-                                                            :authority :governed-desktop-task
-                                                            :context (append (when (or (getf request-metadata :thread-id)
-                                                                                       (getf request-metadata :THREAD-ID))
-                                                                               (list :thread-id (or (getf request-metadata :thread-id)
-                                                                                                    (getf request-metadata :THREAD-ID))))
-                                                                             (when (or (getf request-metadata :turn-id)
-                                                                                       (getf request-metadata :TURN-ID))
-                                                                               (list :turn-id (or (getf request-metadata :turn-id)
-                                                                                                  (getf request-metadata :TURN-ID)))))
-                                                            :payload operations))
+            (let* ((response (command-apply-patch-service active-session
+                                                          patch-request
+                                                          :thread (and (or (getf request-metadata :thread-id)
+                                                                           (getf request-metadata :THREAD-ID))
+                                                                       (find-thread active-session
+                                                                                    (or (getf request-metadata :thread-id)
+                                                                                        (getf request-metadata :THREAD-ID))))
+                                                          :turn (and (or (getf request-metadata :turn-id)
+                                                                         (getf request-metadata :TURN-ID))
+                                                                     (find-turn active-session
+                                                                                (or (getf request-metadata :turn-id)
+                                                                                    (getf request-metadata :TURN-ID))))))
                    (patch-result (service-response-data response))
                    (results (or (getf patch-result :patch) '()))
-                   (kernel-metadata (service-response-metadata response))
-                   (execution-id (getf kernel-metadata :execution-id)))
-              (append patch-result
-                      (list :summary (workspace-patch-summary results)
-                            :kernel-execution-id execution-id
-                            :kernel-governance-preflight
-                            (getf kernel-metadata :governance-preflight)))))
+                   (execution-metadata (service-response-metadata response)))
+              (extend-command-result-with-execution-metadata
+               patch-result
+               execution-metadata
+               :summary (workspace-patch-summary results))))
           :metadata (list :operation-count (length operations)
                           :receiver-actor :workspace
                           :receiver-mode :actor-server
                           :actor-slice :context-chat-workspace-v1))))
+      (:promote-patch
+       (unless (listp payload)
+         (error "Workspace patch promotion desktop task requires a verified patch payload, got ~S"
+                payload))
+       (make-desktop-task-resolution-native
+        request
+        "Promote a verified staged workspace patch."
+        (lambda (active-session)
+          (let* ((response (command-promote-patch-workspace-service
+                            active-session
+                            payload
+                            :thread (and (or (getf request-metadata :thread-id)
+                                             (getf request-metadata :THREAD-ID))
+                                         (find-thread active-session
+                                                      (or (getf request-metadata :thread-id)
+                                                          (getf request-metadata :THREAD-ID))))
+                            :turn (and (or (getf request-metadata :turn-id)
+                                           (getf request-metadata :TURN-ID))
+                                       (find-turn active-session
+                                                  (or (getf request-metadata :turn-id)
+                                                      (getf request-metadata :TURN-ID))))))
+                 (promotion-result (service-response-data response))
+                 (results (or (getf promotion-result :patch) '()))
+                 (execution-metadata (service-response-metadata response)))
+            (extend-command-result-with-execution-metadata
+             promotion-result
+             execution-metadata
+             :summary (workspace-promotion-summary results))))
+        :metadata (list :receiver-actor :workspace
+                        :receiver-mode :actor-server
+                        :actor-slice :context-chat-workspace-v1)))
       (otherwise
        (error "Unsupported workspace desktop task operation ~S" operation)))))
 
@@ -1029,6 +1294,126 @@
  :tags '(:runtime :reload :actor))
 
 (register-desktop-task-operation
+ :runtime
+ :set-package
+ #'resolve-runtime-desktop-task-request
+ :capability :runtime-package-switch
+ :description "Switch the active Common Lisp package in the live runtime."
+ :request-schema '(:package string)
+ :result-schema '(:summary string :package string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :runtime-primary
+ :tags '(:runtime :package-switch :actor))
+
+(register-desktop-task-operation
+ :compatibility
+ :launch-app
+ #'resolve-compatibility-desktop-task-request
+ :capability :linux-app-launch
+ :description "Launch a governed compatibility app through the compatibility runtime."
+ :request-schema '(:app-id string :app-arguments list)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :compatibility-surface
+ :tags '(:compatibility :launch :actor))
+
+(register-desktop-task-operation
+ :platform
+ :package
+ #'resolve-platform-desktop-task-request
+ :capability :platform-package
+ :description "Export a governed platform package."
+ :request-schema '(:output-path string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :package :write :actor))
+
+(register-desktop-task-operation
+ :platform
+ :import-package
+ #'resolve-platform-desktop-task-request
+ :capability :platform-import-package
+ :description "Import a governed platform package."
+ :request-schema '(:path string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :import :write :actor))
+
+(register-desktop-task-operation
+ :platform
+ :activate-package
+ #'resolve-platform-desktop-task-request
+ :capability :platform-activate-package
+ :description "Activate a governed platform package."
+ :request-schema '(:package-id string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :activate :write :actor))
+
+(register-desktop-task-operation
+ :platform
+ :deactivate-package
+ #'resolve-platform-desktop-task-request
+ :capability :platform-deactivate-package
+ :description "Deactivate a governed platform package."
+ :request-schema '(:package-id string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :deactivate :write :actor))
+
+(register-desktop-task-operation
+ :platform
+ :install-package
+ #'resolve-platform-desktop-task-request
+ :capability :platform-install-package
+ :description "Install a governed platform package."
+ :request-schema '(:path string)
+ :result-schema '(:summary string)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :install :write :actor))
+
+(register-desktop-task-operation
+ :platform
+ :run-harness
+ #'resolve-platform-desktop-task-request
+ :capability :platform-run-harness
+ :description "Run a governed platform harness."
+ :request-schema '(:harness-id keyword)
+ :result-schema '(:summary string :report t)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :platform-surface
+ :tags '(:platform :harness :write :actor))
+
+(register-desktop-task-operation
  :workspace
  :apply-patch
  #'resolve-workspace-desktop-task-request
@@ -1042,6 +1427,21 @@
  :backend-kind :internal
  :backend-ref :workspace-surface
  :tags '(:surface :workspace :patch :write))
+
+(register-desktop-task-operation
+ :workspace
+ :promote-patch
+ #'resolve-workspace-desktop-task-request
+ :capability :workspace-write
+ :description "Promote a verified staged workspace patch into the live workspace."
+ :request-schema '(:verified-patch list :workspace-id string :staging-root string)
+ :result-schema '(:summary string :patch list)
+ :approval-policy :explicit
+ :execution-mode :synchronous
+ :retry-policy '(:max-attempts 1 :retryable-p nil)
+ :backend-kind :internal
+ :backend-ref :workspace-surface
+ :tags '(:surface :workspace :patch :promotion :write))
 
 (defun desktop-task-executor-kind (requests)
   (let ((targets (remove-duplicates (mapcar #'desktop-task-request-target requests) :test #'eq)))
@@ -1804,15 +2204,36 @@
                             (cognition-bundle-action-agenda cognition-bundle)))
         (outcome-brief (and cognition-bundle
                             (cognition-bundle-outcome-brief cognition-bundle)))
+        (intent (and retrieval-dossier
+                     (if (typep retrieval-dossier 'retrieval-dossier)
+                         (retrieval-dossier-intent retrieval-dossier)
+                         (getf retrieval-dossier :intent))))
+        (intent-category nil)
+        (mutation-likely-p nil)
         (post-mutation-p (eq (and retrieval-dossier
                                   (if (typep retrieval-dossier 'retrieval-dossier)
                                       (retrieval-dossier-phase retrieval-dossier)
                                       (getf retrieval-dossier :phase)))
-                             :post-mutation)))
+                             :post-mutation))
+        (collect-evidence-posture-p nil))
+    (when intent
+      (setf intent-category (if (typep intent 'retrieval-intent)
+                                (retrieval-intent-category intent)
+                                (getf intent :category))
+            mutation-likely-p (if (typep intent 'retrieval-intent)
+                                  (retrieval-intent-mutation-likely-p intent)
+                                  (getf intent :mutation-likely-p))))
+    (setf collect-evidence-posture-p
+          (or (eq (getf (getf action-agenda :primary-step) :kind) :collect-evidence)
+              (eq (getf execution-strategy :next-step) :collect-evidence)))
     (or (member (getf (getf action-agenda :primary-step) :kind)
-                '(:resolve-blockers :collect-evidence :run-validations)
+                '(:resolve-blockers :run-validations)
                 :test #'eq)
-        (eq (getf execution-strategy :next-step) :collect-evidence)
+        (and collect-evidence-posture-p
+             (not (and mutation-likely-p
+                       (member intent-category
+                               '(:code-change :runtime-mutation :project-governance)
+                               :test #'eq))))
         (and (eq (getf validation-strategy :mode) :required)
              (eq (getf validation-strategy :next-step) :run-required-validations))
         (and post-mutation-p
@@ -1834,8 +2255,8 @@
         (deferred '()))
     (dolist (action actions)
       (if (and (governed-assistant-action-p action)
-               (not (and project-governance-intent-p
-                         (eq (assistant-action-policy-id action) :project-governance-write))))
+               (not (eq (assistant-action-policy-id action) :project-governance-write))
+               (not project-governance-intent-p))
           (push action deferred)
           (push action allowed)))
     (values (nreverse allowed) (nreverse deferred))))
@@ -1895,9 +2316,11 @@
                   nil))
              (:tool
               (if (governed-assistant-action-p action)
-                  (and (not mutation-likely-p)
-                       (not (eq intent-category :project-governance))
-                       (null matched-labels))
+                  (if (eq (assistant-action-policy-id action) :project-governance-write)
+                      nil
+                      (and (not mutation-likely-p)
+                           (not (eq intent-category :project-governance))
+                           (null matched-labels)))
                   nil))
              (otherwise
               (< score 2)))))
@@ -2832,7 +3255,7 @@
                       (append (copy-list result)
                               (list :compatibility-target compatibility-target))
                       result)))
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response :execution
                                     :tool
                                     payload
@@ -2843,7 +3266,7 @@
                                                                      :turn-id (and turn (turn-id turn))))
    :session session
    :intention (format nil "Invoke tool ~A." tool-id)
-   :capability (kernel-tool-capability-id tool-id)
+   :capability (tool-capability-id tool-id)
    :authority :environment
    :context (list :thread-id (and thread (thread-id thread))
                   :turn-id (and turn (turn-id turn))
@@ -2897,7 +3320,7 @@
          (payload (append (copy-list result)
                           (list :app-id app-id
                                 :compatibility-target compatibility-target))))
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response :execution
                                     :compatibility-app
                                     payload
@@ -2915,26 +3338,102 @@
                     :app-arguments app-args))))
 
 (defun command-apply-patch-service (session operations &key thread turn operation)
-  (kernelize-service-command-response
-   (make-service-command-response :execution
-                                  :patch
-                                  (apply-patch-operations session
-                                                          operations
-                                                          :thread thread
-                                                          :turn turn
-                                                          :operation operation)
-                                  :metadata (make-service-metadata :authority :environment
-                                                                   :command-model :patch-execution-v1
-                                                                   :session session
-                                                                   :thread-id (and thread (thread-id thread))
-                                                                   :turn-id (and turn (turn-id turn))))
+  (let* ((policy-id :workspace-write)
+         (request (make-workspace-command-request session
+                                                  :patch
+                                                  :workspace/patch
+                                                  :payload operations
+                                                  :metadata (append (when thread
+                                                                      (list :thread-id (thread-id thread)))
+                                                                    (when turn
+                                                                      (list :turn-id (turn-id turn)))
+                                                                    (when operation
+                                                                      (list :operation-id (operation-id operation)))))))
+    (register-service-command-response
+     (call-with-workspace-command-actor
+      session
+      request
+      (lambda ()
+        (make-service-command-response :execution
+                                       :patch
+                                       (apply-patch-operations session
+                                                               operations
+                                                               :thread thread
+                                                               :turn turn
+                                                               :operation operation)
+                                       :metadata (make-service-metadata :authority :environment
+                                                                        :command-model :patch-execution-v1
+                                                                        :session session
+                                                                        :thread-id (and thread (thread-id thread))
+                                                                        :turn-id (and turn (turn-id turn))
+                                                                        :policy-id policy-id)))
+      :workspace/patch
+      :patch
+      :metadata (append (when thread
+                          (list :thread-id (thread-id thread)))
+                        (when turn
+                          (list :turn-id (turn-id turn)))
+                        (when operation
+                          (list :operation-id (operation-id operation))))
+      :payload operations
+      :policy-id policy-id
+      :approval-required-p (workspace-command-approval-required-p policy-id))
    :session session
    :intention "Apply a governed patch to the workspace."
    :capability :workspace/patch
    :authority :workspace-write
    :context (list :thread-id (and thread (thread-id thread))
                   :turn-id (and turn (turn-id turn))
-                  :operation operation)))
+                  :operation operation))))
+
+(defun command-promote-patch-workspace-service (session payload &key thread turn operation)
+  (let* ((policy-id :workspace-write)
+         (request (make-workspace-command-request session
+                                                  :promote-patch
+                                                  :workspace/promote-patch
+                                                  :payload payload
+                                                  :metadata (append (when thread
+                                                                      (list :thread-id (thread-id thread)))
+                                                                    (when turn
+                                                                      (list :turn-id (turn-id turn)))
+                                                                    (when operation
+                                                                      (list :operation-id (operation-id operation)))))))
+    (register-service-command-response
+     (call-with-workspace-command-actor
+      session
+      request
+      (lambda ()
+        (make-service-command-response :execution
+                                       :patch
+                                       (promote-verified-patch-workspace session
+                                                                         payload
+                                                                         :thread thread
+                                                                         :turn turn
+                                                                         :operation operation)
+                                       :metadata (make-service-metadata :authority :environment
+                                                                        :command-model :patch-promotion-execution-v1
+                                                                        :session session
+                                                                        :thread-id (and thread (thread-id thread))
+                                                                        :turn-id (and turn (turn-id turn))
+                                                                        :policy-id policy-id)))
+      :workspace/promote-patch
+      :promote-patch
+      :metadata (append (when thread
+                          (list :thread-id (thread-id thread)))
+                        (when turn
+                          (list :turn-id (turn-id turn)))
+                        (when operation
+                          (list :operation-id (operation-id operation))))
+      :payload payload
+      :policy-id policy-id
+      :approval-required-p (workspace-command-approval-required-p policy-id))
+   :session session
+   :intention "Promote a verified staged patch workspace into the live workspace."
+   :capability :workspace/promote-patch
+   :authority :workspace-write
+   :context (list :thread-id (and thread (thread-id thread))
+                  :turn-id (and turn (turn-id turn))
+                  :operation operation))))
 
 (defun actorized-service-response (response &key actor-execution-job-id)
   (if (and actor-execution-job-id
@@ -2943,7 +3442,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -2967,7 +3466,7 @@
         (let* ((task-form (execution-task-form source prompt options))
                (command (normalize-form-command task-form))
                (task (enqueue-task session command :payload task-form)))
-          (kernelize-service-command-response
+          (register-service-command-response
            (make-service-command-response :execution
                                           source
                                           (list :queued-task (task-summary task)
@@ -3154,7 +3653,7 @@
                                      :thread-id (thread-id thread)
                                      :turn-id (turn-id completed-turn)
                                      :visibility :operator)
-               (kernelize-service-command-response
+               (register-service-command-response
                 (make-service-command-response :execution
                                                source
                                                response-payload
@@ -3207,7 +3706,7 @@
                 :reason (getf direct-runtime-eval :reason)
                 :thread-id (getf (getf result :thread) :id)
                 :turn-id (getf (getf result :turn) :id))
-               (kernelize-service-command-response
+               (register-service-command-response
                 (make-service-command-response :execution
                                                source
                                                result
@@ -3252,7 +3751,7 @@
                                                  :surface-actions surface-actions
                                                  :source source
                                                  :operator-mode operator-mode))))
-               (kernelize-service-command-response
+               (register-service-command-response
                 (make-service-command-response :execution
                                                source
                                                result
@@ -3321,7 +3820,7 @@
                :thread-id (and active-thread (thread-id active-thread))))))
 
 (defun command-execute-assistant-action-service (session action &key thread turn operation)
-  (kernelize-service-command-response
+  (register-service-command-response
    (make-service-command-response :execution
                                   :assistant-action
                                   (execute-assistant-action action
@@ -3352,7 +3851,7 @@
                                                   :turn turn
                                                   :operation operation)))
       (clear-pending-actions session)
-      (kernelize-service-command-response
+      (register-service-command-response
        (make-service-command-response :execution
                                       :pending-actions
                                       results

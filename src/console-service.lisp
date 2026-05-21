@@ -162,20 +162,16 @@
       active-environment
       :console-stream-query
       :console/stream
-      :payload (list :after-cursor after-cursor
-                     :limit limit
-                     :type type
-                     :source source))
+     :payload (list :after-cursor after-cursor
+                    :limit limit
+                    :type type
+                    :source source))
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect console stream."
-        "console/stream"
-        :authority :environment
+       (query-console-log-stream-service
         :environment active-environment
-        :payload (list :after-cursor after-cursor
-                       :limit limit
-                       :type type
-                       :source source)))
+        :after-cursor after-cursor
+        :limit limit
+        :type type
+        :source source))
      :console/stream
      :console-stream-query)))

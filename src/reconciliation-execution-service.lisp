@@ -148,7 +148,7 @@
 
 (defun materialize-reconciliation-correction-from-decision (session prompt packet state decision)
   (if (eq (getf decision :decision) :maintain)
-      (kernelize-service-command-response
+      (register-service-command-response
        (make-service-response
         :alignment
         :materialize-reconciliation-correction
@@ -164,7 +164,7 @@
        :authority :governance)
       (let ((existing (existing-actionable-corrective-work-item session decision)))
         (if existing
-            (kernelize-service-command-response
+            (register-service-command-response
              (make-service-response
               :alignment
               :materialize-reconciliation-correction
@@ -198,7 +198,7 @@
                                             work-item
                                             +reconciliation-correction-policy+
                                             :reason approval-reason))
-              (kernelize-service-command-response
+              (register-service-command-response
                (make-service-response
                 :alignment
                 :materialize-reconciliation-correction

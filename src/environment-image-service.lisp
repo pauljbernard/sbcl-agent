@@ -46,7 +46,7 @@
                                +environment-recovery-report-key+)))
 
 (defun pending-worker-restart-actions (environment runtime-manifest)
-  (let* ((agent-state (environment-agent-state environment))
+  (let* ((agent-state (environment-agent-state-snapshot environment))
          (workers (or (and agent-state
                            (environment-agent-state-workers agent-state))
                       '())))
@@ -312,7 +312,7 @@
         :last-recovery-at (environment-recovery-manifest-last-recovery-at manifest)))
 
 (defun current-environment-open-incident-ids (environment)
-  (let* ((agent-state (environment-agent-state (ensure-environment environment)))
+  (let* ((agent-state (environment-agent-state-snapshot (ensure-environment environment)))
          (incidents (or (and agent-state
                              (environment-agent-state-incidents agent-state))
                         '())))
@@ -322,7 +322,7 @@
 
 (defun derive-environment-runtime-manifest (&optional environment)
   (let* ((active-environment (ensure-environment environment))
-         (agent-state (environment-agent-state active-environment))
+         (agent-state (environment-agent-state-snapshot active-environment))
          (workers (or (and agent-state
                            (environment-agent-state-workers agent-state))
                       '()))
@@ -396,6 +396,21 @@
           (environment-recovery-manifest->plist
            (environment-recovery-manifest-record active-environment))
           :recovery-report (environment-recovery-report active-environment))))
+
+(defun environment-image-registry-query-summary (&optional environment)
+  (let* ((active-environment (ensure-environment environment))
+         (registry (load-environment-image-registry active-environment))
+         (current-image-id (or (environment-image-id active-environment)
+                               (environment-image-registry-current-image-id registry)))
+         (current-record (and current-image-id
+                              (find-environment-image-record registry current-image-id))))
+    (list :registry-path (namestring (environment-image-registry-path active-environment))
+          :images-root (namestring (environment-images-root active-environment))
+          :current-image-id current-image-id
+          :current-image-name (and current-record
+                                   (environment-image-record-name current-record))
+          :images (mapcar #'environment-image-record->plist
+                          (registry-environment-image-records registry)))))
 
 (defun save-environment-as-image (name &key overwrite environment basis-image-id)
   (let* ((active-environment (ensure-environment environment))
@@ -484,7 +499,7 @@
   (let ((active-environment (ensure-environment environment)))
     (make-service-query-response :environment
                                  :image-registry
-                                 (environment-image-registry-summary active-environment)
+                                 (environment-image-registry-query-summary active-environment)
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :environment-image-registry-v1
                                                                   :environment active-environment))))
@@ -498,13 +513,7 @@
                                        :environment/image-registry
                                        :payload '())
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment image registry."
-        "environment/image-registry"
-        :authority :environment
-        :environment active-environment
-        :payload '()))
+       (query-environment-image-registry-service active-environment))
      :environment/image-registry
      :image-registry-query)))
 
@@ -524,26 +533,28 @@
 
 (defun command-environment-save-image-service (name &key overwrite environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :save-image
-                                       :environment/checkpoint
-                                       :payload (list :name name
-                                                      :overwrite overwrite)
-                                       :metadata (list :image-name name
-                                                       :overwrite overwrite))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        (format nil "Save environment image ~A." name)
-        "environment/save-image"
-        :authority :environment
-        :environment active-environment
-        :payload (list :name name
-                       :overwrite overwrite)))
-     :environment/checkpoint
-     :save-image)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :save-image
+                                        :environment/checkpoint
+                                        :payload (list :name name
+                                                       :overwrite overwrite)
+                                        :metadata (list :image-name name
+                                                        :overwrite overwrite))
+      (lambda ()
+        (perform-environment-save-image-service name
+                                                :overwrite overwrite
+                                                :environment active-environment))
+      :environment/checkpoint
+      :save-image
+      :metadata (list :image-name name
+                      :overwrite overwrite))
+     :session (environment-control-session active-environment)
+     :intention (format nil "Save environment image ~A." name)
+     :capability :environment/save-image
+     :authority :environment)))
 
 (defun perform-environment-load-image-service (image-id-or-name &optional environment)
   (let ((loaded-environment (load-environment-image image-id-or-name environment)))
@@ -571,24 +582,23 @@
          (session (or (environment-session active-environment)
                       *current-session*
                       (error "Environment image load requires a bound session."))))
-    (declare (ignore session))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :load-image
-                                       :environment/checkpoint
-                                       :payload (list :image-id-or-name image-id-or-name)
-                                       :metadata (list :image-id-or-name image-id-or-name))
-     (lambda ()
-       (command-kernel-invoke-service
-        session
-        (format nil "Load environment image ~A." image-id-or-name)
-        "environment/load-image"
-        :authority :environment
-        :environment active-environment
-        :payload (list :image-id-or-name image-id-or-name)))
-     :environment/checkpoint
-     :load-image)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :load-image
+                                        :environment/checkpoint
+                                        :payload (list :image-id-or-name image-id-or-name)
+                                        :metadata (list :image-id-or-name image-id-or-name))
+      (lambda ()
+        (perform-environment-load-image-service image-id-or-name active-environment))
+      :environment/checkpoint
+      :load-image
+      :metadata (list :image-id-or-name image-id-or-name))
+     :session session
+     :intention (format nil "Load environment image ~A." image-id-or-name)
+     :capability :environment/load-image
+     :authority :environment)))
 
 (defun perform-environment-revert-image-service (&optional environment)
   (let ((loaded-environment (revert-environment-to-current-image environment)))
@@ -620,12 +630,6 @@
                                        :payload '()
                                        :metadata '())
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        "Revert environment to current image."
-        "environment/revert-image"
-        :authority :environment
-        :environment active-environment
-        :payload '()))
+       (perform-environment-revert-image-service active-environment))
      :environment/checkpoint
      :revert-image)))

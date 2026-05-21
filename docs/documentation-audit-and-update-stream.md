@@ -2,7 +2,7 @@
 
 ## Purpose
 
-This document is the working audit for bringing the GitHub Pages documentation up to the current `sbcl-agent` and `sbcl-agent-ux` state after the execution-kernel, compatibility-kernel, desktop-host, platform, QA, and stabilization refactors.
+This document is the working audit for bringing the GitHub Pages documentation up to the current `sbcl-agent` and `sbcl-agent-ux` state after the actor-runtime, concurrency-core, governance migration, desktop-host, platform, QA, and stabilization refactors.
 
 It is intentionally file-by-file so the documentation stream can be executed and reviewed in bounded passes instead of through one vague “docs refresh.”
 
@@ -25,11 +25,15 @@ Completed:
 - roadmap and journey-plan reframing
 - docs publishing script/workflow update away from tracked Gemfile state
 - markdown link consistency sweep
+- architecture rebaseline from kernel-first language toward actor runtime, concurrency/execution core, governance, context integration, and self-hosted runtime language across the primary entrypoints
+- canonical-vs-historical labeling across current docs, indexes, and asset notes
+- explicit testing and validation baseline documentation for concurrency and actor-system suites
 
 Remaining:
 
 - local GitHub Pages build verification once Jekyll dependencies are available in the local environment
 - lower-priority consistency checks on reference/background pages
+- optional final wording cleanup inside intentionally historical pages if stricter archive normalization is desired
 
 ## High-Priority Infrastructure
 
@@ -60,7 +64,7 @@ Remaining:
 | `docs/core-entities.md` | `refresh` | Likely needs alignment with execution handles, display surfaces, and desktop actions. | Validate and refresh entity summaries. |
 | `docs/mutation-model.md` | `refresh` | Should reflect current checkpoint, cold-validation, reconciliation, and forensic depth posture. | Refresh workflow lifecycle descriptions. |
 | `docs/conversation-architecture.md` | `refresh` | Still says some operation families are not yet fully surfaced. | Update conversation/runtime/workflow integration claims. |
-| `docs/kernel-invariants.md` | `current` | Doctrine page likely still correct. | Validate against current implementation, small edits only if needed. |
+| `docs/kernel-invariants.md` | `historical` | Doctrine page is now preserved as origin context for the completed kernel-transition program. | Keep clearly labeled as historical doctrine; do not treat as canonical current architecture. |
 | `docs/public-service-interfaces.md` | `current` | Reframed around the active service boundary and live host integration. | Light consistency validation only. |
 | `docs/service-boundary-hardening.md` | `refresh` | Likely accurate in principle, but may overstate future-tense boundary work. | Tighten to current service-contract reality. |
 | `docs/service-event-contract.md` | `current` | Event contract wording aligned to current clients. | Light consistency validation only. |
@@ -72,11 +76,11 @@ Remaining:
 
 | File | Status | Issue | Required Action |
 | --- | --- | --- | --- |
-| `docs/agentos-target-state-architecture.md` | `current` | Target contract page is still useful. | Keep as target architecture reference; validate terminology only. |
+| `docs/agentos-target-state-architecture.md` | `historical` | Target contract page remains useful as origin context, but it is no longer the canonical current architecture document. | Keep as historical target reference with explicit labeling. |
 | `docs/current-vs-target-gap-matrix.md` | `current` | Already updated to “closed.” | Keep and cross-link more prominently. |
-| `docs/agentos-current-state-gap-analysis.md` | `rewrite` | Still describes missing kernel, compatibility, UX, and platform layers that are now implemented. | Rewrite as a current-state architecture assessment, not an open-gap page. |
-| `docs/agentos-implementation-plan.md` | `current` | Rewritten as completed architecture program plus next enhancement tracks. | Light consistency validation only. |
-| `docs/intentos-constitution.md` | `current` | Likely still valid. | Validate only. |
+| `docs/agentos-current-state-gap-analysis.md` | `historical` | Now preserved as the historical baseline assessment that preceded target-architecture closure. | Keep as labeled historical baseline reference. |
+| `docs/agentos-implementation-plan.md` | `historical` | Rewritten as the completed architecture program plus next enhancement tracks. | Keep as historical program record, with light consistency validation only. |
+| `docs/intentos-constitution.md` | `historical` | Still valuable as doctrine, but no longer the canonical current architecture description. | Keep as historical/origin-context doctrine with explicit note. |
 | `docs/intentos-requirements.md` | `refresh` | Should distinguish satisfied requirements from future enhancements. | Add attainment status or align language. |
 | `docs/intentos-feature-specifications.md` | `current` | Governance/spec discipline likely still valid. | Validate only. |
 | `docs/validation-strategy.md` | `refresh` | Still framed as transition validation rather than validation of a now-achieved target architecture plus hardening. | Reframe around sustaining invariants and backend evolution. |
@@ -150,6 +154,7 @@ Status:
 ## Stream Status
 
 - current iteration focus:
-  - final consistency sweep and local build verification
+  - final closeout and explicit publication of canonical-vs-historical boundaries
 - next iteration focus:
+  - local GitHub Pages build verification
   - residual low-priority cleanup only if inconsistencies remain

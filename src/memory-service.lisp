@@ -31,7 +31,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -45,8 +45,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -111,11 +110,7 @@
                                 :list-query
                                 :memory/list)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read operator memory list."
-                                    "memory/list"
-                                    :authority :environment
-                                    :payload '()))
+     (query-memory-list-service session))
    :memory/list
    :list-query))
 
@@ -128,11 +123,7 @@
                                 :payload (list :memory-id memory-id)
                                 :memory-id memory-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read operator memory ~A." memory-id)
-                                    "memory/detail"
-                                    :authority :environment
-                                    :payload (list :memory-id memory-id)))
+     (query-memory-detail-service session memory-id))
    :memory/detail
    :detail-query
    :memory-id memory-id))
@@ -166,17 +157,12 @@
                                                :confidence confidence)
                                 :memory-id memory-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (or summary
-                                        (format nil "Update operator memory ~A." memory-id))
-                                    "memory/update"
-                                    :authority :governance
-                                    :payload (list :memory-id memory-id
-                                                   :category category
-                                                   :attribute attribute
-                                                   :value value
-                                                   :summary summary
-                                                   :confidence confidence)))
+     (perform-memory-update-service session memory-id
+                                    :category category
+                                    :attribute attribute
+                                    :value value
+                                    :summary summary
+                                    :confidence confidence))
    :memory/update
    :update
    :memory-id memory-id))
@@ -200,11 +186,7 @@
                                 :payload (list :memory-id memory-id)
                                 :memory-id memory-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Delete operator memory ~A." memory-id)
-                                    "memory/delete"
-                                    :authority :governance
-                                    :payload (list :memory-id memory-id)))
+     (perform-memory-delete-service session memory-id))
    :memory/delete
    :delete
    :memory-id memory-id))

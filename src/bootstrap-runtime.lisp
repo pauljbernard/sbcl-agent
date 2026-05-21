@@ -18,6 +18,9 @@
 (defparameter +managed-source-registry-relative-path+ #P".sbcl-agent/source-registry.sexp")
 (defparameter +local-projects-root-relative-path+ #P"quicklisp/local-projects/")
 
+(declaim (ftype (function (&key (:project-dir t) (:working-directory t)) t)
+                bootstrap-common-lisp-package-management))
+
 (defun package-management-state ()
   *package-management-state*)
 
@@ -148,12 +151,15 @@
            (reverse (parent-directories pathspec))))
 
 (defun executable-pathname (name)
-  (ignore-errors
-    (let* ((stdout (uiop:run-program (list "which" name)
-                                     :output :string
-                                     :ignore-error-status t))
-           (path (normalize-string stdout)))
-      (and path (pathname path)))))
+  (handler-case
+      (sb-ext:with-timeout 1
+        (let* ((stdout (uiop:run-program (list "which" name)
+                                         :output :string
+                                         :ignore-error-status t))
+               (path (normalize-string stdout)))
+          (and path (pathname path))))
+    (sb-ext:timeout () nil)
+    (error () nil)))
 
 (defun existing-managed-source-registry-directories (project-dir)
   (mapcar #'existing-directory-pathname

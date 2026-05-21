@@ -2,14 +2,14 @@
 layout: default
 title: Public Service Interfaces
 hero_title: Public Service Interfaces
-hero_text: The shell, sbcl-agent-ux, and external clients should all use stable, governed service contracts over the environment kernel rather than shell internals.
+hero_text: The shell, sbcl-agent-ux, and external clients should all use stable, governed service contracts over the shared execution and environment runtime rather than shell internals.
 eyebrow: Architecture
 permalink: /public-service-interfaces.html
 description: Public service interface boundary for secure presentation-tier development tooling in sbcl-agent.
 ---
 ## Purpose
 
-The repository now has an explicit architectural boundary between the environment kernel and presentation tiers.
+The repository now has an explicit architectural boundary between the environment runtime, the execution-service layer, and presentation tiers.
 
 That boundary is the public service interface layer.
 
@@ -24,15 +24,15 @@ Its job is to make it possible to build a modern engineering UX without coupling
 
 The system should evolve into three layers:
 
-1. Environment kernel
+1. Environment runtime plus concurrency / execution core
 2. Public service interface layer
 3. Presentation adapters
 
 The shell remains important, but it becomes one client of the service layer rather than the privileged center of the system.
 
-## Environment Kernel
+## Environment Runtime And Execution Core
 
-The kernel owns:
+The environment runtime and execution core own:
 
 - runtime state
 - conversation state
@@ -43,8 +43,9 @@ The kernel owns:
 - policy state
 - event evidence
 - governed mutation lifecycle
+- execution handles, shared queues, futures, worker pools, and service-level invoke / inspect / control
 
-The kernel owns invariants and durable truth.
+These layers own invariants, durable truth, and the shared execution substrate presentation tiers depend on.
 
 ## Public Service Interface Layer
 

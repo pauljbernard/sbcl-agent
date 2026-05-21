@@ -56,8 +56,11 @@
   (format nil "environment-~D-~D" (get-universal-time) (random 1000000)))
 
 (defun session-bound-environment (session)
-  (let ((environment (and (boundp '*current-environment*)
-                          *current-environment*)))
+  (let ((environment (or (agent-session-bound-environment session)
+                         (and (boundp '*current-environment*)
+                              *current-environment*))))
     (when (and environment
                (eq (environment-compatibility-session environment) session))
+      (unless (eq (agent-session-bound-environment session) environment)
+        (setf (agent-session-bound-environment session) environment))
       environment)))

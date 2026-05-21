@@ -22,6 +22,10 @@ The measurements in this document come from the current local test and coverage 
 - `./bin/run-tests`
 - `./bin/run-coverage`
 - `./bin/run-performance`
+- `./bin/run-concurrency-regression`
+- `./bin/run-concurrency-performance`
+- `./bin/run-actor-system-regression`
+- `./bin/run-actor-system-performance`
 
 The timing notes below come from a current local baseline run of:
 
@@ -35,6 +39,42 @@ Observed wall-clock baseline on this machine:
 - `user 3.62`
 - `sys 3.25`
 
+## Current Dedicated Validation Baseline
+
+The repository now has two important dedicated validation tracks in addition to the broader smoke and service suites:
+
+- a concurrency-layer regression and performance suite
+- an actor-system regression and performance suite
+
+Latest local baseline recorded during this documentation rebaseline on `2026-05-20`:
+
+- `./bin/run-concurrency-regression`: passed
+  - `focused-concurrency-core-keyed-serialization-test`
+  - `focused-runtime-command-governance-test`
+  - `focused-actor-thread-pool-serializes-per-actor-test`
+  - `focused-actor-max-concurrency-test`
+  - `focused-actor-runtime-queue-drain-test`
+  - `focused-concurrent-read-not-blocked-by-write-test`
+- `./bin/run-concurrency-performance`: failed one enforced default budget
+  - failure: `MIXED-LOAD-ACTOR-DISPATCH-LATENCY`
+  - observed average: `1.04 ms`
+  - default budget: `1.00 ms`
+- `./bin/run-actor-system-regression`: passed
+  - actor registry foundation
+  - governed actor-thread-pool execution context
+  - in-actor governance enforcement and preparation
+  - per-actor serialization, bounded concurrency, and queue drain
+  - actor-system panel query and persistence
+  - workflow actor-origin metadata
+  - supervision action, restart, resume, and recommended recovery
+  - direct conversation runtime actor-state persistence
+  - runtime actor-state persistence across environment save/load
+- `./bin/run-actor-system-performance`: passed
+  - actor dispatch latency: `avg=0.12 ms`, `min=0.05 ms`, `max=0.78 ms`, `samples=50`
+  - actor queue throughput: `7348.62 jobs/sec` over `100` jobs in `13.61 ms`
+  - multi-actor throughput: `2754.44 jobs/sec` across `4` actors and `100` jobs in `36.31 ms`
+- `./bin/sbcl-agent doctor`: passed
+
 ## Current Test Architecture
 
 The repository still relies heavily on `tests/smoke.lisp` as the largest single test file, but the test program is no longer just one undifferentiated smoke harness.
@@ -47,6 +87,9 @@ The current test program now includes:
 - JSON and Markdown result reporting
 - evidence-index generation for the current test program
 - the broader suite in `tests/smoke.lisp`, `tests/service-contracts.lisp`, `tests/retrieval.lisp`, `tests/evals.lisp`, and support files
+- dedicated concurrency validation in `tests/concurrency.lisp`
+- dedicated actor-system validation in `tests/actor-system.lisp`
+- dedicated benchmark coverage in `tests/performance.lisp`
 
 The smoke suite still contains a large mixed body of tests covering:
 
@@ -191,7 +234,7 @@ The product objectives in [Objectives]({{ '/objectives.html' | relative_url }}) 
 | Keep artifacts and workflow evidence visible through mutating work | artifact persistence, runtime reload artifact tests, validation and reconciliation artifact tests | Moderate to strong |
 | Reconcile image-only work back to source truth | reconciliation shell tests and image-only outcome tests | Strong |
 | Persist sessions and environments across restarts | session save/load, environment persistence, tail rebuild, interruption normalization | Strong |
-| Use agentic or resident actor workflows | not yet implemented as a first-class actor system | Not applicable yet |
+| Use actor-mediated or resident workflow execution | dedicated actor-system regression and performance suites plus actor-runtime coverage in the concurrency suite | Strong |
 | Treat the environment as a computational habitat rather than only a shell | indirectly covered through environment, thread, work-item, and artifact tests | Moderate |
 
 ### Assessment
@@ -206,24 +249,41 @@ This is the weakest part of the current quality posture.
 
 - a manually runnable end-to-end baseline via `env time -p ./bin/run-tests`
 - a dedicated performance runner via `./bin/run-performance`
+- a dedicated concurrency performance runner via `./bin/run-concurrency-performance`
+- a dedicated actor-system performance runner via `./bin/run-actor-system-performance`
 - optional environment-variable budgets for the first benchmark set:
   - `SBCL_AGENT_PERF_MAX_SAY_MS`
   - `SBCL_AGENT_PERF_MAX_THREAD_DETAIL_MS`
   - `SBCL_AGENT_PERF_MAX_TURN_DETAIL_MS`
+- default enforced budgets for concurrency benchmarks including:
+  - `SBCL_AGENT_PERF_MAX_CONCURRENCY_CORE_DISPATCH_MS`
+  - `SBCL_AGENT_PERF_MAX_RUNTIME_EVAL_READ_MS`
+  - `SBCL_AGENT_PERF_MAX_ACTOR_DISPATCH_MS`
+  - `SBCL_AGENT_PERF_MAX_MIXED_LOAD_READ_MS`
+  - `SBCL_AGENT_PERF_MAX_MIXED_LOAD_ACTOR_DISPATCH_MS`
 - a persisted benchmark report at `tmp/performance/latest.sexp`
 - larger benchmark workloads for detail rendering and persistence scaling
 - CI enforcement via `.github/workflows/ci.yml`
 - a smoke suite whose total runtime is currently acceptable on this machine
+- benchmark coverage for:
+  - concurrency-core dispatch latency
+  - runtime eval read latency
+  - actor dispatch latency
+  - actor queue throughput
+  - mixed read/write/actor contention
+  - multi-actor throughput
+  - actor-system panel latency
 
 ### What Does Not Exist Yet
 
 - no regression thresholds in CI for suite runtime
 - no throughput benchmarks for streaming turns
-- no concurrency benchmarks for worker pools or multi-thread workloads
+- no sustained-duration actor or concurrency stress windows beyond the current short batch baselines
+- no broader end-user workload replay benchmarks that combine desktop, conversation, actor, and governance paths in one long run
 
 ### Assessment
 
-Performance coverage is no longer purely informal. The repository now has a dedicated benchmark runner, larger benchmark workloads, persisted reports, and CI-enforced latency budgets for the first benchmark set. It still lacks concurrency coverage, streaming throughput coverage, and richer workload realism.
+Performance coverage is no longer purely informal. The repository now has general, concurrency-specific, and actor-system-specific benchmark runners, persisted reports, and enforced latency budgets on the concurrency path. The current baseline also exposed a real issue: the mixed-load actor-dispatch budget is presently failing by a small margin on this machine. The remaining gaps are sustained load realism, streaming throughput, and broader end-user workload replay.
 
 ## Reliability Notes
 

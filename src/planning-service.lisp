@@ -618,11 +618,7 @@
                                 :orchestration-list-query
                                 :workflow/orchestration-list)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read orchestration list."
-                                    "workflow/orchestration-list"
-                                    :authority :operator
-                                    :payload '()))
+     (query-orchestration-list-service session))
    :workflow/orchestration-list
    :orchestration-list-query))
 
@@ -646,11 +642,7 @@
                                 :orchestration-inbox-query
                                 :workflow/orchestration-inbox)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read orchestration inbox."
-                                    "workflow/orchestration-inbox"
-                                    :authority :operator
-                                    :payload '()))
+     (query-orchestration-inbox-service session))
    :workflow/orchestration-inbox
    :orchestration-inbox-query))
 
@@ -697,13 +689,10 @@
                                                   (when workflow-record-id (list :workflow-record-id workflow-record-id))
                                                   (when work-item-id (list :work-item-id work-item-id))))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read orchestration focus."
-                                    "workflow/orchestration-focus"
-                                    :authority :operator
-                                    :payload (append (when plan-id (list :plan-id plan-id))
-                                                     (when workflow-record-id (list :workflow-record-id workflow-record-id))
-                                                     (when work-item-id (list :work-item-id work-item-id)))))
+     (query-orchestration-focus-service session
+                                        :plan-id plan-id
+                                        :workflow-record-id workflow-record-id
+                                        :work-item-id work-item-id))
    :workflow/orchestration-focus
    :orchestration-focus-query
    :work-item-id work-item-id
@@ -741,11 +730,7 @@
                                 :active-plan-query
                                 :workflow/active-plan)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read active plan."
-                                    "workflow/active-plan"
-                                    :authority :operator
-                                    :payload '()))
+     (query-active-plan-service session))
    :workflow/active-plan
    :active-plan-query))
 
@@ -775,11 +760,7 @@
                                 :plan-id plan-id
                                 :metadata (when plan-id (list :plan-id plan-id)))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read plan-linked workflow."
-                                    "workflow/plan-linked-workflow"
-                                    :authority :operator
-                                    :payload (when plan-id (list :plan-id plan-id))))
+     (query-plan-linked-workflow-service session plan-id))
    :workflow/plan-linked-workflow
    :plan-linked-workflow-query
    :metadata (when plan-id (list :plan-id plan-id))))
@@ -805,11 +786,7 @@
                                 :plan-id plan-id
                                 :metadata (when plan-id (list :plan-id plan-id)))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read orchestration snapshot."
-                                    "workflow/orchestration-snapshot"
-                                    :authority :operator
-                                    :payload (when plan-id (list :plan-id plan-id))))
+     (query-orchestration-snapshot-service session plan-id))
    :workflow/orchestration-snapshot
    :orchestration-snapshot-query
    :metadata (when plan-id (list :plan-id plan-id))))
@@ -835,11 +812,7 @@
                                 :plan-id plan-id
                                 :metadata (when plan-id (list :plan-id plan-id)))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read plan verification summary."
-                                    "workflow/plan-verification"
-                                    :authority :operator
-                                    :payload (when plan-id (list :plan-id plan-id))))
+     (query-plan-verification-service session plan-id))
    :workflow/plan-verification
    :plan-verification-query
    :metadata (when plan-id (list :plan-id plan-id))))

@@ -16,6 +16,12 @@ description: Why Common Lisp and SBCL are well suited for sbcl-agent.
 - the live runtime can be inspected and mutated from the same substrate
 - conversation and workflow layers still need to be explicit and governable
 
+It is also well-suited to a self-hosted introspective environment runtime:
+
+- the agent executes inside the same image it is inspecting
+- the operator can inspect the same packages, symbols, objects, and dynamic state the agent sees
+- runtime and workflow continuity can remain native objects rather than external projections
+
 ## Core Advantages
 
 ### 1. Language, runtime, and operator surface align
@@ -57,12 +63,28 @@ The project therefore targets SBCL intentionally rather than trying to be portab
 
 ## Why This Matters For The Current Architecture
 
-The current refactor is moving `sbcl-agent` toward two interaction styles on one runtime:
+The current architecture now uses one runtime for several interaction styles:
 
 - REPL mode for direct request-response work
 - conversation mode for persistent thread-based interaction
+- actor-mode execution for message-driven workflow
+- execution services for structured invoke / inspect / control
 
-Common Lisp is a good fit for that because the conversation layer can stay an explicit Lisp-managed subsystem rather than a thin text shell over opaque runtime behavior.
+Common Lisp is a good fit for that because these layers can stay explicit Lisp-managed subsystems rather than thin shells over opaque runtime behavior.
+
+## Introspective Environment Runtime
+
+The runtime is not just “where the code executes.” It is the environment the system reasons about.
+
+That environment includes:
+
+- loaded systems and components
+- packages, symbols, and bindings
+- classes, generic functions, methods, and dispatch structure
+- durable conversation, workflow, approval, incident, and artifact records
+- actor-runtime and execution state
+
+This is why the desktop Browser, the Listener, the Conversation workspace, and the actor/governance surfaces can all be peers over the same live environment.
 
 ## The Cost Of This Power
 
@@ -88,7 +110,9 @@ That is why `sbcl-agent` is not just "Common Lisp plus a model." The runtime cho
 - explicit capability gates
 - work-items and workflow records
 - replay and reconciliation
-- a conversation runtime that is becoming explicit rather than transcript-only
+- a conversation runtime that is explicit rather than transcript-only
+- a shared concurrency and execution substrate
+- actor-owned governance and effect handling
 
 ## What Success Looks Like
 

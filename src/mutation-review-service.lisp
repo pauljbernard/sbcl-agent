@@ -92,9 +92,9 @@
   (let* ((turn (getf review :turn))
          (governance (getf review :governance))
          (incidents (getf review :incidents)))
-    (kernel-plist-put
-     (kernel-plist-put
-      (kernel-plist-put review
+    (plist-put
+     (plist-put
+      (plist-put review
                         :turn
                         (append turn
                                 (list :execution-surface

@@ -23,6 +23,28 @@
   trace-context
   gaps)
 
+(declaim (notinline retrieval-dossier-phase
+                    retrieval-dossier-intent
+                    retrieval-dossier-alignment-intent-context
+                    retrieval-dossier-plan
+                    retrieval-dossier-ranking
+                    retrieval-dossier-decisive-context-core
+                    retrieval-dossier-observed-consequences
+                    retrieval-dossier-conversation-context
+                    retrieval-dossier-runtime-context
+                    retrieval-dossier-telemetry-context
+                    retrieval-dossier-workflow-context
+                    retrieval-dossier-incident-context
+                    retrieval-dossier-artifact-context
+                    retrieval-dossier-environment-context
+                    retrieval-dossier-console-context
+                    retrieval-dossier-diagnostic-context
+                    retrieval-dossier-testing-context
+                    retrieval-dossier-project-context
+                    retrieval-dossier-source-context
+                    retrieval-dossier-trace-context
+                    retrieval-dossier-gaps))
+
 (defun decisive-context-base-score (kind)
   (case kind
     (:blocker 100)
@@ -1300,8 +1322,7 @@
                                    (query-runtime-source-image-divergence-service session symbol-name :package package-name)))
          (definition-data (and definition-response (service-response-data definition-response)))
          (callers-data (and callers-response (service-response-data callers-response)))
-         (methods-data (and methods-response (service-response-data methods-response)))
-         (divergence-data (and divergence-response (service-response-data divergence-response))))
+         (methods-data (and methods-response (service-response-data methods-response))))
     (list :workspace-root (getf environment-summary :storage-root)
           :artifact-summary (getf environment-summary :artifact-summary)
           :package (getf runtime-summary :package)

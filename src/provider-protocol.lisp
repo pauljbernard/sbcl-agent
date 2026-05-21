@@ -97,14 +97,25 @@
 (defun assistant-response->string (response)
   (assistant-response-message response))
 
-(defun send-prompt (provider prompt &optional session &key thread turn (operator-mode :repl-bridge))
+(defun provider-session-and-options (arguments)
+  (if (and arguments
+           (not (keywordp (first arguments))))
+      (values (first arguments) (rest arguments))
+      (values nil arguments)))
+
+(defun send-prompt (provider prompt &rest arguments)
+  (multiple-value-bind (session options)
+      (provider-session-and-options arguments)
+    (destructuring-bind (&key thread turn (operator-mode :repl-bridge)
+                              &allow-other-keys)
+        options
   (send-request provider
                 (make-provider-request-from-session prompt
                                                    session
                                                    :thread thread
                                                    :turn turn
                                                    :operator-mode operator-mode
-                                                   :stream-p nil)))
+                                                   :stream-p nil)))))
 
 (defun send-provider-request (provider request)
   (send-request provider request))
@@ -148,8 +159,12 @@
      :actions actions
      :metadata metadata)))
 
-(defun stream-prompt (provider prompt event-handler &optional session
-                         &key thread turn (operator-mode :repl-bridge))
+(defun stream-prompt (provider prompt event-handler &rest arguments)
+  (multiple-value-bind (session options)
+      (provider-session-and-options arguments)
+    (destructuring-bind (&key thread turn (operator-mode :repl-bridge)
+                              &allow-other-keys)
+        options
   (stream-request provider
                   (make-provider-request-from-session prompt
                                                      session
@@ -157,7 +172,7 @@
                                                      :turn turn
                                                      :operator-mode operator-mode
                                                      :stream-p t)
-                  event-handler))
+                  event-handler))))
 
 (defun stream-provider-request (provider request event-handler)
   (stream-request provider request event-handler))
@@ -341,33 +356,51 @@
          (unless (keywordp tool-id)
            (error "Assistant tool action requires keyword tool id, got ~S" tool-id))
          (service-response-data
-          (command-kernel-invoke-service session
-                                         (format nil "Execute staged assistant tool action ~A." tool-id)
-                                         (kernel-tool-capability-id tool-id)
-                                         :payload (list* :tool-id tool-id (or arguments '()))
-                                         :context (list :thread-id (and thread (thread-id thread))
-                                                        :turn-id (and turn (turn-id turn))
-                                                        :operation operation)))))
+          (command-invoke-tool-service session
+                                       tool-id
+                                       (or arguments '())
+                                       :thread thread
+                                       :turn turn
+                                       :operation operation))))
       (:PATCH
-       (service-response-data
-        (command-kernel-invoke-service session
-                                       "Execute a staged assistant patch action."
-                                       :workspace/patch
-                                       :payload (assistant-action-payload action)
-                                       :context (list :thread-id (and thread (thread-id thread))
-                                                      :turn-id (and turn (turn-id turn))
-                                                      :operation operation))))
+       (let* ((payload (assistant-action-payload action))
+              (operations (cond
+                            ((option-present-p payload :operations)
+                             (getf payload :operations))
+                            ((option-present-p payload :OPERATIONS)
+                             (getf payload :OPERATIONS))
+                            (t payload))))
+         (service-response-data
+          (command-desktop-task-apply-patch-service
+           session
+           operations
+           :metadata (append (list :source :assistant-action-patch)
+                             (when operation
+                               (list :operation operation)))
+           :register-record-p t
+           :async-p nil
+           :thread-id (and thread (thread-id thread))
+           :turn-id (and turn (turn-id turn))))))
       (:EVAL
        (let ((payload (assistant-action-payload action)))
-         (service-response-data
-          (command-kernel-invoke-service session
-                                         "Execute a staged assistant runtime eval action."
-                                         :runtime/eval
-                                         :payload (list :form (parse-eval-action-form payload)
-                                                        :mutating (mutating-eval-action-p action))
-                                         :context (list :thread-id (and thread (thread-id thread))
-                                                        :turn-id (and turn (turn-id turn))
-                                                        :operation operation)))))
+         (if (mutating-eval-action-p action)
+             (service-response-data
+              (command-desktop-task-runtime-eval-service
+               session
+               (parse-eval-action-form payload)
+               :mutating t
+               :metadata (append (list :source :assistant-action-runtime-eval
+                                       :mutating t)
+                                 (when operation
+                                   (list :operation operation)))
+               :register-record-p t
+               :async-p nil
+               :thread-id (and thread (thread-id thread))
+               :turn-id (and turn (turn-id turn))))
+             (service-response-data
+              (command-runtime-eval-service session
+                                            (parse-eval-action-form payload)
+                                            :mutating nil)))))
       (t
        (error "Unsupported assistant action type ~S" (assistant-action-type action))))))
 

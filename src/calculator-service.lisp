@@ -111,10 +111,7 @@
                                     :summary
                                     :calculator/summary)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read calculator session summary."
-                                    "calculator/summary"
-                                    :authority :environment))
+     (query-calculator-summary-service session))
    :calculator/summary
    :summary))
 
@@ -129,7 +126,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -178,11 +175,7 @@
                                     :calculator/set-expression
                                     :payload (list :expression expression))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Set calculator expression to ~S." expression)
-                                    "calculator/set-expression"
-                                    :authority :environment
-                                    :payload (list :expression expression)))
+     (perform-calculator-set-expression-service session expression))
    :calculator/set-expression
    :set-expression
    :metadata (list :expression expression)))
@@ -204,11 +197,7 @@
                                     :calculator/append-token
                                     :payload (list :token token))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Append calculator token ~S." token)
-                                    "calculator/append-token"
-                                    :authority :environment
-                                    :payload (list :token token)))
+     (perform-calculator-append-token-service session token))
    :calculator/append-token
    :append-token
    :metadata (list :token token)))
@@ -230,10 +219,7 @@
                                     :backspace
                                     :calculator/backspace)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Backspace calculator expression."
-                                    "calculator/backspace"
-                                    :authority :environment))
+     (perform-calculator-backspace-service session))
    :calculator/backspace
    :backspace))
 
@@ -250,10 +236,7 @@
                                     :clear
                                     :calculator/clear)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Clear calculator state."
-                                    "calculator/clear"
-                                    :authority :environment))
+     (perform-calculator-clear-service session))
    :calculator/clear
    :clear))
 
@@ -270,11 +253,7 @@
                                     :calculator/set-mode
                                     :payload (list :mode mode))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Set calculator mode to ~A." mode)
-                                    "calculator/set-mode"
-                                    :authority :environment
-                                    :payload (list :mode mode)))
+     (perform-calculator-set-mode-service session mode))
    :calculator/set-mode
    :set-mode
    :metadata (list :mode mode)))
@@ -292,11 +271,7 @@
                                     :calculator/set-base
                                     :payload (list :base base))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Set calculator base to ~A." base)
-                                    "calculator/set-base"
-                                    :authority :environment
-                                    :payload (list :base base)))
+     (perform-calculator-set-base-service session base))
    :calculator/set-base
    :set-base
    :metadata (list :base base)))
@@ -314,11 +289,7 @@
                                     :calculator/set-word-size
                                     :payload (list :word-size word-size))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Set calculator word size to ~A." word-size)
-                                    "calculator/set-word-size"
-                                    :authority :environment
-                                    :payload (list :word-size word-size)))
+     (perform-calculator-set-word-size-service session word-size))
    :calculator/set-word-size
    :set-word-size
    :metadata (list :word-size word-size)))
@@ -336,11 +307,7 @@
                                     :calculator/set-angle-unit
                                     :payload (list :angle-unit angle-unit))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Set calculator angle unit to ~A." angle-unit)
-                                    "calculator/set-angle-unit"
-                                    :authority :environment
-                                    :payload (list :angle-unit angle-unit)))
+     (perform-calculator-set-angle-unit-service session angle-unit))
    :calculator/set-angle-unit
    :set-angle-unit
    :metadata (list :angle-unit angle-unit)))
@@ -369,7 +336,7 @@
                                      :angle-unit resolved-angle-unit
                                      :latest-result result
                                      :history next-history)
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response
       :calculator
       :evaluate
@@ -400,15 +367,12 @@
                                                    :word-size word-size
                                                    :angle-unit angle-unit))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Evaluate calculator expression ~S." expression)
-                                    "calculator/evaluate"
-                                    :authority :environment
-                                    :payload (list :expression expression
-                                                   :mode mode
-                                                   :base base
-                                                   :word-size word-size
-                                                   :angle-unit angle-unit)))
+     (perform-calculator-evaluate-service session
+                                          expression
+                                          :mode mode
+                                          :base base
+                                          :word-size word-size
+                                          :angle-unit angle-unit))
    :calculator/evaluate
    :evaluate
    :metadata (list :expression expression

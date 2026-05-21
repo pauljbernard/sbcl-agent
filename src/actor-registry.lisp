@@ -1,18 +1,18 @@
-(in-package #:sbcl-agent)
+(in-package #:sbcl-agent.system.registry)
 
 (defun actor-address-equal-p (left right)
   (and left
        right
-       (string= (actor-address-id left)
-                (actor-address-id right))))
+       (string= (sbcl-agent::actor-address-id left)
+                (sbcl-agent::actor-address-id right))))
 
 (defun actor-definition-address (definition)
-  (make-actor-address
-   :id (actor-definition-id definition)
+  (sbcl-agent::make-actor-address
+   :id (sbcl-agent::actor-definition-id definition)
    :kind :internal
-   :role (actor-definition-role definition)
-   :display-name (actor-definition-display-name definition)
-   :metadata (copy-tree (or (actor-definition-metadata definition) '()))))
+   :role (sbcl-agent::actor-definition-role definition)
+   :display-name (sbcl-agent::actor-definition-display-name definition)
+   :metadata (copy-tree (or (sbcl-agent::actor-definition-metadata definition) '()))))
 
 (defun make-default-actor-definition (role &key scope display-name parent-actor-id
                                              capabilities llm-profile
@@ -31,14 +31,14 @@
                                              (mailbox-mode :serial-per-actor)
                                              (max-concurrency 1)
                                              metadata)
-  (let* ((address (make-standard-actor-address role
-                                               :scope scope
-                                               :display-name display-name))
-         (actor-id (actor-address-id address)))
-    (make-actor-definition
+  (let* ((address (sbcl-agent::make-standard-actor-address role
+                                                           :scope scope
+                                                           :display-name display-name))
+         (actor-id (sbcl-agent::actor-address-id address)))
+    (sbcl-agent::make-actor-definition
      :id actor-id
-     :role (actor-address-role address)
-     :display-name (actor-address-display-name address)
+     :role (sbcl-agent::actor-address-role address)
+     :display-name (sbcl-agent::actor-address-display-name address)
      :parent-actor-id parent-actor-id
      :inbox-id (or shared-inbox-id
                    (format nil "~A/inbox" actor-id))
@@ -47,14 +47,14 @@
      :llm-profile llm-profile
      :capabilities capabilities
      :allocation-strategy
-     (make-actor-allocation-strategy
+     (sbcl-agent::make-actor-allocation-strategy
       :type allocation-type
       :shared-inbox-id shared-inbox-id
       :pool-size pool-size
       :consumption-policy consumption-policy
       :metadata (copy-tree (or metadata '())))
      :supervision-policy
-     (make-actor-supervision-policy
+     (sbcl-agent::make-actor-supervision-policy
       :strategy supervision-strategy
       :max-restarts max-restarts
       :restart-window-seconds restart-window-seconds
@@ -62,21 +62,21 @@
       :escalation-target escalation-target
       :metadata (copy-tree (or metadata '())))
      :execution-policy
-     (make-actor-execution-policy
+     (sbcl-agent::make-actor-execution-policy
       :model execution-model
       :thread-name thread-name
       :mailbox-mode mailbox-mode
       :max-concurrency max-concurrency
       :metadata (copy-tree (or metadata '())))
-     :metadata (append (copy-list (actor-address-metadata address))
+     :metadata (append (copy-list (sbcl-agent::actor-address-metadata address))
                        (copy-tree (or metadata '()))))))
 
 (defun actor-registry-core-definitions (session)
-  (let* ((session-id (agent-session-id session))
-         (system-id (make-actor-address-id :actor-system))
-         (environment (session-bound-environment session)))
+  (let* ((session-id (sbcl-agent::agent-session-id session))
+         (system-id (sbcl-agent::make-actor-address-id :actor-system))
+         (environment (sbcl-agent::session-bound-environment session)))
     (list
-     (make-actor-definition
+     (sbcl-agent::make-actor-definition
       :id system-id
       :role :actor-system
       :display-name "Actor System"
@@ -87,25 +87,26 @@
       :llm-profile nil
       :capabilities '(:registry :routing :supervision)
       :allocation-strategy
-      (make-actor-allocation-strategy
+      (sbcl-agent::make-actor-allocation-strategy
        :type :singleton
        :shared-inbox-id (format nil "~A/inbox" system-id)
        :pool-size 1
        :consumption-policy :sequential)
       :supervision-policy
-      (make-actor-supervision-policy
+      (sbcl-agent::make-actor-supervision-policy
        :strategy :root
        :max-restarts 0
        :restart-window-seconds 0
        :on-failure :quarantine
        :escalation-target nil)
       :execution-policy
-      (make-actor-execution-policy
+      (sbcl-agent::make-actor-execution-policy
        :model :coordinator-thread
        :thread-name "actor-system-root"
        :mailbox-mode :serial-per-actor
        :max-concurrency 1)
-      :metadata '(:actor-class :system-supervisor))
+      :metadata '(:actor-class :system-supervisor
+                  :auto-supervision-escalation-p t))
      (make-default-actor-definition :context-chat
                                     :scope session-id
                                     :display-name "Context Chat"
@@ -129,7 +130,8 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/governance"
-                                    :metadata '(:actor-class :policy-gateway))
+                                    :metadata '(:actor-class :policy-gateway
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :workflow
                                     :scope session-id
                                     :display-name "Workflow Actor"
@@ -146,7 +148,8 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/workflow"
-                                    :metadata '(:actor-class :workflow-controller))
+                                    :metadata '(:actor-class :workflow-controller
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :project
                                     :scope session-id
                                     :display-name "Project Actor"
@@ -160,7 +163,8 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/project"
-                                    :metadata '(:actor-class :project-controller))
+                                    :metadata '(:actor-class :project-controller
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :incident
                                     :scope session-id
                                     :display-name "Incident Actor"
@@ -174,7 +178,8 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/incident"
-                                    :metadata '(:actor-class :incident-controller))
+                                    :metadata '(:actor-class :incident-controller
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :runtime
                                     :scope session-id
                                     :display-name "Runtime Actor"
@@ -223,7 +228,8 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/package-management"
-                                    :metadata '(:actor-class :environment-gateway))
+                                    :metadata '(:actor-class :environment-gateway
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :memory
                                     :scope session-id
                                     :display-name "Memory Actor"
@@ -271,10 +277,11 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/desktop-task-admin"
-                                    :metadata '(:actor-class :governance-gateway))
+                                    :metadata '(:actor-class :governance-gateway
+                                                :auto-supervision-escalation-p t))
      (make-default-actor-definition :environment
                                     :scope (or (and environment
-                                                    (environment-id environment))
+                                                    (sbcl-agent::environment-id environment))
                                                session-id)
                                     :display-name "Environment Actor"
                                     :parent-actor-id system-id
@@ -284,15 +291,17 @@
                                     :escalation-target system-id
                                     :execution-model :thread-pool-worker
                                     :thread-name "actor-pool/environment"
-                                    :metadata '(:actor-class :environment-gateway)))))
+                                    :metadata '(:actor-class :environment-gateway
+                                                :auto-supervision-escalation-p t)))))
 
 (defun actor-registry-desktop-task-definitions (session)
+  (declare (ignore session))
   (let ((definitions '())
-        (system-id (make-actor-address-id :actor-system)))
-    (dolist (manifest (list-registered-desktop-task-manifests :discoverable-only-p nil))
-      (let* ((target (desktop-task-manifest-target manifest))
-             (backend-ref (desktop-task-manifest-backend-ref manifest))
-             (backend-kind (desktop-task-manifest-backend-kind manifest))
+        (system-id (sbcl-agent::make-actor-address-id :actor-system)))
+    (dolist (manifest (sbcl-agent::list-registered-desktop-task-manifests :discoverable-only-p nil))
+      (let* ((target (sbcl-agent::desktop-task-manifest-target manifest))
+             (backend-ref (sbcl-agent::desktop-task-manifest-backend-ref manifest))
+             (backend-kind (sbcl-agent::desktop-task-manifest-backend-kind manifest))
              (core-singleton-target-p
              (and (eq backend-kind :internal)
                     (member target '(:context-chat :governance :workflow :project :incident :runtime :editor :calculator :package-management :memory :intent :shell :desktop-task-admin :environment)
@@ -305,12 +314,12 @@
                             (or backend-ref "default"))))
              (definition
                (make-default-actor-definition
-                target
-                :scope (and backend-ref (princ-to-string backend-ref))
-                :display-name (or (desktop-task-manifest-description manifest)
+               target
+               :scope (and backend-ref (princ-to-string backend-ref))
+                :display-name (or (sbcl-agent::desktop-task-manifest-description manifest)
                                   (format nil "~A Actor" target))
                 :parent-actor-id system-id
-                :capabilities (list (desktop-task-manifest-capability manifest))
+                :capabilities (list (sbcl-agent::desktop-task-manifest-capability manifest))
                 :allocation-type (if pooled-p :pool :singleton)
                 :shared-inbox-id shared-inbox-id
                 :pool-size (and pooled-p 4)
@@ -323,7 +332,7 @@
                 :mailbox-mode :serial-per-actor
                 :max-concurrency 1
                 :metadata (list :actor-class :capability-server
-                                :manifest-id (desktop-task-manifest-id manifest)
+                                :manifest-id (sbcl-agent::desktop-task-manifest-id manifest)
                                 :backend-kind backend-kind
                                 :backend-ref backend-ref))))
         (unless core-singleton-target-p
@@ -336,51 +345,51 @@
     (append (reverse (actor-registry-desktop-task-definitions session))
             (reverse (actor-registry-core-definitions session)))
     :test (lambda (left right)
-            (string= (actor-definition-id left)
-                     (actor-definition-id right))))))
+            (string= (sbcl-agent::actor-definition-id left)
+                     (sbcl-agent::actor-definition-id right))))))
 
 (defun actor-system-registry-definitions (session)
   (actor-registry-definitions session))
 
 (defun ensure-environment-actor-registry-for-session (session)
-  (let ((environment (session-bound-environment session)))
+  (let ((environment (sbcl-agent::session-bound-environment session)))
     (when environment
-      (setf (environment-agent-registry environment)
+      (setf (sbcl-agent::environment-agent-registry environment)
             (actor-registry-definitions session))))
   session)
 
 (defun actor-registry-definition-by-id (session actor-id)
   (find actor-id
         (actor-registry-definitions session)
-        :key #'actor-definition-id
+        :key #'sbcl-agent::actor-definition-id
         :test #'string=))
 
 (defun actor-registry-definition-by-role (session role)
   (find role
         (actor-registry-definitions session)
-        :key #'actor-definition-role
+        :key #'sbcl-agent::actor-definition-role
         :test #'eq))
 
 (defun actor-registry-definitions-by-capability (session capability)
   (remove-if-not
    (lambda (definition)
      (member capability
-             (actor-definition-capabilities definition)
+             (sbcl-agent::actor-definition-capabilities definition)
              :test #'eq))
    (actor-registry-definitions session)))
 
 (defun find-actor-definition-for-address (session actor-address)
-  (let* ((environment (session-bound-environment session))
+  (let* ((environment (sbcl-agent::session-bound-environment session))
          (definitions (or (and environment
-                               (environment-agent-registry environment))
+                               (sbcl-agent::environment-agent-registry environment))
                           (actor-registry-definitions session))))
-    (or (find (actor-address-id actor-address)
+    (or (find (sbcl-agent::actor-address-id actor-address)
               definitions
-              :key #'actor-definition-id
+              :key #'sbcl-agent::actor-definition-id
               :test #'string=)
-        (find (actor-address-role actor-address)
+        (find (sbcl-agent::actor-address-role actor-address)
               definitions
-              :key #'actor-definition-role
+              :key #'sbcl-agent::actor-definition-role
               :test #'eq))))
 
 (defun canonical-actor-address-for-session (session actor-address)

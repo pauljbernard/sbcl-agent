@@ -23,7 +23,7 @@ The newer roadmap narrows the role of this document: conversation is now one nat
 
 ## Conversational Context Architecture
 
-The conversation subsystem is no longer best described as “chat plus transcript.” It is now routed through the actor system and governed kernel.
+The conversation subsystem is no longer best described as “chat plus transcript.” It is now routed through the actor system, shaped by the planning-context packet, and executed through the shared execution services with actor-owned governance.
 
 ```mermaid
 flowchart LR
@@ -34,7 +34,7 @@ flowchart LR
     Gov["GovernanceActor(session)"]
     Runtime["RuntimeActor(session)"]
     Editor["EditorActor(session)"]
-    Kernel["invoke / inspect / control"]
+    Core["invoke / inspect / control"]
     State["environment state / runtime state / workflow state"]
 
     UI --> Chat
@@ -43,9 +43,9 @@ flowchart LR
     Chat --> Gov
     Gov --> Runtime
     Gov --> Editor
-    Runtime --> Kernel
-    Editor --> Kernel
-    Kernel --> State
+    Runtime --> Core
+    Editor --> Core
+    Core --> State
     State --> Planner
     Planner --> Gov
     Runtime --> Threads
@@ -67,6 +67,7 @@ The actor-system refactor adds one more practical rule:
 
 - conversation owns interaction continuity through `ContextChatActor`, not through whichever renderer thread happens to be selected
 - the planning frame for a turn is authoritative environment context, not a renderer-local chat heuristic
+- governance and approval posture must be visible in the turn flow before mutation, not reconstructed afterward
 
 ## What Exists Today
 
@@ -91,6 +92,7 @@ Present in code now:
 - compact environment-backed provider context, so provider requests now carry environment refs instead of only flat session summaries
 - canonical planning-context packet construction with task frame, authority state, decisive evidence, uncertainty, strategy, and optional support
 - explicit Context Chat project targeting so a conversation can be scoped to zero, one, or many projects without relying only on inference
+- actor-governed runtime, editor, environment, package-management, project, workflow, and platform mutation paths that can all feed results back into conversation continuity
 - validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence appears in the conversational artifact stream instead of only inside workflow records
 - environment-first persistence where conversation records, workflow records, incident state, task/worker state, staged actions, operator plan, and policy grants are rehydrated from environment-owned domains instead of a duplicated serialized session blob
 - a minimal compatibility-session payload that now acts primarily as a session identity shim rather than as the primary durable source of runtime truth
@@ -132,6 +134,8 @@ That can remain one ergonomic shell handle while still separating internal owner
 ## Conversation Domain Objects
 
 The conversation layer is built around durable records instead of transcript-only history.
+
+It is also one of the places where the self-hosted environment model is most visible: a conversation turn can link directly to runtime entities, approvals, incidents, work-items, validation artifacts, and actor-flow state inside the same environment.
 
 ### Thread
 

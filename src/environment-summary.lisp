@@ -142,9 +142,19 @@
                                  (agent-session-cwd sessionish))))
     (when (and working-directory
                (fboundp 'sbcl-agent.bootstrap:package-management-summary))
-      (sbcl-agent.bootstrap:package-management-summary
-       :project-dir working-directory
-       :working-directory working-directory))))
+      (handler-case
+          (sb-ext:with-timeout 1
+            (sbcl-agent.bootstrap:package-management-summary
+             :project-dir working-directory
+             :working-directory working-directory))
+        (sb-ext:timeout ()
+          (list :status :timeout
+                :qlot-available-p nil
+                :managed-source-registry-entry-count 0))
+        (error ()
+          (list :status :unavailable
+                :qlot-available-p nil
+                :managed-source-registry-entry-count 0))))))
 
 (defun capability-inventory-anomalies (runtime-summary active-profile
                                         testing-harnesses mcp-server-configs
@@ -226,7 +236,7 @@
 (defun environment-capability-inventory-summary (&optional environment)
   (let* ((active-environment (ensure-environment environment))
          (runtime-summary (environment-runtime-domain-summary active-environment))
-         (policy-state (or (environment-policy-state active-environment) '()))
+         (policy-state (or (environment-policy-state-snapshot active-environment) '()))
          (provider-profile (environment-provider-profile-summary active-environment))
          (active-provider-profile (or (getf provider-profile :active-profile)
                                       (find (getf provider-profile :active-profile-name)
@@ -343,7 +353,7 @@
                                        session
                                        (compute-reconciliation-decision session))))
     (let* ((runtime-state (environment-runtime-state active-environment))
-           (agent-state (environment-agent-state active-environment))
+           (agent-state (environment-agent-state-snapshot active-environment))
            (root-summary (environment-summaries active-environment))
            (conversation-summary (environment-conversation-domain-summary active-environment))
            (workflow-summary (environment-workflow-domain-summary active-environment))
@@ -370,9 +380,9 @@
                           (length (environment-agent-registry active-environment)))
             :event-count (length (environment-event-log active-environment))
             :runtime-state runtime-summary
-            :runtime-history-count (length (or (and runtime-state
-                                                   (environment-runtime-state-eval-history runtime-state))
-                                              '()))
+            :runtime-history-count (length (if runtime-state
+                                               (environment-runtime-history-snapshot active-environment)
+                                               '()))
             :conversation-state conversation-summary
             :workflow-state workflow-summary
             :agent-state agent-summary

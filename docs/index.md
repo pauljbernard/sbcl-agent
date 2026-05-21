@@ -8,7 +8,7 @@ permalink: /
 description: Documentation landing page for sbcl-agent.
 ---
 
-<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the runtime and persistence substrate, a more traditional governed kernel as the authority boundary, an address-based actor system as the primary execution and workflow substrate, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, policy-based governance is native to the stack, and provider-bound planning now flows through a canonical planning-context packet with explicit authority, capability, project, evidence, and uncertainty sections.</div>
+<div class="callout"><strong>Current status:</strong> sbcl-agent now runs as a layered environment: SBCL/Common Lisp as the introspective runtime and persistence substrate, a shared concurrency and execution core as the handle/queue/worker substrate, an address-based actor system as the primary execution, workflow, and governance layer, and the React Surface desktop as the projection layer. The integrated agent runs inside the same environment it is inspecting and changing, governance is native to actor execution and effect handling, and provider-bound planning now flows through a canonical planning-context packet with explicit authority, capability, project, evidence, and uncertainty sections.</div>
 
 ## Start Here
 
@@ -30,25 +30,25 @@ The current `Surface` desktop host for `sbcl-agent` looks like this:
 
 ## Current Layered Architecture
 
-The current stack is no longer just “shell over kernel.” It is now a shared introspective environment with a distinct actor-system layer between the governed kernel and the React presentation tier.
+The current stack is no longer just “shell over kernel.” It is now a self-hosted introspective environment with a distinct actor-system layer above a shared concurrency and execution substrate.
 
 ```mermaid
 flowchart TB
     React["React Surface Desktop<br/>projection / interaction / operator workflows"]
     Actor["Actor System<br/>registry / inboxes / outboxes / supervision / worker pool"]
-    Kernel["Governed Kernel<br/>invoke / inspect / control / policy / execution records"]
+    Core["Concurrency / Execution Core<br/>invoke / inspect / control / handles / pools / execution records"]
     Runtime["SBCL / Common Lisp<br/>runtime / persistence / introspection / live image"]
 
     React --> Actor
-    Actor --> Kernel
-    Kernel --> Runtime
+    Actor --> Core
+    Core --> Runtime
 ```
 
 <p><img src="{{ '/assets/current-layered-architecture.svg' | relative_url }}" alt="Current layered sbcl-agent architecture" style="display:block;max-width:100%;height:auto;margin:1rem auto;"></p>
 
 ## Actor System Architecture
 
-The actor system is now the primary message-driven capability and workflow substrate above the kernel.
+The actor system is now the primary message-driven capability, workflow, and governance substrate above the shared execution core.
 
 ```mermaid
 flowchart TB
@@ -104,6 +104,34 @@ That packet carries:
 - structured uncertainty, contradictions, and inspection obligations
 - archetype- and risk-aware strategy defaults
 
+Together these documents should be read as the canonical deep references for:
+
+- the actor model
+- the concurrency and execution model
+- the governance model
+- the context integration model
+- the self-hosted introspective environment runtime
+
+## Current Validation Status
+
+The current validation baseline is no longer just one broad smoke run. The implemented system now has dedicated regression and performance suites for both the concurrency layer and the actor system.
+
+Latest documented local baseline during this rebaseline:
+
+- `./bin/sbcl-agent doctor`: passed
+- `./bin/run-concurrency-regression`: passed
+- `./bin/run-actor-system-regression`: passed
+- `./bin/run-actor-system-performance`: passed
+- `./bin/run-concurrency-performance`: one enforced budget currently failing
+  - `MIXED-LOAD-ACTOR-DISPATCH-LATENCY`
+  - observed average: `1.04 ms`
+  - configured default budget: `1.00 ms`
+
+For the full testing and benchmark breakdown, read:
+
+- [Testing Coverage Analysis](https://pauljbernard.github.io/sbcl-agent/testing-coverage-analysis.html)
+- [Validation Strategy](https://pauljbernard.github.io/sbcl-agent/validation-strategy.html)
+
 ## Runtime And Governance Flow
 
 ```mermaid
@@ -113,20 +141,20 @@ sequenceDiagram
     participant Gov as GovernanceActor
     participant Runtime as RuntimeActor
     participant Editor as EditorActor
-    participant Kernel as Governed Kernel
+    participant Core as Execution Services
 
     UI->>Chat: submit user intent
     Chat->>Gov: RequestExecution(message)
 
     alt runtime evaluation
         Gov->>Runtime: AuthorizeRuntimeEvaluation
-        Runtime->>Kernel: invoke(runtime-eval)
-        Kernel-->>Runtime: result / evidence
+        Runtime->>Core: invoke(runtime-eval)
+        Core-->>Runtime: result / evidence
         Runtime-->>Chat: RuntimeReply
     else governed mutation
         Gov->>Editor: AuthorizePendingMutation
-        Editor->>Kernel: invoke(editor-mutation)
-        Kernel-->>Editor: result / evidence
+        Editor->>Core: invoke(editor-mutation)
+        Core-->>Editor: result / evidence
         Editor-->>Chat: MutationApplied
     end
 
@@ -165,7 +193,7 @@ If you are evaluating whether the system is safe or mature enough for your use, 
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/foundation.html"><strong>Foundation</strong>Learn the three-truth model and the environment-first framing.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/architecture.html"><strong>Architecture</strong>Map the conceptual model onto the code that exists today.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/context-engineering.html"><strong>Context Engineering</strong>See how retrieval, authority, capability inventory, project targeting, and uncertainty now shape the planning packet.</a>
-  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/robust-actor-kernel-architecture.html"><strong>Actor Runtime</strong>See the actor-system layer, worker-pool execution model, and kernel authority boundary.</a>
+  <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/robust-actor-kernel-architecture.html"><strong>Actor Runtime</strong>See the actor-system layer, worker-pool execution model, and actor-owned governance boundary over the shared execution substrate.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/actor-system-panel.html"><strong>Actor System Surface</strong>See how the live hierarchy, workflow graph, supervision, and runtime pool are projected to operators.</a>
   <a class="quick-link" href="https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html"><strong>Safety and Risk</strong>Read the system's strengths, weaknesses, and governance model directly.</a>
 </div>
@@ -196,7 +224,7 @@ If your goal is not architectural orientation but immediate use, go directly to:
 - [Streaming Event Model](https://pauljbernard.github.io/sbcl-agent/streaming-event-model.html)
 - [Safety and Risk](https://pauljbernard.github.io/sbcl-agent/safety-and-risk.html)
 
-## Historical Baseline And Current Target
+## Historical Baseline And Target Program
 
 The historical transition is easiest to understand if you look at the older baseline diagram next to the accepted target architecture that now describes the implemented system:
 
@@ -210,8 +238,8 @@ The historical transition is easiest to understand if you look at the older base
 
 <div class="card-grid">
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
-    <div class="card-title">IntentOS Target Architecture</div>
-    <p>The execution-kernel architecture that now serves as the authoritative description of the implemented system: `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers.</p>
+    <div class="card-title">Historical IntentOS Target Architecture</div>
+    <p>The historical target model that compressed the system around `invoke`, `inspect`, `control`, execution handles, compatibility, UX, and platform layers before the current actor-runtime and execution-core implementation was completed.</p>
     <img src="https://pauljbernard.github.io/sbcl-agent/assets/intentos-target-architecture-context-diagram.png" alt="IntentOS target architecture context diagram" style="display: block; width: 100%; height: auto;">
   </a>
 </div>
@@ -227,6 +255,23 @@ The remainder of this front door is reference-heavy material:
 - Common Lisp runtime/reference material
 
 That material is useful, but it should normally come after you understand the basic operating model and the current user surface.
+
+## Canonical vs Historical Docs
+
+Use these as the canonical current architecture references:
+
+- [Architecture](https://pauljbernard.github.io/sbcl-agent/architecture.html)
+- [Actor Runtime, Concurrency, And Governance](https://pauljbernard.github.io/sbcl-agent/robust-actor-kernel-architecture.html)
+- [Context Engineering](https://pauljbernard.github.io/sbcl-agent/context-engineering.html)
+- [Common Lisp as a Runtime](https://pauljbernard.github.io/sbcl-agent/common-lisp-runtime.html)
+- [Conversation Runtime](https://pauljbernard.github.io/sbcl-agent/conversation-architecture.html)
+
+These remain intentionally historical or origin-context pages:
+
+- [Historical Baseline Assessment](https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html)
+- [Historical IntentOS Target Architecture](https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html)
+- [IntentOS Constitution](https://pauljbernard.github.io/sbcl-agent/intentos-constitution.html)
+- [Kernel Invariants](https://pauljbernard.github.io/sbcl-agent/kernel-invariants.html)
 
 ## Documentation Layers
 
@@ -321,19 +366,19 @@ That material is useful, but it should normally come after you understand the ba
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/kernel-invariants.html">
     <div class="card-title">Kernel Invariants</div>
-    <p>The execution-kernel doctrine, three-function API, execution-handle model, and non-bypassable governance rules for IntentOS-oriented refactoring.</p>
+    <p>The historical doctrine behind the `invoke` / `inspect` / `control` compression program, preserved as origin context for the current actor-runtime and execution-service architecture.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/intentos-constitution.html">
     <div class="card-title">IntentOS Constitution</div>
-    <p>The governing product and architecture rules for evolving the current runtime and UX into a minimal, governed execution-kernel operating system.</p>
+    <p>The governing product and architecture rules from the IntentOS transition program, now preserved as origin-context material rather than the canonical description of the implemented system.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/intentos-requirements.html">
     <div class="card-title">IntentOS Requirements</div>
-    <p>The consolidated kernel, governance, UX, compatibility, and platform requirements for the transition to IntentOS.</p>
+    <p>The consolidated execution, governance, UX, compatibility, and platform requirements from the IntentOS transition program, now read alongside the current actor-runtime and execution-core architecture.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/intentos-feature-specifications.html">
     <div class="card-title">IntentOS Feature Specs</div>
-    <p>The required specification discipline for new features so they reinforce the kernel model, governance model, and shell model.</p>
+    <p>The required specification discipline for new features so they reinforce the execution, governance, and shell models that shaped the transition program.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/ux-design-system.html">
     <div class="card-title">UX Design System</div>
@@ -353,15 +398,15 @@ That material is useful, but it should normally come after you understand the ba
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/validation-strategy.html">
     <div class="card-title">Validation Strategy</div>
-    <p>The architecture-level validation plan for proving kernel invariants, execution handles, shell coherence, and compatibility containment.</p>
+    <p>The architecture-level validation plan for proving execution/governance invariants, execution handles, shell coherence, and compatibility containment.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-current-state-gap-analysis.html">
     <div class="card-title">Historical Baseline Assessment</div>
     <p>The older baseline diagram and the accompanying explanation of how that baseline maps to the enhancement and hardening questions that remain after target-architecture closure.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-target-state-architecture.html">
-    <div class="card-title">IntentOS Target Architecture</div>
-    <p>The compressed target model: a governed execution kernel built around invoke, inspect, control, execution handles, compatibility, UX, and platform layers.</p>
+    <div class="card-title">Historical IntentOS Target Architecture</div>
+    <p>The historical target model that drove the execution-architecture program and now serves as origin context for the current actor-runtime and execution-core implementation.</p>
   </a>
   <a class="card" href="https://pauljbernard.github.io/sbcl-agent/agentos-implementation-plan.html">
     <div class="card-title">IntentOS Implementation Plan</div>
@@ -407,7 +452,7 @@ That material is useful, but it should normally come after you understand the ba
 - approval-gated actions, turn resume, session persistence, tasks, and workers
 - work-items, workflow records, validator replay groups, and image-to-source reconciliation paths
 - stable public service interfaces and non-shell JSON CLI surfaces for shell, desktop, and external clients
-- kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming first-class operator references
+- execution-facing `invoke`, `inspect`, and `control` seams with execution handles becoming first-class operator references
 - execution surfaces, workspace, governance queue, object browser, and inspector shell models
 - a hostable desktop contract for `sbcl-agent-ux` through `desktop/show`, `desktop/action`, and `desktop/restore`
 - compatibility execution tracking and lifecycle posture for Linux app and tool-backed governed executions
@@ -421,7 +466,7 @@ The current implementation is strongest where the code and the documentation now
 - it gives operators direct access to the runtime they are reasoning about
 - it preserves explicit governance concepts such as approvals, incidents, work-items, and workflow records
 - it already supports durable conversational turns instead of one-shot prompt/response behavior
-- it now has a real execution-kernel seam rather than only service-local mutation rules
+- it now has a real execution and governance seam rather than only service-local mutation rules
 - it now has a thin-host desktop model that `sbcl-agent-ux` consumes directly through the shell desktop contract
 
 ## Weaknesses

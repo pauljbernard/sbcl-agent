@@ -4,7 +4,7 @@
   (if (and actor-execution-job-id
            (listp response))
       (let ((metadata (copy-list (or (getf response :metadata) '())))
-            (updated-data (and (listp (getf response :data))
+            (updated-data (and (keyword-plist-p (getf response :data))
                                (copy-tree (getf response :data)))))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
@@ -110,11 +110,7 @@
                                      :thread-list-query
                                      :payload '())
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read conversation thread list."
-                                    "conversation/thread-list"
-                                    :authority :conversation
-                                    :payload '()))
+     (query-conversation-thread-list-service session))
    :thread-list-query
    :capability :conversation/thread-list))
 
@@ -140,15 +136,10 @@
                                                     :metadata metadata)
                                      :metadata (list :title title))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (or title "Create a conversation thread.")
-                                    "conversation/create-thread"
-                                    :authority :conversation
-                                    :payload (list :title title
-                                                   :summary summary
-                                                   :metadata metadata)
-                                    :context (list :thread-id (and (current-thread session)
-                                                                   (thread-id (current-thread session))))))
+     (perform-conversation-create-thread-service session
+                                                 :title title
+                                                 :summary summary
+                                                 :metadata metadata))
    :create-thread
    :metadata (list :title title)))
 
@@ -177,16 +168,11 @@
                                                     :metadata metadata)
                                      :metadata (list :thread-id thread-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (or title "Update a conversation thread.")
-                                    "conversation/update-thread"
-                                    :authority :conversation
-                                    :payload (list :thread-id thread-id
-                                                   :title title
-                                                   :summary summary
-                                                   :metadata metadata)
-                                    :context (list :thread-id thread-id))
-     )
+     (perform-conversation-update-thread-service session
+                                                 thread-id
+                                                 :title title
+                                                 :summary summary
+                                                 :metadata metadata))
    :update-thread
    :metadata (list :thread-id thread-id)))
 
@@ -211,12 +197,7 @@
                                      :payload (list :thread-id thread-id)
                                      :metadata (list :thread-id thread-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Use a conversation thread."
-                                    "conversation/use-thread"
-                                    :authority :conversation
-                                    :payload (list :thread-id thread-id)
-                                    :context (list :thread-id thread-id)))
+     (perform-conversation-use-thread-service session thread-id))
    :use-thread
    :metadata (list :thread-id thread-id)))
 
@@ -237,12 +218,7 @@
                                      :payload (list :thread-id thread-id)
                                      :metadata (list :thread-id thread-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read conversation thread detail."
-                                    "conversation/thread-detail"
-                                    :authority :conversation
-                                    :payload (list :thread-id thread-id)
-                                    :context (list :thread-id thread-id)))
+     (query-conversation-thread-detail-service session thread-id))
    :thread-detail-query
    :metadata (list :thread-id thread-id)
    :capability :conversation/thread-detail))
@@ -269,12 +245,7 @@
                                      :payload (list :turn-id turn-id)
                                      :metadata (list :turn-id turn-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read conversation turn detail."
-                                    "conversation/turn-detail"
-                                    :authority :conversation
-                                    :payload (list :turn-id turn-id)
-                                    :context (list :turn-id turn-id)))
+     (query-conversation-turn-detail-service session turn-id))
    :turn-detail-query
    :metadata (list :turn-id turn-id)
    :capability :conversation/turn-detail))
@@ -296,12 +267,7 @@
                                      :payload (list :turn-id turn-id)
                                      :metadata (list :turn-id turn-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read conversation latency telemetry."
-                                    "conversation/latency"
-                                    :authority :conversation
-                                    :payload (list :turn-id turn-id)
-                                    :context (list :turn-id turn-id)))
+     (query-conversation-latency-service session turn-id))
    :latency-query
    :metadata (list :turn-id turn-id)
    :capability :conversation/latency))

@@ -1,4 +1,4 @@
-(in-package #:sbcl-agent)
+(in-package #:sbcl-agent.system.registry)
 
 (defstruct tool-definition
   id
@@ -56,7 +56,7 @@
 (defparameter *compatibility-app-provider-function* nil)
 
 (defun ensure-tool-policy (policy-designator)
-  (ensure-capability-policy policy-designator))
+  (sbcl-agent::ensure-capability-policy policy-designator))
 
 (defun register-tool (id documentation policy function
                       &key
@@ -148,7 +148,8 @@
                                            :default-arguments (copy-tree default-arguments)
                                            :launch-tool-id launch-tool-id
                                            :backend-profile-id backend-profile-id
-                                           :policy-id (capability-policy-id (ensure-capability-policy policy-id))
+                                           :policy-id (sbcl-agent::capability-policy-id
+                                                       (ensure-tool-policy policy-id))
                                            :filesystem-scope-kind filesystem-scope-kind
                                            :network-policy network-policy
                                            :workspace-write-p workspace-write-p
@@ -190,7 +191,7 @@
 (defun compatibility-app-filesystem-scope (definition session)
   (ecase (compatibility-app-definition-filesystem-scope-kind definition)
     (:session-workspace
-     (agent-session-cwd session))
+     (sbcl-agent::agent-session-cwd session))
     (:none
      nil)
     (:user-home
@@ -231,7 +232,7 @@
                           id
                           (compatibility-app-definition-launch-tool-id definition))))
          (profile-id (tool-definition-isolation-profile tool))
-         (profile (ensure-sandbox-profile profile-id))
+         (profile (sbcl-agent::ensure-sandbox-profile profile-id))
          (backend-profile-id (or (compatibility-app-definition-backend-profile-id definition)
                                  (error "Compatibility app ~S does not declare a backend profile" id)))
          (backend-profile (ensure-compatibility-backend-profile backend-profile-id))
@@ -249,7 +250,7 @@
           :backend-profile-id backend-profile-id
           :backend-profile (compatibility-backend-profile-summary backend-profile)
           :sandbox-profile profile-id
-          :cwd (agent-session-cwd session)
+          :cwd (sbcl-agent::agent-session-cwd session)
           :filesystem-scope filesystem-scope
           :filesystem-scope-kind (compatibility-app-definition-filesystem-scope-kind definition)
           :network-enabled-p (not (eq (compatibility-app-definition-network-policy definition) :none))
@@ -257,8 +258,8 @@
           :workspace-write-p (not (null (compatibility-app-definition-workspace-write-p definition)))
           :display-surface-kind (compatibility-app-definition-display-surface-kind definition)
           :source-package-id (compatibility-app-definition-source-package-id definition)
-          :sandbox-network-enabled-p (sandbox-profile-network-enabled-p profile)
-          :sandbox-workspace-write-p (sandbox-profile-workspace-write-p profile)
+          :sandbox-network-enabled-p (sbcl-agent::sandbox-profile-network-enabled-p profile)
+          :sandbox-workspace-write-p (sbcl-agent::sandbox-profile-workspace-write-p profile)
           :argv (compatibility-app-command-argv id args :session session :environment environment)
           :execution-mode execution-mode)))
 
@@ -267,8 +268,8 @@
    (loop for definition being the hash-values of *tool-registry*
          collect (list :id (tool-definition-id definition)
                        :documentation (tool-definition-documentation definition)
-                       :policy (capability-policy-id (tool-definition-policy definition))
-                       :policy-spec (capability-policy-summary (tool-definition-policy definition))
+                       :policy (sbcl-agent::capability-policy-id (tool-definition-policy definition))
+                       :policy-spec (sbcl-agent::capability-policy-summary (tool-definition-policy definition))
                        :compatibility-kind (tool-definition-compatibility-kind definition)
                        :backend-profile-id (tool-definition-backend-profile-id definition)
                        :backend-profile (compatibility-backend-profile-summary
@@ -285,8 +286,8 @@
       (error "Unknown tool ~S" id))
     (list :id (tool-definition-id definition)
           :documentation (tool-definition-documentation definition)
-          :policy (capability-policy-id (tool-definition-policy definition))
-          :policy-spec (capability-policy-summary (tool-definition-policy definition))
+          :policy (sbcl-agent::capability-policy-id (tool-definition-policy definition))
+          :policy-spec (sbcl-agent::capability-policy-summary (tool-definition-policy definition))
           :compatibility-kind (tool-definition-compatibility-kind definition)
           :backend-profile-id (tool-definition-backend-profile-id definition)
           :backend-profile (compatibility-backend-profile-summary
@@ -299,7 +300,7 @@
     (when (and definition
                (tool-definition-compatibility-kind definition))
       (let* ((profile-id (tool-definition-isolation-profile definition))
-             (profile (ensure-sandbox-profile profile-id))
+             (profile (sbcl-agent::ensure-sandbox-profile profile-id))
              (backend-profile-id (tool-definition-backend-profile-id definition))
              (backend-profile (and backend-profile-id
                                    (ensure-compatibility-backend-profile
@@ -311,10 +312,10 @@
               :backend-profile-id backend-profile-id
               :backend-profile (compatibility-backend-profile-summary backend-profile)
               :sandbox-profile profile-id
-              :cwd (agent-session-cwd session)
-              :filesystem-scope (agent-session-cwd session)
-              :network-enabled-p (sandbox-profile-network-enabled-p profile)
-              :workspace-write-p (sandbox-profile-workspace-write-p profile)
+              :cwd (sbcl-agent::agent-session-cwd session)
+              :filesystem-scope (sbcl-agent::agent-session-cwd session)
+              :network-enabled-p (sbcl-agent::sandbox-profile-network-enabled-p profile)
+              :workspace-write-p (sbcl-agent::sandbox-profile-workspace-write-p profile)
               :argv (copy-tree (getf args :argv)))))))
 
 (defun invoke-sandboxed-tool (id session args)
@@ -328,21 +329,21 @@
                (display-surface-kind
                  (or (compatibility-backend-profile-display-bridge-kind backend-profile)
                      :headless)))
-          (compatibility-backend-launch backend-profile-id
-                                       session
-                                       argv
-                                       :display-surface-kind display-surface-kind))
+          (sbcl-agent::compatibility-backend-launch backend-profile-id
+                                                    session
+                                                    argv
+                                                    :display-surface-kind display-surface-kind))
         (case id
           (:git/status
-     (sandbox-execute-git session :status))
+     (sbcl-agent::sandbox-execute-git session :status))
           (:git/diff
-           (sandbox-execute-git session :diff :cached (getf args :cached)))
+           (sbcl-agent::sandbox-execute-git session :diff :cached (getf args :cached)))
           (:git/add
-           (sandbox-execute-git session :add :paths (getf args :paths)))
+           (sbcl-agent::sandbox-execute-git session :add :paths (getf args :paths)))
           (:git/commit
-           (sandbox-execute-git session :commit :message (getf args :message)))
+           (sbcl-agent::sandbox-execute-git session :commit :message (getf args :message)))
           (:git/branch
-           (sandbox-execute-git session :branch :name (getf args :name) :checkout (getf args :checkout)))
+           (sbcl-agent::sandbox-execute-git session :branch :name (getf args :name) :checkout (getf args :checkout)))
           (t
            (error "Sandbox execution is not implemented for tool ~S" id))))))
 
@@ -352,7 +353,7 @@
       (error "Unknown tool ~S" id))
     (let ((policy (tool-definition-policy definition))
           (isolation-profile (tool-definition-isolation-profile definition)))
-      (ensure-capability-granted session policy)
+      (sbcl-agent::ensure-capability-granted session policy)
       (if (eq isolation-profile :in-process)
           (apply (tool-definition-function definition) session args)
           (invoke-sandboxed-tool id session args)))))

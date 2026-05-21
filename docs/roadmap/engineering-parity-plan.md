@@ -101,7 +101,7 @@ Deliverables:
 
 Goal:
 
-- expose the environment kernel cleanly to presentation-tier tooling and modern operator UX
+- expose the environment runtime, execution services, and actor/governance state cleanly to presentation-tier tooling and modern operator UX
 
 Deliverables:
 
@@ -197,7 +197,7 @@ Acceptance criteria:
 
 Goal:
 
-- expose the kernel’s capabilities through secure public service interfaces and operator-grade UX
+- expose the environment runtime and execution-service capabilities through secure public service interfaces and operator-grade UX
 
 Acceptance criteria:
 

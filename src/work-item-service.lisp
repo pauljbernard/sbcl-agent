@@ -3,8 +3,8 @@
 (defun work-item-associated-execution-summaries (session work-item)
   (let ((environment (session-bound-environment session)))
     (when environment
-      (mapcar #'kernel-execution-summary
-              (kernel-find-executions-by-target :work-item-id
+      (mapcar #'execution-handle-summary
+              (find-execution-handles-by-target :work-item-id
                                                 (work-item-id work-item)
                                                 environment)))))
 
@@ -87,11 +87,7 @@
                                 :work-item-list-query
                                 :workflow/work-item-list)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read governed work-item list."
-                                    "workflow/work-item-list"
-                                    :authority :operator
-                                    :payload '()))
+     (query-work-item-list-service session))
    :workflow/work-item-list
    :work-item-list-query))
 
@@ -117,11 +113,7 @@
                                 :work-item-id work-item-id
                                 :metadata (list :work-item-id work-item-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read detail for work item ~A." work-item-id)
-                                    "workflow/work-item-detail"
-                                    :authority :operator
-                                    :payload (list :work-item-id work-item-id)))
+     (query-work-item-detail-service session work-item-id))
    :workflow/work-item-detail
    :work-item-detail-query
    :work-item-id work-item-id
@@ -139,6 +131,15 @@
        (list :id (work-item-id work-item)
              :status (work-item-status work-item)
              :goal (work-item-goal work-item)
+             :transaction-phase (let ((transaction (current-work-item-transaction work-item)))
+                                  (and transaction
+                                       (transaction-current-phase transaction)))
+             :verification-state (let ((transaction (current-work-item-transaction work-item)))
+                                   (and transaction
+                                        (transaction-verification-state transaction)))
+             :promotion-state (let ((transaction (current-work-item-transaction work-item)))
+                                (and transaction
+                                     (transaction-promotion-state transaction)))
              :long-horizon-plan (work-item-long-horizon-plan work-item)
              :plan-health (work-item-plan-health work-item)
              :plan-steering (work-item-plan-steering work-item)
@@ -165,11 +166,7 @@
                                 :work-item-id work-item-id
                                 :metadata (list :work-item-id work-item-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read plan state for work item ~A." work-item-id)
-                                    "workflow/work-item-plan"
-                                    :authority :operator
-                                    :payload (list :work-item-id work-item-id)))
+     (query-work-item-plan-service session work-item-id))
    :workflow/work-item-plan
    :work-item-plan-query
    :work-item-id work-item-id

@@ -23,7 +23,9 @@
   (append (plist-without-key plist key) (list key value)))
 
 (defun ensure-rgp-bound-environment (session &optional environment)
-  (let ((active-environment (ensure-environment environment)))
+  (let ((active-environment (or environment
+                                (session-bound-environment session)
+                                (ensure-environment))))
     (unless (eq (environment-compatibility-session active-environment) session)
       (bind-session-to-environment session active-environment))
     active-environment))
@@ -1569,18 +1571,22 @@
                                                     :environment)))))
             artifacts)))
 
-(defun environment-rgp-approval-summaries (&optional environment)
-  (let* ((session (environment-session environment))
-         (work-items (if session
-                         (agent-session-work-items session)
+(defun environment-rgp-approval-summaries (&optional environment session)
+  (let* ((active-session (or session
+                             (environment-session environment)))
+         (work-items (if active-session
+                         (agent-session-work-items active-session)
                          '()))
          (blocked '()))
     (dolist (work-item work-items (nreverse blocked))
-      (let* ((wait-report (work-item-wait-report session work-item))
+      (let* ((wait-report (work-item-wait-report active-session work-item))
              (reason (getf wait-report :why))
-             (handles (kernel-execution-summaries-by-target :work-item-id
-                                                            (work-item-id work-item)
-                                                            environment)))
+             (handles (or (execution-handle-summaries-by-target :work-item-id
+                                                                (work-item-id work-item)
+                                                                environment)
+                          (and active-session
+                               (work-item-associated-execution-summaries active-session work-item))
+                          '())))
         (unless (eq reason :ready)
           (push (append (work-item-summary work-item)
                         (list :primary-execution-handle (first handles)

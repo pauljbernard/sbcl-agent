@@ -12,6 +12,14 @@ description: Visual and data contract documentation for the actor-system surface
 
 This document defines the live operator surface for the actor runtime.
 
+It should be read together with the concurrency and governance model. The actor system is not just a hierarchy viewer. It is the operator-facing projection of:
+
+- actor ownership and workflow continuity
+- bounded worker-pool execution
+- queue and mailbox pressure
+- supervision and recovery posture
+- governed approval and validation waits
+
 The current implementation now has a dedicated `Actor System Surface` inside `Surface`, and the documentation should reflect that real shape rather than the earlier minimum viable stub.
 
 The surface needs to show two things clearly:
@@ -46,6 +54,7 @@ The current surface should expose:
   - runtime worker count
   - busy / idle workers
   - queued jobs
+  - approval-blocked or validation-blocked actor count when available
 - `Hierarchy`
   - interactive node graph
   - zoom

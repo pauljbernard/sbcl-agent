@@ -3,6 +3,67 @@
 ;; tests/support.lisp and tests/provider-support.lisp so this file focuses on
 ;; smoke/integration behavior definitions.
 
+(defvar *kernel-public-api-concurrency-lock*
+  (sb-thread:make-mutex :name "kernel-public-api-concurrency-lock"))
+(defvar *kernel-public-api-active-count* 0)
+(defvar *kernel-public-api-max-count* 0)
+(defvar *concurrency-core-test-lock*
+  (sb-thread:make-mutex :name "concurrency-core-test-lock"))
+(defvar *concurrency-core-test-active-count* 0)
+(defvar *concurrency-core-test-max-count* 0)
+
+(defun reset-kernel-public-api-concurrency-state ()
+  (sb-thread:with-mutex (*kernel-public-api-concurrency-lock*)
+    (setf *kernel-public-api-active-count* 0
+          *kernel-public-api-max-count* 0)))
+
+(defun kernel-public-api-concurrency-sample (&optional (seconds 0.2))
+  (sb-thread:with-mutex (*kernel-public-api-concurrency-lock*)
+    (incf *kernel-public-api-active-count*)
+    (setf *kernel-public-api-max-count*
+          (max *kernel-public-api-max-count*
+               *kernel-public-api-active-count*)))
+  (sleep seconds)
+  (sb-thread:with-mutex (*kernel-public-api-concurrency-lock*)
+    (decf *kernel-public-api-active-count*))
+  :ok)
+
+(defun kernel-public-api-max-concurrency ()
+  (sb-thread:with-mutex (*kernel-public-api-concurrency-lock*)
+    *kernel-public-api-max-count*))
+
+(defun reset-concurrency-core-test-state ()
+  (sb-thread:with-mutex (*concurrency-core-test-lock*)
+    (setf *concurrency-core-test-active-count* 0
+          *concurrency-core-test-max-count* 0)))
+
+(defun concurrency-core-test-sample (&optional (seconds 0.2))
+  (sb-thread:with-mutex (*concurrency-core-test-lock*)
+    (incf *concurrency-core-test-active-count*)
+    (setf *concurrency-core-test-max-count*
+          (max *concurrency-core-test-max-count*
+               *concurrency-core-test-active-count*)))
+  (sleep seconds)
+  (sb-thread:with-mutex (*concurrency-core-test-lock*)
+    (decf *concurrency-core-test-active-count*))
+  :ok)
+
+(defun concurrency-core-test-max-concurrency ()
+  (sb-thread:with-mutex (*concurrency-core-test-lock*)
+    *concurrency-core-test-max-count*))
+
+(defun response-execution-id (plist &optional metadata)
+  (or (getf plist :execution-id)
+      (and metadata (getf metadata :execution-id))))
+
+(defun response-governance-preflight (plist &optional metadata)
+  (or (getf plist :governance-preflight)
+      (and metadata (getf metadata :governance-preflight))))
+
+(defun response-execution-ids (plist &optional metadata)
+  (or (getf plist :execution-ids)
+      (and metadata (getf metadata :execution-ids))))
+
 (defun runtime-smoke-test ()
   (let* ((root (make-temporary-directory "/tmp/sbcl-agent-runtime-XXXXXX"))
          (ignore (ensure-directories-exist root))
@@ -318,9 +379,9 @@
                         "actor-owned preparation should retain the request target")
           (assert-true (getf preparation-payload :resolution)
                        "actor-owned preparation should record the effective resolution")
-          (assert-equal :runtime-eval-safe
+          (assert-equal :runtime/eval
                         (getf completed-context :capability)
-                        "completed actor execution should retain the resolved capability after deferred preparation")
+                        "completed actor execution should retain the concrete runtime capability after deferred preparation")
           (assert-true (or record-actor-job-id
                            request-actor-job-id
                            completed-context-job-id)
@@ -377,7 +438,168 @@
                   (getf task-record :actor-execution-job-id)
                   "kernel desktop-task invoke should keep record and response actor identity aligned")))
 
-(defun actor-desktop-task-execution-uses-kernelized-command-services-test ()
+(defun kernel-concurrency-policy-test ()
+  (flet ((measure-max-concurrency (mode)
+           (let ((lock (sb-thread:make-mutex :name "kernel-concurrency-test-lock"))
+                 (active-count 0)
+                 (max-count 0))
+             (labels ((run-sample ()
+                        (sbcl-agent::call-with-kernel-concurrency-policy
+                         mode
+                         (lambda ()
+                           (sb-thread:with-mutex (lock)
+                             (incf active-count)
+                             (setf max-count (max max-count active-count)))
+                           (sleep 0.2)
+                           (sb-thread:with-mutex (lock)
+                             (decf active-count))))))
+               (let ((thread-a (sb-thread:make-thread #'run-sample
+                                                      :name "kernel-concurrency-sample-a"))
+                     (thread-b (sb-thread:make-thread #'run-sample
+                                                      :name "kernel-concurrency-sample-b")))
+                 (sb-thread:join-thread thread-a)
+                 (sb-thread:join-thread thread-b)
+                 max-count)))))
+    (let ((read-max (measure-max-concurrency :concurrent-read))
+          (write-max (measure-max-concurrency :serialized-write)))
+      (assert-true (> read-max 1)
+                   "kernel concurrent-read policy should permit overlapping execution on the kernel worker pool")
+      (assert-equal 1
+                    write-max
+                    "kernel serialized-write policy should prevent overlapping execution"))))
+
+(defun kernel-public-api-concurrency-test ()
+  (labels ((invoke-runtime-eval (session mutating)
+             (sbcl-agent::command-kernel-invoke-service
+              session
+              "Kernel concurrency probe."
+              "runtime/eval"
+              :payload (list :form "(sbcl-agent/tests::kernel-public-api-concurrency-sample 0.2)"
+                             :package "SBCL-AGENT-USER"
+                             :mutating mutating)))
+           (measure-kernel-api-concurrency (mutating)
+             (let* ((session (sbcl-agent::make-default-session :cwd "/tmp/"))
+                    (environment (sbcl-agent::make-default-environment :session session)))
+               (sbcl-agent::bind-session-to-environment session environment)
+               (when mutating
+                 (sbcl-agent::approve-policy session :runtime-eval-mutate))
+               (reset-kernel-public-api-concurrency-state)
+               (let ((thread-a (sb-thread:make-thread
+                                (lambda ()
+                                  (invoke-runtime-eval session mutating))
+                                :name "kernel-public-api-concurrency-a"))
+                     (thread-b (sb-thread:make-thread
+                                (lambda ()
+                                  (invoke-runtime-eval session mutating))
+                                :name "kernel-public-api-concurrency-b")))
+                 (sb-thread:join-thread thread-a)
+                 (sb-thread:join-thread thread-b)
+                 (kernel-public-api-max-concurrency)))))
+    (let ((read-max (measure-kernel-api-concurrency nil))
+          (write-max (measure-kernel-api-concurrency t)))
+      (assert-true (> read-max 1)
+                   "public kernel runtime/eval reads should overlap through the kernel entrypoint")
+      (assert-equal 1
+                    write-max
+                    "public kernel governed runtime/eval mutations should serialize through the kernel entrypoint"))))
+
+(defun concurrency-core-keyed-serialization-test ()
+  (labels ((measure-max-concurrency (lock-key-a lock-key-b)
+             (reset-concurrency-core-test-state)
+             (let ((thread-a
+                     (sb-thread:make-thread
+                      (lambda ()
+                        (sbcl-agent::call-with-concurrency-core-policy
+                         :serialized-write
+                         (lambda ()
+                           (concurrency-core-test-sample 0.2))
+                         :lock-key lock-key-a))
+                      :name "concurrency-core-key-a"))
+                   (thread-b
+                     (sb-thread:make-thread
+                      (lambda ()
+                        (sbcl-agent::call-with-concurrency-core-policy
+                         :serialized-write
+                         (lambda ()
+                           (concurrency-core-test-sample 0.2))
+                         :lock-key lock-key-b))
+                      :name "concurrency-core-key-b")))
+               (sb-thread:join-thread thread-a)
+               (sb-thread:join-thread thread-b)
+               (concurrency-core-test-max-concurrency))))
+    (let ((same-key-max (measure-max-concurrency :shared-write :shared-write))
+          (different-key-max (measure-max-concurrency :domain-a-write :domain-b-write)))
+      (assert-equal 1
+                    same-key-max
+                    "serialized-write policy should serialize work that shares the same lock key")
+      (assert-true (> different-key-max 1)
+                   "serialized-write policy should allow overlapping work when lock keys differ"))))
+
+(defun runtime-command-services-are-actor-governed-test ()
+  (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
+         (environment (sbcl-agent::make-default-environment :session session))
+         (ignore (sbcl-agent::bind-session-to-environment session environment))
+         (failure-message nil))
+    (declare (ignore ignore))
+    (handler-case
+        (sbcl-agent::command-runtime-eval-service session
+                                                  "(defparameter *runtime-governance-smoke* 42)"
+                                                  :package "SBCL-AGENT-USER"
+                                                  :mutating t)
+      (error (condition)
+        (setf failure-message (princ-to-string condition))))
+    (let* ((events (sbcl-agent::agent-session-events session))
+           (governance-event
+             (find :runtime-actor-governance-enforcement
+                   events
+                   :key #'sbcl-agent::event-kind
+                   :test #'eq))
+           (started
+             (find :actor-execution-started
+                   events
+                   :key #'sbcl-agent::event-kind
+                   :test #'eq))
+           (failed
+             (find :actor-execution-failed
+                   events
+                   :key #'sbcl-agent::event-kind
+                   :test #'eq)))
+      (assert-true failure-message
+                   "mutating runtime command service without approval should fail from actor governance")
+      (assert-true governance-event
+                   "mutating runtime command service should emit actor-side runtime governance enforcement")
+      (assert-true started
+                   "mutating runtime command service should enter actor execution before failing")
+      (assert-true failed
+                   "mutating runtime command service should fail inside the actor execution path"))
+    (sbcl-agent::approve-policy session :runtime-eval-mutate)
+    (let* ((response
+             (sbcl-agent::command-runtime-eval-service session
+                                                       "(progn (+ 19 23))"
+                                                       :package "SBCL-AGENT-USER"
+                                                       :mutating t))
+           (data (sbcl-agent::service-response-data response))
+           (metadata (sbcl-agent::service-response-metadata response)))
+      (assert-equal :actor-runtime
+                    (getf metadata :governance-authority)
+                    "mutating runtime command response metadata should report actor-runtime governance authority")
+      (assert-equal :runtime-eval-mutate
+                    (getf metadata :policy-id)
+                    "mutating runtime command response metadata should retain the governing policy id")
+      (assert-true (getf metadata :approval-required-p)
+                   "mutating runtime command response metadata should mark approval-required execution")
+      (assert-true (stringp (getf metadata :actor-execution-job-id))
+                   "mutating runtime command response metadata should retain actor execution identity")
+      (assert-true (stringp (getf metadata :execution-id))
+                   "mutating runtime command response metadata should still retain execution identity")
+      (assert-equal :actor-runtime
+                    (getf data :governance-authority)
+                    "mutating runtime command response payload should report actor-runtime governance authority")
+      (assert-equal :runtime-eval-mutate
+                    (getf data :policy-id)
+                    "mutating runtime command response payload should retain the governing policy id"))))
+
+(defun actor-desktop-task-execution-uses-registered-command-services-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/private/tmp/"))
          (environment (sbcl-agent::make-default-environment :session session))
          (ignore (sbcl-agent::bind-session-to-environment session environment))
@@ -390,12 +612,12 @@
             :payload '(:form "(+ 30 12)"
                        :package-name "SBCL-AGENT-USER")))
          (runtime-result (getf (sbcl-agent::service-response-data runtime-response) :result))
-         (workspace-path "/private/tmp/sbcl-agent-phase2-kernelized.txt"))
+         (workspace-path "/private/tmp/sbcl-agent-phase2-execution-mediated.txt"))
     (declare (ignore ignore))
-    (assert-true (stringp (getf runtime-result :kernel-execution-id))
-                 "actor-owned runtime desktop task execution should retain the kernel execution handle")
-    (assert-true (listp (getf runtime-result :kernel-governance-preflight))
-                 "actor-owned runtime desktop task execution should invoke the kernel path and retain governance preflight metadata")
+    (assert-true (stringp (response-execution-id runtime-result))
+                 "actor-owned runtime desktop task execution should retain the execution handle")
+    (assert-true (listp (response-governance-preflight runtime-result))
+                 "actor-owned runtime desktop task execution should retain governance preflight metadata")
     (sbcl-agent::approve-policy session :workspace-write)
     (let* ((workspace-response
              (sbcl-agent::command-desktop-task-invoke-service
@@ -406,28 +628,28 @@
               :payload (list :operations
                              (list (list :write
                                          workspace-path
-                                         "phase2 kernelized workspace mutation")))))
+                                         "phase2 execution-mediated workspace mutation")))))
            (workspace-result (getf (sbcl-agent::service-response-data workspace-response) :result)))
-      (assert-true (stringp (getf workspace-result :kernel-execution-id))
-                   "actor-owned workspace desktop task execution should retain the kernel execution handle")
-      (assert-true (listp (getf workspace-result :kernel-governance-preflight))
-                   "actor-owned workspace desktop task execution should invoke the kernel path and retain governance preflight metadata"))
+      (assert-true (stringp (response-execution-id workspace-result))
+                   "actor-owned workspace desktop task execution should retain the execution handle")
+      (assert-true (listp (response-governance-preflight workspace-result))
+                   "actor-owned workspace desktop task execution should retain governance preflight metadata"))
     (let* ((editor-response
              (sbcl-agent::command-desktop-task-invoke-service
               session
               :requester :context-chat
               :target :editor
               :operation :append-text
-              :payload '(:text "phase2 editor kernelized mutation")
+              :payload '(:text "phase2 editor execution-mediated mutation")
               :surface-context '(:editor (:scope-id "scope-1"
                                   :buffer-id "buffer-1"
                                   :package-name "SBCL-AGENT-USER"))
               :metadata '(:pending-action-id "pending-1")))
            (editor-result (getf (sbcl-agent::service-response-data editor-response) :result)))
-      (assert-true (stringp (getf editor-result :kernel-execution-id))
-                   "actor-owned editor desktop task execution should retain the kernel execution handle")
-      (assert-true (listp (getf editor-result :kernel-governance-preflight))
-                   "actor-owned editor desktop task execution should invoke the kernel path and retain governance preflight metadata"))))
+      (assert-true (stringp (response-execution-id editor-result))
+                   "actor-owned editor desktop task execution should retain the execution handle")
+      (assert-true (listp (response-governance-preflight editor-result))
+                   "actor-owned editor desktop task execution should retain governance preflight metadata"))))
 
 (defun desktop-task-actor-wrapper-services-test ()
   (let* ((session (sbcl-agent::make-default-session :cwd "/Volumes/data/development/sbcl-agent/"))
@@ -441,8 +663,8 @@
          (runtime-data (sbcl-agent::service-response-data runtime-response))
          (workspace-path "/Volumes/data/development/sbcl-agent/phase2-wrapper-smoke.txt"))
     (declare (ignore ignore))
-    (assert-true (stringp (getf runtime-data :kernel-execution-id))
-                 "actor-facing runtime wrapper should retain the kernel execution handle")
+    (assert-true (stringp (response-execution-id runtime-data))
+                 "actor-facing runtime wrapper should retain the execution handle")
     (assert-true (stringp (getf runtime-data :actor-execution-job-id))
                  "actor-facing runtime wrapper should retain the actor execution handle")
     (sbcl-agent::approve-policy session :runtime-reload)
@@ -451,8 +673,8 @@
              session
              "/Volumes/data/development/sbcl-agent/src/package.lisp")))
       (let ((reload-data (sbcl-agent::service-response-data reload-response)))
-        (assert-true (stringp (getf reload-data :kernel-execution-id))
-                     "actor-facing runtime reload wrapper should retain the kernel execution handle")
+        (assert-true (stringp (response-execution-id reload-data))
+                     "actor-facing runtime reload wrapper should retain the execution handle")
         (assert-true (stringp (getf reload-data :actor-execution-job-id))
                      "actor-facing runtime reload wrapper should retain the actor execution handle")))
     (sbcl-agent::approve-policy session :workspace-write)
@@ -462,8 +684,8 @@
              workspace-path
              "phase2 actor wrapper mutation")))
       (let ((source-data (sbcl-agent::service-response-data source-response)))
-        (assert-true (stringp (getf source-data :kernel-execution-id))
-                     "actor-facing source wrapper should retain the kernel execution handle")
+        (assert-true (stringp (response-execution-id source-data))
+                     "actor-facing source wrapper should retain the execution handle")
         (assert-true (stringp (getf source-data :actor-execution-job-id))
                      "actor-facing source wrapper should retain the actor execution handle")
         (assert-equal workspace-path
@@ -506,7 +728,7 @@
                    (desktop-task-results (getf approval-data :desktop-task-results))
                    (first-result (first desktop-task-results))
                    (actor-job-ids (getf approval-data :actor-execution-job-ids))
-                   (kernel-execution-ids (getf approval-data :kernel-execution-ids))
+                   (execution-ids (response-execution-ids approval-data))
                    (runtime (sbcl-agent::ensure-actor-thread-pool session))
                    (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                    (approval-history-entry
@@ -528,13 +750,13 @@
               (assert-true (and (listp actor-job-ids)
                                 (stringp (first actor-job-ids)))
                            "approval continuation should surface actor execution lineage")
-              (assert-true (and (listp kernel-execution-ids)
-                                (stringp (first kernel-execution-ids)))
-                           "approval continuation should surface kernel execution lineage")
+              (assert-true (and (listp execution-ids)
+                                (stringp (first execution-ids)))
+                           "approval continuation should surface execution lineage")
               (assert-true (stringp (getf first-result :actor-execution-job-id))
                            "approval continuation task results should carry actor execution identity")
-              (assert-true (stringp (getf first-result :kernel-execution-id))
-                           "approval continuation task results should carry kernel execution identity"))))
+              (assert-true (stringp (response-execution-id first-result))
+                           "approval continuation task results should carry execution identity"))))
           (sbcl-agent::stop-actor-thread-pool session))))
 
 (defun workflow-ops-services-are-actor-mediated-test ()
@@ -795,10 +1017,8 @@
                  (preferences-metadata (sbcl-agent::service-response-metadata preferences-response))
                  (preferences-job-id (or (getf preferences-data :actor-execution-job-id)
                                          (getf preferences-metadata :actor-execution-job-id)))
-                 (preferences-kernel-id (or (getf preferences-data :kernel-execution-id)
-                                            (getf preferences-metadata :kernel-execution-id)
-                                            (getf preferences-data :execution-id)
-                                            (getf preferences-metadata :execution-id)))
+                 (preferences-execution-id
+                   (response-execution-id preferences-data preferences-metadata))
                  (image-response
                    (sbcl-agent::command-environment-save-image-service
                     (format nil "actor-env-test-~D" (get-universal-time))
@@ -808,10 +1028,8 @@
                  (image-metadata (sbcl-agent::service-response-metadata image-response))
                  (image-job-id (or (getf image-data :actor-execution-job-id)
                                    (getf image-metadata :actor-execution-job-id)))
-                 (image-kernel-id (or (getf image-data :kernel-execution-id)
-                                      (getf image-metadata :kernel-execution-id)
-                                      (getf image-data :execution-id)
-                                      (getf image-metadata :execution-id)))
+                 (image-execution-id
+                   (response-execution-id image-data image-metadata))
                  (runtime (sbcl-agent::ensure-actor-thread-pool session))
                  (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                  (environment-actor-id
@@ -831,10 +1049,10 @@
                          "environment desktop preferences service should expose an environment actor execution job id")
             (assert-true (stringp image-job-id)
                          "environment save-image service should expose an environment actor execution job id")
-            (assert-true (stringp preferences-kernel-id)
-                         "environment desktop preferences service should retain kernel execution identity")
-            (assert-true (stringp image-kernel-id)
-                         "environment save-image service should retain kernel execution identity")
+            (assert-true (stringp preferences-execution-id)
+                         "environment desktop preferences service should retain execution identity")
+            (assert-true (stringp image-execution-id)
+                         "environment save-image service should retain execution identity")
             (assert-true preferences-entry
                          "environment desktop preferences service should be recorded in actor runtime history")
             (assert-true image-entry
@@ -915,10 +1133,8 @@
                 (set-metadata (sbcl-agent::service-response-metadata set-response))
                 (set-job-id (or (getf set-data :actor-execution-job-id)
                                 (getf set-metadata :actor-execution-job-id)))
-                (set-kernel-id (or (getf set-data :kernel-execution-id)
-                                   (getf set-metadata :kernel-execution-id)
-                                   (getf set-data :execution-id)
-                                   (getf set-metadata :execution-id)))
+                (set-execution-id
+                  (response-execution-id set-data set-metadata))
                 (eval-response
                   (sbcl-agent::command-calculator-evaluate-service
                    session
@@ -927,10 +1143,8 @@
                 (eval-metadata (sbcl-agent::service-response-metadata eval-response))
                 (eval-job-id (or (getf eval-data :actor-execution-job-id)
                                  (getf eval-metadata :actor-execution-job-id)))
-                (eval-kernel-id (or (getf eval-data :kernel-execution-id)
-                                    (getf eval-metadata :kernel-execution-id)
-                                    (getf eval-data :execution-id)
-                                    (getf eval-metadata :execution-id)))
+                (eval-execution-id
+                  (response-execution-id eval-data eval-metadata))
                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                 (calculator-actor-id
@@ -950,8 +1164,10 @@
                         "calculator set-expression service should expose an actor execution job id")
            (assert-true (stringp eval-job-id)
                         "calculator evaluate service should expose an actor execution job id")
-           (assert-true (stringp set-kernel-id)
-                        "calculator set-expression service should retain kernel execution identity")
+           (assert-true (stringp set-execution-id)
+                        "calculator set-expression service should retain execution identity")
+           (assert-true (stringp eval-execution-id)
+                        "calculator evaluate service should retain execution identity")
            (assert-true set-entry
                         "calculator set-expression service should be recorded in actor runtime history")
            (assert-true eval-entry
@@ -962,8 +1178,8 @@
            (assert-equal calculator-actor-id
                          (getf eval-entry :actor-id)
                          "calculator evaluate service should execute under the calculator actor")
-           (assert-true (stringp eval-kernel-id)
-                        "calculator evaluate service should retain kernel execution identity"))
+           (assert-true (stringp eval-execution-id)
+                        "calculator evaluate service should retain execution identity"))
       (when session
         (sbcl-agent::stop-actor-thread-pool session)))))
 
@@ -998,10 +1214,8 @@
                 (update-metadata (sbcl-agent::service-response-metadata update-response))
                 (update-job-id (or (getf update-data :actor-execution-job-id)
                                    (getf update-metadata :actor-execution-job-id)))
-                (update-kernel-id (or (getf update-data :kernel-execution-id)
-                                      (getf update-metadata :kernel-execution-id)
-                                      (getf update-data :execution-id)
-                                      (getf update-metadata :execution-id)))
+                (update-execution-id
+                  (response-execution-id update-data update-metadata))
                 (delete-response
                   (sbcl-agent::command-memory-delete-service
                    session
@@ -1010,10 +1224,8 @@
                 (delete-metadata (sbcl-agent::service-response-metadata delete-response))
                 (delete-job-id (or (getf delete-data :actor-execution-job-id)
                                    (getf delete-metadata :actor-execution-job-id)))
-                (delete-kernel-id (or (getf delete-data :kernel-execution-id)
-                                      (getf delete-metadata :kernel-execution-id)
-                                      (getf delete-data :execution-id)
-                                      (getf delete-metadata :execution-id)))
+                (delete-execution-id
+                  (response-execution-id delete-data delete-metadata))
                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                 (memory-actor-id
@@ -1033,10 +1245,10 @@
                         "memory update service should expose an actor execution job id")
            (assert-true (stringp delete-job-id)
                         "memory delete service should expose an actor execution job id")
-           (assert-true (stringp update-kernel-id)
-                        "memory update service should retain a kernel execution id")
-           (assert-true (stringp delete-kernel-id)
-                        "memory delete service should retain a kernel execution id")
+           (assert-true (stringp update-execution-id)
+                        "memory update service should retain an execution id")
+           (assert-true (stringp delete-execution-id)
+                        "memory delete service should retain an execution id")
            (assert-true update-entry
                         "memory update service should be recorded in actor runtime history")
            (assert-true delete-entry
@@ -1068,10 +1280,8 @@
                 (create-metadata (sbcl-agent::service-response-metadata create-response))
                 (create-job-id (or (getf create-data :actor-execution-job-id)
                                    (getf create-metadata :actor-execution-job-id)))
-                (create-kernel-id (or (getf create-data :kernel-execution-id)
-                                      (getf create-metadata :kernel-execution-id)
-                                      (getf create-data :execution-id)
-                                      (getf create-metadata :execution-id)))
+                (create-execution-id
+                  (response-execution-id create-data create-metadata))
                 (intent-id (getf create-data :id))
                 (select-response
                   (sbcl-agent::command-intent-select-service
@@ -1081,10 +1291,8 @@
                 (select-metadata (sbcl-agent::service-response-metadata select-response))
                 (select-job-id (or (getf select-data :actor-execution-job-id)
                                    (getf select-metadata :actor-execution-job-id)))
-                (select-kernel-id (or (getf select-data :kernel-execution-id)
-                                      (getf select-metadata :kernel-execution-id)
-                                      (getf select-data :execution-id)
-                                      (getf select-metadata :execution-id)))
+                (select-execution-id
+                  (response-execution-id select-data select-metadata))
                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                 (intent-actor-id
@@ -1107,10 +1315,10 @@
                         "intent create service should expose an actor execution job id")
            (assert-true (stringp select-job-id)
                         "intent select service should expose an actor execution job id")
-           (assert-true (stringp create-kernel-id)
-                        "intent create service should retain kernel execution identity")
-           (assert-true (stringp select-kernel-id)
-                        "intent select service should retain kernel execution identity")
+           (assert-true (stringp create-execution-id)
+                        "intent create service should retain execution identity")
+           (assert-true (stringp select-execution-id)
+                        "intent select service should retain execution identity")
            (assert-true create-entry
                         "intent create service should be recorded in actor runtime history")
            (assert-true select-entry
@@ -1157,10 +1365,8 @@
                   (panel-metadata (sbcl-agent::service-response-metadata panel-response))
                   (panel-job-id (or (getf panel-data :actor-execution-job-id)
                                     (getf panel-metadata :actor-execution-job-id)))
-                  (panel-kernel-id (or (getf panel-data :kernel-execution-id)
-                                       (getf panel-metadata :kernel-execution-id)
-                                       (getf panel-data :execution-id)
-                                       (getf panel-metadata :execution-id)))
+                  (panel-execution-id
+                    (response-execution-id panel-data panel-metadata))
                   (restore-response
                     (sbcl-agent::command-shell-desktop-restore-service
                      session
@@ -1170,10 +1376,8 @@
                   (restore-metadata (sbcl-agent::service-response-metadata restore-response))
                   (restore-job-id (or (getf restore-data :actor-execution-job-id)
                                       (getf restore-metadata :actor-execution-job-id)))
-                  (restore-kernel-id (or (getf restore-data :kernel-execution-id)
-                                         (getf restore-metadata :kernel-execution-id)
-                                         (getf restore-data :execution-id)
-                                         (getf restore-metadata :execution-id)))
+                  (restore-execution-id
+                    (response-execution-id restore-data restore-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (shell-actor-id
@@ -1193,10 +1397,10 @@
                           "shell desktop panel service should expose an actor execution job id")
              (assert-true (stringp restore-job-id)
                           "shell desktop restore service should expose an actor execution job id")
-             (assert-true (stringp panel-kernel-id)
-                          "shell desktop panel service should retain kernel execution identity")
-             (assert-true (stringp restore-kernel-id)
-                          "shell desktop restore service should retain kernel execution identity")
+             (assert-true (stringp panel-execution-id)
+                          "shell desktop panel service should retain execution identity")
+             (assert-true (stringp restore-execution-id)
+                          "shell desktop restore service should retain execution identity")
              (assert-true panel-entry
                           "shell desktop panel service should be recorded in actor runtime history")
              (assert-true restore-entry
@@ -1232,10 +1436,8 @@
                   (configure-metadata (sbcl-agent::service-response-metadata configure-response))
                   (configure-job-id (or (getf configure-data :actor-execution-job-id)
                                         (getf configure-metadata :actor-execution-job-id)))
-                  (configure-kernel-id (or (getf configure-data :kernel-execution-id)
-                                           (getf configure-metadata :kernel-execution-id)
-                                           (getf configure-data :execution-id)
-                                           (getf configure-metadata :execution-id)))
+                  (configure-execution-id
+                    (response-execution-id configure-data configure-metadata))
                   (remove-response
                     (sbcl-agent::command-desktop-task-remove-mcp-server-service
                      session
@@ -1244,10 +1446,8 @@
                   (remove-metadata (sbcl-agent::service-response-metadata remove-response))
                   (remove-job-id (or (getf remove-data :actor-execution-job-id)
                                      (getf remove-metadata :actor-execution-job-id)))
-                  (remove-kernel-id (or (getf remove-data :kernel-execution-id)
-                                        (getf remove-metadata :kernel-execution-id)
-                                        (getf remove-data :execution-id)
-                                        (getf remove-metadata :execution-id)))
+                  (remove-execution-id
+                    (response-execution-id remove-data remove-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (admin-actor-id
@@ -1267,10 +1467,10 @@
                           "desktop-task configure-mcp-server service should expose an actor execution job id")
              (assert-true (stringp remove-job-id)
                           "desktop-task remove-mcp-server service should expose an actor execution job id")
-             (assert-true (stringp configure-kernel-id)
-                          "desktop-task configure-mcp-server service should retain kernel execution identity")
-             (assert-true (stringp remove-kernel-id)
-                          "desktop-task remove-mcp-server service should retain kernel execution identity")
+             (assert-true (stringp configure-execution-id)
+                          "desktop-task configure-mcp-server service should retain execution identity")
+             (assert-true (stringp remove-execution-id)
+                          "desktop-task remove-mcp-server service should retain execution identity")
              (assert-true configure-entry
                           "desktop-task configure-mcp-server service should be recorded in actor runtime history")
              (assert-true remove-entry
@@ -1336,8 +1536,8 @@
                       (sbcl-agent::command-memory-list-query-service session))
                     (memory-list-metadata (sbcl-agent::service-response-metadata memory-list-response))
                     (memory-list-job-id (getf memory-list-metadata :actor-execution-job-id))
-                    (memory-list-kernel-id (or (getf memory-list-metadata :kernel-execution-id)
-                                               (getf memory-list-metadata :execution-id)))
+                    (memory-list-execution-id
+                      (response-execution-id memory-list-metadata))
                     (memory-list-entry (history-entry-for-job memory-list-job-id))
                     (memory-detail-response
                       (sbcl-agent::command-memory-detail-query-service session memory-id))
@@ -1345,10 +1545,8 @@
                     (memory-detail-metadata (sbcl-agent::service-response-metadata memory-detail-response))
                     (memory-detail-job-id (or (getf memory-detail-data :actor-execution-job-id)
                                               (getf memory-detail-metadata :actor-execution-job-id)))
-                    (memory-detail-kernel-id (or (getf memory-detail-data :kernel-execution-id)
-                                                 (getf memory-detail-metadata :kernel-execution-id)
-                                                 (getf memory-detail-data :execution-id)
-                                                 (getf memory-detail-metadata :execution-id)))
+                    (memory-detail-execution-id
+                      (response-execution-id memory-detail-data memory-detail-metadata))
                     (memory-detail-entry (history-entry-for-job memory-detail-job-id))
                     (events-response
                       (sbcl-agent::command-environment-events-query-service
@@ -1356,8 +1554,8 @@
                        :environment environment))
                     (events-metadata (sbcl-agent::service-response-metadata events-response))
                     (events-job-id (getf events-metadata :actor-execution-job-id))
-                    (events-kernel-id (or (getf events-metadata :kernel-execution-id)
-                                          (getf events-metadata :execution-id)))
+                    (events-execution-id
+                      (response-execution-id events-metadata))
                     (events-entry (history-entry-for-job events-job-id))
                     (console-response
                       (sbcl-agent::command-console-log-stream-query-service
@@ -1367,15 +1565,15 @@
                        :source nil))
                     (console-metadata (sbcl-agent::service-response-metadata console-response))
                     (console-job-id (getf console-metadata :actor-execution-job-id))
-                    (console-kernel-id (or (getf console-metadata :kernel-execution-id)
-                                           (getf console-metadata :execution-id)))
+                    (console-execution-id
+                      (response-execution-id console-metadata))
                     (console-entry (history-entry-for-job console-job-id))
                     (manifest-response
                       (sbcl-agent::command-desktop-task-manifest-list-query-service session))
                     (manifest-metadata (sbcl-agent::service-response-metadata manifest-response))
                     (manifest-job-id (getf manifest-metadata :actor-execution-job-id))
-                    (manifest-kernel-id (or (getf manifest-metadata :kernel-execution-id)
-                                            (getf manifest-metadata :execution-id)))
+                    (manifest-execution-id
+                      (response-execution-id manifest-metadata))
                     (manifest-entry (history-entry-for-job manifest-job-id))
                     (pending-response
                       (sbcl-agent::command-desktop-task-pending-approval-query-service session))
@@ -1383,10 +1581,8 @@
                     (pending-metadata (sbcl-agent::service-response-metadata pending-response))
                     (pending-job-id (or (getf pending-data :actor-execution-job-id)
                                         (getf pending-metadata :actor-execution-job-id)))
-                    (pending-kernel-id (or (getf pending-data :kernel-execution-id)
-                                           (getf pending-metadata :kernel-execution-id)
-                                           (getf pending-data :execution-id)
-                                           (getf pending-metadata :execution-id)))
+                    (pending-execution-id
+                      (response-execution-id pending-data pending-metadata))
                     (pending-entry (history-entry-for-job pending-job-id))
                     (actor-flow-response
                       (sbcl-agent::command-desktop-task-actor-flow-query-service
@@ -1396,17 +1592,15 @@
                     (actor-flow-metadata (sbcl-agent::service-response-metadata actor-flow-response))
                     (actor-flow-job-id (or (getf actor-flow-data :actor-execution-job-id)
                                            (getf actor-flow-metadata :actor-execution-job-id)))
-                    (actor-flow-kernel-id (or (getf actor-flow-data :kernel-execution-id)
-                                              (getf actor-flow-metadata :kernel-execution-id)
-                                              (getf actor-flow-data :execution-id)
-                                              (getf actor-flow-metadata :execution-id)))
+                    (actor-flow-execution-id
+                      (response-execution-id actor-flow-data actor-flow-metadata))
                     (actor-flow-entry (history-entry-for-job actor-flow-job-id))
                     (mcp-list-response
                       (sbcl-agent::command-desktop-task-mcp-server-list-query-service session))
                     (mcp-list-metadata (sbcl-agent::service-response-metadata mcp-list-response))
                     (mcp-list-job-id (getf mcp-list-metadata :actor-execution-job-id))
-                    (mcp-list-kernel-id (or (getf mcp-list-metadata :kernel-execution-id)
-                                            (getf mcp-list-metadata :execution-id)))
+                    (mcp-list-execution-id
+                      (response-execution-id mcp-list-metadata))
                     (mcp-list-entry (history-entry-for-job mcp-list-job-id))
                     (mcp-detail-response
                       (sbcl-agent::command-desktop-task-mcp-server-detail-query-service
@@ -1416,10 +1610,8 @@
                     (mcp-detail-metadata (sbcl-agent::service-response-metadata mcp-detail-response))
                     (mcp-detail-job-id (or (getf mcp-detail-data :actor-execution-job-id)
                                            (getf mcp-detail-metadata :actor-execution-job-id)))
-                    (mcp-detail-kernel-id (or (getf mcp-detail-data :kernel-execution-id)
-                                              (getf mcp-detail-metadata :kernel-execution-id)
-                                              (getf mcp-detail-data :execution-id)
-                                              (getf mcp-detail-metadata :execution-id)))
+                    (mcp-detail-execution-id
+                      (response-execution-id mcp-detail-data mcp-detail-metadata))
                     (mcp-detail-entry (history-entry-for-job mcp-detail-job-id))
                     (memory-actor-id
                       (sbcl-agent::actor-address-id
@@ -1443,12 +1635,12 @@
                                      mcp-list-job-id mcp-detail-job-id))
                  (assert-true (stringp job-id)
                               "inspection query wrapper should expose an actor execution job id"))
-               (dolist (kernel-id (list memory-list-kernel-id memory-detail-kernel-id
-                                        events-kernel-id console-kernel-id
-                                        manifest-kernel-id pending-kernel-id actor-flow-kernel-id
-                                        mcp-list-kernel-id mcp-detail-kernel-id))
-                 (assert-true (stringp kernel-id)
-                              "inspection query wrapper should retain kernel execution identity"))
+               (dolist (execution-id (list memory-list-execution-id memory-detail-execution-id
+                                           events-execution-id console-execution-id
+                                           manifest-execution-id pending-execution-id actor-flow-execution-id
+                                           mcp-list-execution-id mcp-detail-execution-id))
+                 (assert-true (stringp execution-id)
+                              "inspection query wrapper should retain execution identity"))
                (assert-equal memory-actor-id
                              (getf memory-list-entry :actor-id)
                              "memory list query should execute under the memory actor")
@@ -1497,8 +1689,8 @@
                        :package-name "COMMON-LISP"))
                     (package-metadata (sbcl-agent::service-response-metadata package-response))
                     (package-job-id (getf package-metadata :actor-execution-job-id))
-                    (package-kernel-id (or (getf package-metadata :kernel-execution-id)
-                                           (getf package-metadata :execution-id)))
+                    (package-execution-id
+                      (response-execution-id package-metadata))
                     (package-entry (history-entry-for-job package-job-id))
                     (symbol-page-response
                       (sbcl-agent::command-runtime-symbol-page-query-service
@@ -1509,8 +1701,8 @@
                        :limit 10))
                     (symbol-page-metadata (sbcl-agent::service-response-metadata symbol-page-response))
                     (symbol-page-job-id (getf symbol-page-metadata :actor-execution-job-id))
-                    (symbol-page-kernel-id (or (getf symbol-page-metadata :kernel-execution-id)
-                                               (getf symbol-page-metadata :execution-id)))
+                    (symbol-page-execution-id
+                      (response-execution-id symbol-page-metadata))
                     (symbol-page-entry (history-entry-for-job symbol-page-job-id))
                     (inspect-response
                       (sbcl-agent::command-runtime-inspect-symbol-query-service
@@ -1522,10 +1714,8 @@
                     (inspect-metadata (sbcl-agent::service-response-metadata inspect-response))
                     (inspect-job-id (or (getf inspect-data :actor-execution-job-id)
                                         (getf inspect-metadata :actor-execution-job-id)))
-                    (inspect-kernel-id (or (getf inspect-data :kernel-execution-id)
-                                           (getf inspect-metadata :kernel-execution-id)
-                                           (getf inspect-data :execution-id)
-                                           (getf inspect-metadata :execution-id)))
+                    (inspect-execution-id
+                      (response-execution-id inspect-data inspect-metadata))
                     (inspect-entry (history-entry-for-job inspect-job-id))
                     (entity-detail-response
                       (sbcl-agent::command-runtime-entity-detail-query-service
@@ -1536,10 +1726,8 @@
                     (entity-detail-metadata (sbcl-agent::service-response-metadata entity-detail-response))
                     (entity-detail-job-id (or (getf entity-detail-data :actor-execution-job-id)
                                               (getf entity-detail-metadata :actor-execution-job-id)))
-                    (entity-detail-kernel-id (or (getf entity-detail-data :kernel-execution-id)
-                                                 (getf entity-detail-metadata :kernel-execution-id)
-                                                 (getf entity-detail-data :execution-id)
-                                                 (getf entity-detail-metadata :execution-id)))
+                    (entity-detail-execution-id
+                      (response-execution-id entity-detail-data entity-detail-metadata))
                     (entity-detail-entry (history-entry-for-job entity-detail-job-id))
                     (runtime-actor-id
                       (sbcl-agent::actor-address-id
@@ -1549,9 +1737,10 @@
                (dolist (job-id (list package-job-id symbol-page-job-id inspect-job-id entity-detail-job-id))
                  (assert-true (stringp job-id)
                               "runtime inspection query wrapper should expose an actor execution job id"))
-               (dolist (kernel-id (list package-kernel-id symbol-page-kernel-id inspect-kernel-id entity-detail-kernel-id))
-                 (assert-true (stringp kernel-id)
-                              "runtime inspection query wrapper should retain kernel execution identity"))
+               (dolist (execution-id (list package-execution-id symbol-page-execution-id
+                                           inspect-execution-id entity-detail-execution-id))
+                 (assert-true (stringp execution-id)
+                              "runtime inspection query wrapper should retain execution identity"))
                (assert-equal runtime-actor-id
                              (getf package-entry :actor-id)
                              "runtime package-browser query should execute under the runtime actor")
@@ -1585,10 +1774,8 @@
                   (panel-metadata (sbcl-agent::service-response-metadata panel-response))
                   (panel-job-id (or (getf panel-data :actor-execution-job-id)
                                     (getf panel-metadata :actor-execution-job-id)))
-                  (panel-kernel-id (or (getf panel-data :kernel-execution-id)
-                                       (getf panel-metadata :kernel-execution-id)
-                                       (getf panel-data :execution-id)
-                                       (getf panel-metadata :execution-id)))
+                  (panel-execution-id
+                    (response-execution-id panel-data panel-metadata))
                   (runtime-response
                     (sbcl-agent::command-desktop-task-runtime-state-service
                      session
@@ -1597,10 +1784,8 @@
                   (runtime-metadata (sbcl-agent::service-response-metadata runtime-response))
                   (runtime-job-id (or (getf runtime-data :actor-execution-job-id)
                                       (getf runtime-metadata :actor-execution-job-id)))
-                  (runtime-kernel-id (or (getf runtime-data :kernel-execution-id)
-                                         (getf runtime-metadata :kernel-execution-id)
-                                         (getf runtime-data :execution-id)
-                                         (getf runtime-metadata :execution-id)))
+                  (runtime-execution-id
+                    (response-execution-id runtime-data runtime-metadata))
                   (trace-response
                     (sbcl-agent::command-desktop-task-actor-trace-service
                      session
@@ -1609,10 +1794,8 @@
                   (trace-metadata (sbcl-agent::service-response-metadata trace-response))
                   (trace-job-id (or (getf trace-data :actor-execution-job-id)
                                     (getf trace-metadata :actor-execution-job-id)))
-                  (trace-kernel-id (or (getf trace-data :kernel-execution-id)
-                                       (getf trace-metadata :kernel-execution-id)
-                                       (getf trace-data :execution-id)
-                                       (getf trace-metadata :execution-id)))
+                  (trace-execution-id
+                    (response-execution-id trace-data trace-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (admin-actor-id
@@ -1638,12 +1821,12 @@
                           "desktop-task runtime-state service should expose an actor execution job id")
              (assert-true (stringp trace-job-id)
                           "desktop-task actor-trace service should expose an actor execution job id")
-             (assert-true (stringp panel-kernel-id)
-                          "desktop-task actor-system-panel service should retain kernel execution identity")
-             (assert-true (stringp runtime-kernel-id)
-                          "desktop-task runtime-state service should retain kernel execution identity")
-             (assert-true (stringp trace-kernel-id)
-                          "desktop-task actor-trace service should retain kernel execution identity")
+             (assert-true (stringp panel-execution-id)
+                          "desktop-task actor-system-panel service should retain execution identity")
+             (assert-true (stringp runtime-execution-id)
+                          "desktop-task runtime-state service should retain execution identity")
+             (assert-true (stringp trace-execution-id)
+                          "desktop-task actor-trace service should retain execution identity")
              (assert-true panel-entry
                           "desktop-task actor-system-panel service should be recorded in actor runtime history")
              (assert-true runtime-entry
@@ -1680,10 +1863,8 @@
                   (desktop-metadata (sbcl-agent::service-response-metadata desktop-response))
                   (desktop-job-id (or (getf desktop-data :actor-execution-job-id)
                                       (getf desktop-metadata :actor-execution-job-id)))
-                  (desktop-kernel-id (or (getf desktop-data :kernel-execution-id)
-                                         (getf desktop-metadata :kernel-execution-id)
-                                         (getf desktop-data :execution-id)
-                                         (getf desktop-metadata :execution-id)))
+                  (desktop-execution-id
+                    (response-execution-id desktop-data desktop-metadata))
                   (preferences-response
                     (sbcl-agent::command-environment-desktop-preferences-query-service
                      environment))
@@ -1691,10 +1872,8 @@
                   (preferences-metadata (sbcl-agent::service-response-metadata preferences-response))
                   (preferences-job-id (or (getf preferences-data :actor-execution-job-id)
                                           (getf preferences-metadata :actor-execution-job-id)))
-                  (preferences-kernel-id (or (getf preferences-data :kernel-execution-id)
-                                             (getf preferences-metadata :kernel-execution-id)
-                                             (getf preferences-data :execution-id)
-                                             (getf preferences-metadata :execution-id)))
+                  (preferences-execution-id
+                    (response-execution-id preferences-data preferences-metadata))
                   (provider-response
                     (sbcl-agent::command-environment-provider-query-service
                      environment))
@@ -1702,10 +1881,8 @@
                   (provider-metadata (sbcl-agent::service-response-metadata provider-response))
                   (provider-job-id (or (getf provider-data :actor-execution-job-id)
                                        (getf provider-metadata :actor-execution-job-id)))
-                  (provider-kernel-id (or (getf provider-data :kernel-execution-id)
-                                          (getf provider-metadata :kernel-execution-id)
-                                          (getf provider-data :execution-id)
-                                          (getf provider-metadata :execution-id)))
+                  (provider-execution-id
+                    (response-execution-id provider-data provider-metadata))
                   (images-response
                     (sbcl-agent::command-environment-image-registry-query-service
                      environment))
@@ -1713,10 +1890,8 @@
                   (images-metadata (sbcl-agent::service-response-metadata images-response))
                   (images-job-id (or (getf images-data :actor-execution-job-id)
                                      (getf images-metadata :actor-execution-job-id)))
-                  (images-kernel-id (or (getf images-data :kernel-execution-id)
-                                        (getf images-metadata :kernel-execution-id)
-                                        (getf images-data :execution-id)
-                                        (getf images-metadata :execution-id)))
+                  (images-execution-id
+                    (response-execution-id images-data images-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (shell-actor-id
@@ -1753,14 +1928,14 @@
                           "environment provider query should expose an actor execution job id")
              (assert-true (stringp images-job-id)
                           "environment image-registry query should expose an actor execution job id")
-             (assert-true (stringp desktop-kernel-id)
-                          "shell desktop-model service should retain kernel execution identity")
-             (assert-true (stringp preferences-kernel-id)
-                          "environment desktop-preferences query should retain kernel execution identity")
-             (assert-true (stringp provider-kernel-id)
-                          "environment provider query should retain kernel execution identity")
-             (assert-true (stringp images-kernel-id)
-                          "environment image-registry query should retain kernel execution identity")
+             (assert-true (stringp desktop-execution-id)
+                          "shell desktop-model service should retain execution identity")
+             (assert-true (stringp preferences-execution-id)
+                          "environment desktop-preferences query should retain execution identity")
+             (assert-true (stringp provider-execution-id)
+                          "environment provider query should retain execution identity")
+             (assert-true (stringp images-execution-id)
+                          "environment image-registry query should retain execution identity")
              (assert-equal shell-actor-id
                            (getf desktop-entry :actor-id)
                            "shell desktop-model service should execute under the shell actor")
@@ -1792,40 +1967,32 @@
                   (runtime-summary-metadata (sbcl-agent::service-response-metadata runtime-summary-response))
                   (runtime-summary-job-id (or (getf runtime-summary-data :actor-execution-job-id)
                                               (getf runtime-summary-metadata :actor-execution-job-id)))
-                  (runtime-summary-kernel-id (or (getf runtime-summary-data :kernel-execution-id)
-                                                 (getf runtime-summary-metadata :kernel-execution-id)
-                                                 (getf runtime-summary-data :execution-id)
-                                                 (getf runtime-summary-metadata :execution-id)))
+                  (runtime-summary-execution-id
+                    (response-execution-id runtime-summary-data runtime-summary-metadata))
                   (runtime-telemetry-response
                     (sbcl-agent::command-runtime-telemetry-query-service session))
                   (runtime-telemetry-data (sbcl-agent::service-response-data runtime-telemetry-response))
                   (runtime-telemetry-metadata (sbcl-agent::service-response-metadata runtime-telemetry-response))
                   (runtime-telemetry-job-id (or (getf runtime-telemetry-data :actor-execution-job-id)
                                                 (getf runtime-telemetry-metadata :actor-execution-job-id)))
-                  (runtime-telemetry-kernel-id (or (getf runtime-telemetry-data :kernel-execution-id)
-                                                   (getf runtime-telemetry-metadata :kernel-execution-id)
-                                                   (getf runtime-telemetry-data :execution-id)
-                                                   (getf runtime-telemetry-metadata :execution-id)))
+                  (runtime-telemetry-execution-id
+                    (response-execution-id runtime-telemetry-data runtime-telemetry-metadata))
                   (calculator-response
                     (sbcl-agent::command-calculator-summary-query-service session))
                   (calculator-data (sbcl-agent::service-response-data calculator-response))
                   (calculator-metadata (sbcl-agent::service-response-metadata calculator-response))
                   (calculator-job-id (or (getf calculator-data :actor-execution-job-id)
                                          (getf calculator-metadata :actor-execution-job-id)))
-                  (calculator-kernel-id (or (getf calculator-data :kernel-execution-id)
-                                            (getf calculator-metadata :kernel-execution-id)
-                                            (getf calculator-data :execution-id)
-                                            (getf calculator-metadata :execution-id)))
+                  (calculator-execution-id
+                    (response-execution-id calculator-data calculator-metadata))
                   (package-response
                     (sbcl-agent::command-package-management-summary-query-service session))
                   (package-data (sbcl-agent::service-response-data package-response))
                   (package-metadata (sbcl-agent::service-response-metadata package-response))
                   (package-job-id (or (getf package-data :actor-execution-job-id)
                                       (getf package-metadata :actor-execution-job-id)))
-                  (package-kernel-id (or (getf package-data :kernel-execution-id)
-                                         (getf package-metadata :kernel-execution-id)
-                                         (getf package-data :execution-id)
-                                         (getf package-metadata :execution-id)))
+                  (package-execution-id
+                    (response-execution-id package-data package-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (runtime-actor-id
@@ -1867,14 +2034,14 @@
                           "calculator summary query should expose an actor execution job id")
              (assert-true (stringp package-job-id)
                           "package-management summary query should expose an actor execution job id")
-             (assert-true (stringp runtime-summary-kernel-id)
-                          "runtime summary query should retain kernel execution identity")
-             (assert-true (stringp runtime-telemetry-kernel-id)
-                          "runtime telemetry query should retain kernel execution identity")
-             (assert-true (stringp calculator-kernel-id)
-                          "calculator summary query should retain kernel execution identity")
-             (assert-true (stringp package-kernel-id)
-                          "package-management summary query should retain kernel execution identity")
+             (assert-true (stringp runtime-summary-execution-id)
+                          "runtime summary query should retain execution identity")
+             (assert-true (stringp runtime-telemetry-execution-id)
+                          "runtime telemetry query should retain execution identity")
+             (assert-true (stringp calculator-execution-id)
+                          "calculator summary query should retain execution identity")
+             (assert-true (stringp package-execution-id)
+                          "package-management summary query should retain execution identity")
              (assert-equal runtime-actor-id
                            (getf runtime-summary-entry :actor-id)
                            "runtime summary query should execute under the runtime actor")
@@ -1916,60 +2083,48 @@
                     (thread-list-metadata (sbcl-agent::service-response-metadata thread-list-response))
                     (thread-list-job-id (or (getf thread-list-data :actor-execution-job-id)
                                             (getf thread-list-metadata :actor-execution-job-id)))
-                    (thread-list-kernel-id (or (getf thread-list-data :kernel-execution-id)
-                                               (getf thread-list-metadata :kernel-execution-id)
-                                               (getf thread-list-data :execution-id)
-                                               (getf thread-list-metadata :execution-id)))
+                    (thread-list-execution-id
+                      (response-execution-id thread-list-data thread-list-metadata))
                     (thread-detail-response
                       (sbcl-agent::command-conversation-thread-detail-query-service session thread-id))
                     (thread-detail-data (sbcl-agent::service-response-data thread-detail-response))
                     (thread-detail-metadata (sbcl-agent::service-response-metadata thread-detail-response))
                     (thread-detail-job-id (or (getf thread-detail-data :actor-execution-job-id)
                                               (getf thread-detail-metadata :actor-execution-job-id)))
-                    (thread-detail-kernel-id (or (getf thread-detail-data :kernel-execution-id)
-                                                 (getf thread-detail-metadata :kernel-execution-id)
-                                                 (getf thread-detail-data :execution-id)
-                                                 (getf thread-detail-metadata :execution-id)))
+                    (thread-detail-execution-id
+                      (response-execution-id thread-detail-data thread-detail-metadata))
                     (turn-detail-response
                       (sbcl-agent::command-conversation-turn-detail-query-service session turn-id))
                     (turn-detail-data (sbcl-agent::service-response-data turn-detail-response))
                     (turn-detail-metadata (sbcl-agent::service-response-metadata turn-detail-response))
                     (turn-detail-job-id (or (getf turn-detail-data :actor-execution-job-id)
                                             (getf turn-detail-metadata :actor-execution-job-id)))
-                    (turn-detail-kernel-id (or (getf turn-detail-data :kernel-execution-id)
-                                               (getf turn-detail-metadata :kernel-execution-id)
-                                               (getf turn-detail-data :execution-id)
-                                               (getf turn-detail-metadata :execution-id)))
+                    (turn-detail-execution-id
+                      (response-execution-id turn-detail-data turn-detail-metadata))
                     (latency-response
                       (sbcl-agent::command-conversation-latency-query-service session turn-id))
                     (latency-data (sbcl-agent::service-response-data latency-response))
                     (latency-metadata (sbcl-agent::service-response-metadata latency-response))
                     (latency-job-id (or (getf latency-data :actor-execution-job-id)
                                         (getf latency-metadata :actor-execution-job-id)))
-                    (latency-kernel-id (or (getf latency-data :kernel-execution-id)
-                                           (getf latency-metadata :kernel-execution-id)
-                                           (getf latency-data :execution-id)
-                                           (getf latency-metadata :execution-id)))
+                    (latency-execution-id
+                      (response-execution-id latency-data latency-metadata))
                     (summary-response
                       (sbcl-agent::command-environment-summary-query-service environment))
                     (summary-data (sbcl-agent::service-response-data summary-response))
                     (summary-metadata (sbcl-agent::service-response-metadata summary-response))
                     (summary-job-id (or (getf summary-data :actor-execution-job-id)
                                         (getf summary-metadata :actor-execution-job-id)))
-                    (summary-kernel-id (or (getf summary-data :kernel-execution-id)
-                                           (getf summary-metadata :kernel-execution-id)
-                                           (getf summary-data :execution-id)
-                                           (getf summary-metadata :execution-id)))
+                    (summary-execution-id
+                      (response-execution-id summary-data summary-metadata))
                     (status-response
                       (sbcl-agent::command-environment-status-query-service environment))
                     (status-data (sbcl-agent::service-response-data status-response))
                     (status-metadata (sbcl-agent::service-response-metadata status-response))
                     (status-job-id (or (getf status-data :actor-execution-job-id)
                                        (getf status-metadata :actor-execution-job-id)))
-                    (status-kernel-id (or (getf status-data :kernel-execution-id)
-                                          (getf status-metadata :kernel-execution-id)
-                                          (getf status-data :execution-id)
-                                          (getf status-metadata :execution-id)))
+                    (status-execution-id
+                      (response-execution-id status-data status-metadata))
                     (runtime (sbcl-agent::ensure-actor-thread-pool session))
                     (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                     (conversation-actor-id
@@ -2006,18 +2161,18 @@
                             "environment summary query should expose an actor execution job id")
                (assert-true (stringp status-job-id)
                             "environment status query should expose an actor execution job id")
-               (assert-true (stringp thread-list-kernel-id)
-                            "conversation thread-list query should retain kernel execution identity")
-               (assert-true (stringp thread-detail-kernel-id)
-                            "conversation thread-detail query should retain kernel execution identity")
-               (assert-true (stringp turn-detail-kernel-id)
-                            "conversation turn-detail query should retain kernel execution identity")
-               (assert-true (stringp latency-kernel-id)
-                            "conversation latency query should retain kernel execution identity")
-               (assert-true (stringp summary-kernel-id)
-                            "environment summary query should retain kernel execution identity")
-               (assert-true (stringp status-kernel-id)
-                            "environment status query should retain kernel execution identity")
+               (assert-true (stringp thread-list-execution-id)
+                            "conversation thread-list query should retain execution identity")
+               (assert-true (stringp thread-detail-execution-id)
+                            "conversation thread-detail query should retain execution identity")
+               (assert-true (stringp turn-detail-execution-id)
+                            "conversation turn-detail query should retain execution identity")
+               (assert-true (stringp latency-execution-id)
+                            "conversation latency query should retain execution identity")
+               (assert-true (stringp summary-execution-id)
+                            "environment summary query should retain execution identity")
+               (assert-true (stringp status-execution-id)
+                            "environment status query should retain execution identity")
                (assert-equal conversation-actor-id
                              (getf thread-list-entry :actor-id)
                              "conversation thread-list query should execute under the context-chat actor")
@@ -2060,28 +2215,24 @@
                   (work-item-list-data (sbcl-agent::service-response-data work-item-list-response))
                   (work-item-list-metadata (sbcl-agent::service-response-metadata work-item-list-response))
                   (work-item-list-job-id (getf work-item-list-metadata :actor-execution-job-id))
-                  (work-item-list-kernel-id (or (getf work-item-list-metadata :kernel-execution-id)
-                                                (getf work-item-list-metadata :execution-id)))
+                  (work-item-list-execution-id
+                    (response-execution-id work-item-list-metadata))
                   (work-item-detail-response
                     (sbcl-agent::command-work-item-detail-query-service session work-item-id))
                   (work-item-detail-data (sbcl-agent::service-response-data work-item-detail-response))
                   (work-item-detail-metadata (sbcl-agent::service-response-metadata work-item-detail-response))
                   (work-item-detail-job-id (or (getf work-item-detail-data :actor-execution-job-id)
                                                (getf work-item-detail-metadata :actor-execution-job-id)))
-                  (work-item-detail-kernel-id (or (getf work-item-detail-data :kernel-execution-id)
-                                                  (getf work-item-detail-metadata :kernel-execution-id)
-                                                  (getf work-item-detail-data :execution-id)
-                                                  (getf work-item-detail-metadata :execution-id)))
+                  (work-item-detail-execution-id
+                    (response-execution-id work-item-detail-data work-item-detail-metadata))
                   (workflow-detail-response
                     (sbcl-agent::command-workflow-record-detail-query-service session workflow-record-id))
                   (workflow-detail-data (sbcl-agent::service-response-data workflow-detail-response))
                   (workflow-detail-metadata (sbcl-agent::service-response-metadata workflow-detail-response))
                   (workflow-detail-job-id (or (getf workflow-detail-data :actor-execution-job-id)
                                               (getf workflow-detail-metadata :actor-execution-job-id)))
-                  (workflow-detail-kernel-id (or (getf workflow-detail-data :kernel-execution-id)
-                                                 (getf workflow-detail-metadata :kernel-execution-id)
-                                                 (getf workflow-detail-data :execution-id)
-                                                 (getf workflow-detail-metadata :execution-id)))
+                  (workflow-detail-execution-id
+                    (response-execution-id workflow-detail-data workflow-detail-metadata))
                   (focus-response
                     (sbcl-agent::command-orchestration-focus-query-service
                      session
@@ -2090,10 +2241,8 @@
                   (focus-metadata (sbcl-agent::service-response-metadata focus-response))
                   (focus-job-id (or (getf focus-data :actor-execution-job-id)
                                     (getf focus-metadata :actor-execution-job-id)))
-                  (focus-kernel-id (or (getf focus-data :kernel-execution-id)
-                                       (getf focus-metadata :kernel-execution-id)
-                                       (getf focus-data :execution-id)
-                                       (getf focus-metadata :execution-id)))
+                  (focus-execution-id
+                    (response-execution-id focus-data focus-metadata))
                   (verification-response
                     (sbcl-agent::command-plan-verification-query-service
                      session
@@ -2102,10 +2251,8 @@
                   (verification-metadata (sbcl-agent::service-response-metadata verification-response))
                   (verification-job-id (or (getf verification-data :actor-execution-job-id)
                                            (getf verification-metadata :actor-execution-job-id)))
-                  (verification-kernel-id (or (getf verification-data :kernel-execution-id)
-                                              (getf verification-metadata :kernel-execution-id)
-                                              (getf verification-data :execution-id)
-                                              (getf verification-metadata :execution-id)))
+                  (verification-execution-id
+                    (response-execution-id verification-data verification-metadata))
                   (runtime (sbcl-agent::ensure-actor-thread-pool session))
                   (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                   (workflow-actor-id
@@ -2129,16 +2276,16 @@
                           "orchestration focus query should expose an actor execution job id")
              (assert-true (stringp verification-job-id)
                           "plan verification query should expose an actor execution job id")
-             (assert-true (stringp work-item-list-kernel-id)
-                          "work-item list query should retain kernel execution identity")
-             (assert-true (stringp work-item-detail-kernel-id)
-                          "work-item detail query should retain kernel execution identity")
-             (assert-true (stringp workflow-detail-kernel-id)
-                          "workflow record detail query should retain kernel execution identity")
-             (assert-true (stringp focus-kernel-id)
-                          "orchestration focus query should retain kernel execution identity")
-             (assert-true (stringp verification-kernel-id)
-                          "plan verification query should retain kernel execution identity")
+             (assert-true (stringp work-item-list-execution-id)
+                          "work-item list query should retain execution identity")
+             (assert-true (stringp work-item-detail-execution-id)
+                          "work-item detail query should retain execution identity")
+             (assert-true (stringp workflow-detail-execution-id)
+                          "workflow record detail query should retain execution identity")
+             (assert-true (stringp focus-execution-id)
+                          "orchestration focus query should retain execution identity")
+             (assert-true (stringp verification-execution-id)
+                          "plan verification query should retain execution identity")
              (assert-equal workflow-actor-id (getf work-item-list-entry :actor-id)
                            "work-item list query should execute under the workflow actor")
              (assert-equal workflow-actor-id (getf work-item-detail-entry :actor-id)
@@ -2203,8 +2350,8 @@
                     (sbcl-agent::command-project-list-query-service session))
                   (project-list-metadata (sbcl-agent::service-response-metadata project-list-response))
                   (project-list-job-id (getf project-list-metadata :actor-execution-job-id))
-                  (project-list-kernel-id (or (getf project-list-metadata :kernel-execution-id)
-                                              (getf project-list-metadata :execution-id)))
+                  (project-list-execution-id
+                    (response-execution-id project-list-metadata))
                   (project-list-entry (history-entry-for-job project-list-job-id))
                   (project-detail-response
                     (sbcl-agent::command-project-detail-query-service session project-id))
@@ -2212,24 +2359,22 @@
                   (project-detail-metadata (sbcl-agent::service-response-metadata project-detail-response))
                   (project-detail-job-id (or (getf project-detail-data :actor-execution-job-id)
                                              (getf project-detail-metadata :actor-execution-job-id)))
-                  (project-detail-kernel-id (or (getf project-detail-data :kernel-execution-id)
-                                                (getf project-detail-metadata :kernel-execution-id)
-                                                (getf project-detail-data :execution-id)
-                                                (getf project-detail-metadata :execution-id)))
+                  (project-detail-execution-id
+                    (response-execution-id project-detail-data project-detail-metadata))
                   (project-detail-entry (history-entry-for-job project-detail-job-id))
                   (harness-response
                     (sbcl-agent::command-project-testing-harness-inventory-query-service session))
                   (harness-metadata (sbcl-agent::service-response-metadata harness-response))
                   (harness-job-id (getf harness-metadata :actor-execution-job-id))
-                  (harness-kernel-id (or (getf harness-metadata :kernel-execution-id)
-                                         (getf harness-metadata :execution-id)))
+                  (harness-execution-id
+                    (response-execution-id harness-metadata))
                   (harness-entry (history-entry-for-job harness-job-id))
                   (incident-list-response
                     (sbcl-agent::command-incident-list-query-service session))
                   (incident-list-metadata (sbcl-agent::service-response-metadata incident-list-response))
                   (incident-list-job-id (getf incident-list-metadata :actor-execution-job-id))
-                  (incident-list-kernel-id (or (getf incident-list-metadata :kernel-execution-id)
-                                               (getf incident-list-metadata :execution-id)))
+                  (incident-list-execution-id
+                    (response-execution-id incident-list-metadata))
                   (incident-list-entry (history-entry-for-job incident-list-job-id))
                   (incident-detail-response
                     (sbcl-agent::command-incident-detail-query-service session incident-id))
@@ -2237,10 +2382,8 @@
                   (incident-detail-metadata (sbcl-agent::service-response-metadata incident-detail-response))
                   (incident-detail-job-id (or (getf incident-detail-data :actor-execution-job-id)
                                               (getf incident-detail-metadata :actor-execution-job-id)))
-                  (incident-detail-kernel-id (or (getf incident-detail-data :kernel-execution-id)
-                                                 (getf incident-detail-metadata :kernel-execution-id)
-                                                 (getf incident-detail-data :execution-id)
-                                                 (getf incident-detail-metadata :execution-id)))
+                  (incident-detail-execution-id
+                    (response-execution-id incident-detail-data incident-detail-metadata))
                   (incident-detail-entry (history-entry-for-job incident-detail-job-id))
                   (workspace-response
                     (sbcl-agent::command-rgp-workspace-query-service session environment))
@@ -2248,17 +2391,15 @@
                   (workspace-metadata (sbcl-agent::service-response-metadata workspace-response))
                   (workspace-job-id (or (getf workspace-data :actor-execution-job-id)
                                         (getf workspace-metadata :actor-execution-job-id)))
-                  (workspace-kernel-id (or (getf workspace-data :kernel-execution-id)
-                                           (getf workspace-metadata :kernel-execution-id)
-                                           (getf workspace-data :execution-id)
-                                           (getf workspace-metadata :execution-id)))
+                  (workspace-execution-id
+                    (response-execution-id workspace-data workspace-metadata))
                   (workspace-entry (history-entry-for-job workspace-job-id))
                   (artifacts-response
                     (sbcl-agent::command-rgp-artifacts-query-service session environment))
                   (artifacts-metadata (sbcl-agent::service-response-metadata artifacts-response))
                   (artifacts-job-id (getf artifacts-metadata :actor-execution-job-id))
-                  (artifacts-kernel-id (or (getf artifacts-metadata :kernel-execution-id)
-                                           (getf artifacts-metadata :execution-id)))
+                  (artifacts-execution-id
+                    (response-execution-id artifacts-metadata))
                   (artifacts-entry (history-entry-for-job artifacts-job-id))
                   (artifact-detail-response
                     (sbcl-agent::command-rgp-artifact-detail-query-service session artifact-id environment))
@@ -2266,17 +2407,15 @@
                   (artifact-detail-metadata (sbcl-agent::service-response-metadata artifact-detail-response))
                   (artifact-detail-job-id (or (getf artifact-detail-data :actor-execution-job-id)
                                               (getf artifact-detail-metadata :actor-execution-job-id)))
-                  (artifact-detail-kernel-id (or (getf artifact-detail-data :kernel-execution-id)
-                                                 (getf artifact-detail-metadata :kernel-execution-id)
-                                                 (getf artifact-detail-data :execution-id)
-                                                 (getf artifact-detail-metadata :execution-id)))
+                  (artifact-detail-execution-id
+                    (response-execution-id artifact-detail-data artifact-detail-metadata))
                   (artifact-detail-entry (history-entry-for-job artifact-detail-job-id))
                   (approvals-response
                     (sbcl-agent::command-rgp-approvals-query-service session environment))
                   (approvals-metadata (sbcl-agent::service-response-metadata approvals-response))
                   (approvals-job-id (getf approvals-metadata :actor-execution-job-id))
-                  (approvals-kernel-id (or (getf approvals-metadata :kernel-execution-id)
-                                           (getf approvals-metadata :execution-id)))
+                  (approvals-execution-id
+                    (response-execution-id approvals-metadata))
                   (approvals-entry (history-entry-for-job approvals-job-id))
                   (project-actor-id
                     (sbcl-agent::actor-address-id
@@ -2299,12 +2438,12 @@
                                    workspace-job-id artifacts-job-id artifact-detail-job-id approvals-job-id))
                (assert-true (stringp job-id)
                             "query wrapper should expose an actor execution job id"))
-             (dolist (kernel-id (list project-list-kernel-id project-detail-kernel-id harness-kernel-id
-                                      incident-list-kernel-id incident-detail-kernel-id
-                                      workspace-kernel-id artifacts-kernel-id
-                                      artifact-detail-kernel-id approvals-kernel-id))
-               (assert-true (stringp kernel-id)
-                            "query wrapper should retain kernel execution identity"))
+             (dolist (execution-id (list project-list-execution-id project-detail-execution-id harness-execution-id
+                                         incident-list-execution-id incident-detail-execution-id
+                                         workspace-execution-id artifacts-execution-id
+                                         artifact-detail-execution-id approvals-execution-id))
+               (assert-true (stringp execution-id)
+                            "query wrapper should retain execution identity"))
              (assert-equal project-actor-id (getf project-list-entry :actor-id)
                            "project list query should execute under the project actor")
              (assert-equal project-actor-id (getf project-detail-entry :actor-id)
@@ -2427,8 +2566,8 @@
       (assert-equal :completed
                     (sbcl-agent::turn-status turn)
                     "turn resume should complete the approval-gated turn")
-      (assert-true (stringp (getf action-result :kernel-execution-id))
-                   "resumed assistant actions should execute through kernelized command services")
+      (assert-true (stringp (response-execution-id action-result))
+                   "resumed assistant actions should execute through registered command services")
       (assert-true resume-entry
                    "turn resume should be recorded in actor runtime history")
       (assert-equal (format nil "actor/workflow/~A" (sbcl-agent::agent-session-id session))
@@ -9591,10 +9730,8 @@ fi
                 (create-metadata (sbcl-agent::service-response-metadata create-response))
                 (create-job-id (or (getf create-data :actor-execution-job-id)
                                    (getf create-metadata :actor-execution-job-id)))
-                (create-kernel-id (or (getf create-data :kernel-execution-id)
-                                      (getf create-metadata :kernel-execution-id)
-                                      (getf create-data :execution-id)
-                                      (getf create-metadata :execution-id)))
+                (create-execution-id
+                  (response-execution-id create-data create-metadata))
                 (thread-id (getf create-data :id))
                 (use-response
                   (sbcl-agent::command-conversation-use-thread-service
@@ -9604,10 +9741,8 @@ fi
                 (use-metadata (sbcl-agent::service-response-metadata use-response))
                 (use-job-id (or (getf use-data :actor-execution-job-id)
                                 (getf use-metadata :actor-execution-job-id)))
-                (use-kernel-id (or (getf use-data :kernel-execution-id)
-                                   (getf use-metadata :kernel-execution-id)
-                                   (getf use-data :execution-id)
-                                   (getf use-metadata :execution-id)))
+                (use-execution-id
+                  (response-execution-id use-data use-metadata))
                 (runtime (sbcl-agent::ensure-actor-thread-pool session))
                 (history (sbcl-agent::actor-runtime-state-execution-history runtime))
                 (context-chat-actor-id
@@ -9627,10 +9762,10 @@ fi
                         "conversation create-thread should expose an actor execution job id")
            (assert-true (stringp use-job-id)
                         "conversation use-thread should expose an actor execution job id")
-           (assert-true (stringp create-kernel-id)
-                        "conversation create-thread should retain a kernel execution id")
-           (assert-true (stringp use-kernel-id)
-                        "conversation use-thread should retain a kernel execution id")
+           (assert-true (stringp create-execution-id)
+                        "conversation create-thread should retain execution identity")
+           (assert-true (stringp use-execution-id)
+                        "conversation use-thread should retain execution identity")
            (assert-true create-entry
                         "conversation create-thread should be recorded in actor runtime history")
            (assert-true use-entry
@@ -10033,9 +10168,10 @@ fi
     (declare (ignore ignore))
     (assert-true mailbox-entry-id
                  "the runtime inbox entry should expose a mailbox entry id before supervision failure handling")
-    (assert-equal :failed
-                  (getf (getf failure-result :mailbox-entry) :delivery-status)
-                  "failing a mailbox entry should mark it failed")
+    (assert-true (member (getf (getf failure-result :mailbox-entry) :delivery-status)
+                         '(:failed :queued)
+                         :test #'eq)
+                 "failing a mailbox entry should leave it under actor supervision control")
     (assert-true incident
                  "failing a mailbox entry should record a supervision incident")
     (assert-equal :restart-child

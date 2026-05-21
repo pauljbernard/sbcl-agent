@@ -89,10 +89,10 @@ Implemented or substantially in place:
 - governed runtime mutation flows that stop at `:awaiting-cold-validation` until colder evidence is recorded
 - provider requests enriched with compact environment-backed context
 - validation and image-reconciliation artifact emission for thread-bound work-items, so governance evidence is visible in the artifact stream
-- a real execution-kernel seam through `src/kernel-core.lisp`, `src/kernel-service.lisp`, and `src/shell-service.lisp`
+- a real execution-service seam through shared execution services, execution handles, and the shell service boundary
 - execution-handle-centered inspect/control behavior and execution-native shell commands
 - execution surfaces, shell workspace, governance queue, object browser, inspector, and desktop host model
-- compatibility app registry, Linux app execution, lifecycle posture, relaunch, and shell-visible display-surface bridging through the compatibility kernel
+- compatibility app registry, Linux app execution, lifecycle posture, relaunch, and shell-visible display-surface bridging through the compatibility execution layer
 - developer-platform manifests and `.aop` package lifecycle flows including export, validation, import, activate, install, applied profile query, audit, history, harness, and package-provided compatibility app extension
 
 Still enhancement-oriented or still planned:
@@ -108,7 +108,7 @@ Still enhancement-oriented or still planned:
 
 ## Architectural Conformance
 
-Against the accepted [IntentOS target-state architecture]({{ '/agentos-target-state-architecture.html' | relative_url }}), the current codebase now satisfies the target architectural contract.
+Against the accepted [historical IntentOS target-state architecture]({{ '/agentos-target-state-architecture.html' | relative_url }}), the current codebase now satisfies the target architectural contract.
 
 What remains after this point is best understood as:
 

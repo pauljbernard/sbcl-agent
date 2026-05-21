@@ -11,6 +11,10 @@
                               :description "Execute in the main SBCL image."
                               :network-enabled-p nil
                               :workspace-write-p nil)
+        (make-sandbox-profile :id :workspace-staging
+                              :description "Stage governed workspace mutations in a disposable task workspace before promotion."
+                              :network-enabled-p nil
+                              :workspace-write-p t)
         (make-sandbox-profile :id :process-run
                               :description "Execute a subprocess from an isolated SBCL worker."
                               :network-enabled-p nil

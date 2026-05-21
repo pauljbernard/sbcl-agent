@@ -1,7 +1,8 @@
 (in-package #:sbcl-agent)
 
 (defun query-session-summary-service (session)
-  (let* ((summary (session-summary session))
+  (let* ((active-environment (service-active-environment :session session))
+         (summary (session-summary session))
          (blocked-work-items (remove-if-not #'blocked-work-item-summary-p
                                             (or (getf (getf summary :wait-summary) :blocked-work-items)
                                                 '())))
@@ -19,16 +20,17 @@
                                                 session
                                                 blocked-work-items
                                                 '(:queue :blocked-work)
-                                                (session-bound-environment session))
+                                                active-environment)
                                                :approval-surfaces
                                                (compact-work-item-surfaces-data
                                                 session
                                                 approval-work-items
                                                 '(:queue :approvals)
-                                                (session-bound-environment session))))
+                                                active-environment)))
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :session-summary-v1
-                                                                  :session session))))
+                                                                  :session session
+                                                                  :environment active-environment))))
 
 (defun command-session-save-service (session path)
   (make-service-command-response :session

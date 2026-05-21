@@ -8,7 +8,7 @@
 
 This page is now historical context, not the authoritative description of the current implementation.
 
-Use [IntentOS Target Architecture]({{ '/agentos-target-state-architecture.html' | relative_url }}) as the primary current-state architecture reference. This page remains useful because it shows the older baseline that the implementation program was refactoring away from.
+Use [Architecture]({{ '/architecture.html' | relative_url }}) and [Actor Runtime, Concurrency, And Governance]({{ '/robust-actor-kernel-architecture.html' | relative_url }}) as the primary current-state architecture references. This page remains useful because it shows the older baseline that the implementation program was refactoring away from.
 
 The current system consists of:
 
@@ -23,7 +23,7 @@ sbcl-agent-ux
   → application-level interface
 ```
 
-That baseline has since been materially superseded. The repository now represents an implemented execution-kernel environment and hosted UX rather than an advanced runtime that is still missing its architectural center.
+That baseline has since been materially superseded. The repository now represents an implemented self-hosted actor environment with a shared execution substrate and hosted UX rather than an advanced runtime that is still missing its architectural center.
 
 The earlier target-state gap program is now closed at the accepted architecture level. The right remaining questions are:
 - how realistic the runtime backends are
@@ -31,7 +31,7 @@ The earlier target-state gap program is now closed at the accepted architecture 
 - how strong the QA and evidence discipline is
 - how ergonomic the operator surfaces are
 
-## Architecture Assessment 1: Minimal Kernel Contract
+## Architecture Assessment 1: Minimal Execution Contract
 
 Current system exposes multiple top-level primitives:
 
@@ -45,19 +45,19 @@ Current system exposes multiple top-level primitives:
 - policy
 - approval
 
-These are now compressed under a real execution-kernel contract.
+These are now compressed under a real execution and governance contract.
 
 Current state:
 - single execution abstraction: present through execution handles
 - single invocation path: present for the governed operator surface through `invoke`
 - lifecycle model: present
-- non-bypassable kernel boundary: present at the accepted target level
+- non-bypassable execution and governance boundary: present at the accepted target level
 
 Remaining work:
 - deeper backend realism
 - broader forensic and artifact detail
 
-## Architecture Assessment 2: Compatibility Kernel
+## Architecture Assessment 2: Compatibility Execution Layer
 
 Current Linux and tool execution is now a real compatibility subsystem:
 
@@ -73,7 +73,7 @@ Remaining work:
 - more backend diversity beyond the currently implemented governed backends
 - richer isolation models where needed
 
-## Architecture Assessment 3: UX Kernel
+## Architecture Assessment 3: UX Shell Layer
 
 Current UX now consists of:
 

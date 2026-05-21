@@ -2,15 +2,15 @@
 
 `sbcl-agent` is an SBCL-native, image-native, governed execution environment.
 
-It began as a Codex-style shell, but the project has matured into something more specific: an execution-kernel-oriented environment in which source truth, live runtime truth, and workflow truth are all first-class and explicitly related.
+It began as a Codex-style shell, but the project has matured into something more specific: an environment-centered actor runtime in which source truth, live runtime truth, and workflow truth are all first-class and explicitly related.
 
 The point of the project is not to recreate a conventional IDE in Lisp or to wrap an LLM with shell tools. The point is to let humans and agents inspect and mutate the same running system they are reasoning about while preserving approvals, evidence, incidents, reconciliation, and operator trust.
 
 The current architecture is layered:
 
 1. `SBCL / Common Lisp` as runtime, persistence, and introspection substrate
-2. a more traditional governed `Kernel` as the authority and policy boundary
-3. an address-based `Actor System` as the capability and workflow layer
+2. a shared `Concurrency / Execution Core` as the bounded worker, queue, and execution-registry substrate
+3. an address-based `Actor System` as the primary capability, workflow, and governance layer
 4. a React `Surface` desktop as the presentation tier
 
 The integrated agent runs in the same environment it is operating on. Context is not gathered from a separate external model of the system. It is gathered from the live environment itself, and native policy-based governance is part of the execution substrate rather than an afterthought.
@@ -61,8 +61,8 @@ The codebase is real and usable today. It currently provides:
 - a public service boundary plus JSON CLI surfaces that shell, desktop, and external clients can call without scraping shell output
 - structured tools for files, docs, runtime, processes, git, and patches
 - persisted state for tasks, workers, work-items, workflow records, incidents, and reconciliation evidence
-- kernel-facing `invoke`, `inspect`, and `control` seams with execution handles becoming the primary operator reference
-- an explicit actor registry plus kernel capability registry for authoritative ingress and discoverable operator surfaces
+- public `invoke`, `inspect`, and `control` service seams with execution handles becoming the primary operator reference
+- an explicit actor registry plus execution capability registry for authoritative ingress and discoverable operator surfaces
 - explicit execution surfaces, shell workspace, governance queue, object browser, and inspector models
 - compatibility execution tracking for hosted process-style capabilities
 - a canonical planning-context packet with task framing, authority state, decisive evidence, uncertainty handling, strategy posture, and optional support
@@ -72,7 +72,7 @@ The codebase is real and usable today. It currently provides:
 - a hostable desktop contract consumed by `sbcl-agent-ux`
 - developer-platform manifests and `.aop` package export, validation, import, activation, install, and applied-profile queries
 
-The project is also intentionally transitional. It is moving from a session-centered composition model toward an environment-centered and execution-kernel-oriented one, so some compatibility structure still exists in the implementation.
+The project is also intentionally transitional. It has completed the major cutover away from a monolithic kernel model toward a shared execution substrate plus actor-owned governance, but some compatibility and terminology cleanup still exists in the implementation and docs.
 
 ## Documentation
 
@@ -109,15 +109,15 @@ The current architecture is best understood as a four-layer stack:
 flowchart TB
     React["React Surface Desktop"]
     Actor["Actor System"]
-    Kernel["Governed Kernel"]
+    Core["Concurrency / Execution Core"]
     Runtime["SBCL / Common Lisp Runtime"]
 
     React --> Actor
-    Actor --> Kernel
-    Kernel --> Runtime
+    Actor --> Core
+    Core --> Runtime
 ```
 
-The actor system now sits between the presentation tier and the kernel:
+The actor system now sits between the presentation tier and the shared execution substrate:
 
 ```mermaid
 flowchart TB
@@ -156,20 +156,20 @@ sequenceDiagram
     participant Gov as GovernanceActor
     participant Runtime as RuntimeActor
     participant Editor as EditorActor
-    participant Kernel as Governed Kernel
+    participant Core as Execution Services
 
     UI->>Chat: submit user intent
     Chat->>Gov: RequestExecution
 
     alt runtime evaluation
         Gov->>Runtime: AuthorizeRuntimeEvaluation
-        Runtime->>Kernel: invoke(runtime-eval)
-        Kernel-->>Runtime: result / evidence
+        Runtime->>Core: invoke(runtime-eval)
+        Core-->>Runtime: result / evidence
         Runtime-->>Chat: RuntimeReply
     else mutation
         Gov->>Editor: AuthorizePendingMutation
-        Editor->>Kernel: invoke(editor-mutation)
-        Kernel-->>Editor: result / evidence
+        Editor->>Core: invoke(editor-mutation)
+        Core-->>Editor: result / evidence
         Editor-->>Chat: MutationApplied
     end
 
@@ -264,7 +264,7 @@ The current architecture is still organized around one rule:
 
 That rule still matters, but it now sits inside a larger framing: the shell, REPL, threads, artifacts, work-items, and agents are all becoming inhabitants of a larger `Environment` object rather than independent top-level concepts.
 
-At the same time, the current refactor is compressing the mutation and inspection boundary toward an execution kernel:
+At the same time, the current architecture has consolidated mutation and inspection around shared execution services:
 
 - `invoke` is becoming the mandatory execution entry path
 - `inspect` is becoming the primary read path over execution-backed objects
@@ -282,7 +282,7 @@ The project is developed and tested against SBCL. Other Common Lisp implementati
 
 The runtime is still serially loaded through `sbcl-agent.asd`, but responsibility is clearer than a flat file listing suggests:
 
-- environment kernel: environment domain files, workflow/work-items, incidents, runtime state
+- environment runtime: environment domain files, workflow/work-items, incidents, runtime state
 - provider boundary: protocol, transport, request snapshot, provider adapters
 - service boundary: `*-service.lisp` files plus `service-core.lisp`
 - operator shell: command normalization, shell dispatch, REPL, CLI
@@ -290,8 +290,8 @@ The runtime is still serially loaded through `sbcl-agent.asd`, but responsibilit
 
 Representative files:
 
-- environment kernel: `src/environment-core.lisp`, `src/environment-sync.lisp`, `src/environment-summary.lisp`, `src/environment-compatibility.lisp`, `src/mutation-engine.lisp`, `src/work-items.lisp`, `src/workflow.lisp`
-- execution kernel: `src/kernel-core.lisp`, `src/kernel-service.lisp`, `src/shell-service.lisp`
+- environment runtime: `src/environment-core.lisp`, `src/environment-sync.lisp`, `src/environment-summary.lisp`, `src/environment-compatibility.lisp`, `src/mutation-engine.lisp`, `src/work-items.lisp`, `src/workflow.lisp`
+- execution core and services: `src/execution-registry-core.lisp`, `src/concurrency-core.lisp`, `src/execution-handle-service.lisp`, `src/shell-service.lisp`
 - provider boundary: `src/request-snapshot.lisp`, `src/provider-protocol.lisp`, `src/provider-transport.lisp`, `src/provider-transport-curl.lisp`, `src/provider-openai.lisp`
 - service boundary: `src/environment-service.lisp`, `src/conversation-service.lisp`, `src/runtime-service.lisp`, `src/execution-service.lisp`, `src/session-service.lisp`, `src/rgp-service.lisp`, `src/mutation-review-service.lisp`, `src/task-service.lisp`, `src/worker-service.lisp`, `src/workflow-ops-service.lisp`, `src/platform-service.lisp`
 - operator shell and entrypoints: `src/shell.lisp`, `src/repl.lisp`, `src/main.lisp`, `bin/sbcl-agent`
@@ -328,6 +328,10 @@ Top-level CLI commands:
 - `./bin/sbcl-agent rgp <subcommand> ...`
 - `./bin/run-tests`
 - `./bin/run-evals`
+- `./bin/run-concurrency-regression`
+- `./bin/run-concurrency-performance`
+- `./bin/run-actor-system-regression`
+- `./bin/run-actor-system-performance`
 - `./bin/run-coverage`
 - `./bin/install-docs-deps`
 - `./bin/build-docs`
@@ -424,7 +428,7 @@ Those commands expose the same service-backed provider profile, routing, and rou
 
 The current direction is:
 
-- `sbcl-agent` owns the execution kernel, shell workspace, inspector, governance queue, and desktop host contract
+- `sbcl-agent` owns the execution core, shell workspace, inspector, governance queue, and desktop host contract
 - `sbcl-agent-ux` consumes that host contract through `desktop/show`, `desktop/action`, and `desktop/restore`
 - the platform layer is beginning to expose installable `.aop` package descriptors and applied active-package profiles
 

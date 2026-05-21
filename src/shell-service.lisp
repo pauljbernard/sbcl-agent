@@ -4,8 +4,8 @@
   (if (and actor-execution-job-id
            (listp response))
       (let ((metadata (copy-list (or (getf response :metadata) '())))
-            (updated-data (and (listp (getf response :data))
-                               (copy-tree (getf response :data)))))
+            (updated-data (and (keyword-plist-p (getf response :data))
+                               (copy-list (getf response :data)))))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
         (when updated-data
@@ -47,11 +47,13 @@
 (defun shell-focus-object-id (session &optional environment)
   (let ((focus-object-id (agent-session-shell-focus-object-id session)))
     (when focus-object-id
-      (let ((active-environment (or environment
-                                    (session-bound-environment session))))
+      (let ((active-environment (service-active-environment :session session
+                                                            :environment environment
+                                                            :ensure-p nil
+                                                            :bind-session-p nil)))
         (when (and active-environment
                    (ignore-errors
-                     (kernel-find-execution focus-object-id active-environment)))
+                     (find-execution-handle focus-object-id active-environment)))
           focus-object-id)))))
 
 (defun set-shell-focus-object-id (session object-id)
@@ -129,19 +131,19 @@
   (or (shell-object-reference-execution-id item)
       (shell-object-reference-execution-id (getf item :surface))
       (let ((handle (or (and (getf item :work-item-id)
-                             (first (kernel-execution-summaries-by-target :work-item-id
+                             (first (execution-handle-summaries-by-target :work-item-id
                                                                           (getf item :work-item-id)
                                                                           environment)))
                         (and (getf item :workflow-record-id)
-                             (first (kernel-execution-summaries-by-target :workflow-record-id
+                             (first (execution-handle-summaries-by-target :workflow-record-id
                                                                           (getf item :workflow-record-id)
                                                                           environment)))
                         (and (getf item :incident-id)
-                             (first (kernel-execution-summaries-by-target :incident-id
+                             (first (execution-handle-summaries-by-target :incident-id
                                                                           (getf item :incident-id)
                                                                           environment)))
                         (and (getf item :turn-id)
-                             (first (kernel-execution-summaries-by-target :turn-id
+                             (first (execution-handle-summaries-by-target :turn-id
                                                                           (getf item :turn-id)
                                                                           environment))))))
         (and handle
@@ -312,7 +314,7 @@
           finally (error "No focusable governance queue item exists at or after index ~S" index))))
 
 (defun query-shell-governance-queue-service (session &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (session-summary (service-response-data
                            (query-session-summary-service session)))
          (incident-summaries (service-response-data
@@ -698,6 +700,43 @@
           :command command
           :params params)))
 
+(defun normalize-shell-desktop-restore-panel-state (panel-id panel-state)
+  (let ((resolved-panel-id (or panel-id
+                               (getf panel-state :panel-id))))
+    (unless (keywordp resolved-panel-id)
+      (error "DESKTOP/RESTORE requires :panel-id or a panel-state with :panel-id"))
+    (case resolved-panel-id
+      (:workspace
+       (append (list :panel-id :workspace)
+               (when (integerp (getf panel-state :selected-index))
+                 (list :selected-index (getf panel-state :selected-index)))
+               (when (getf panel-state :selected-execution-id)
+                 (list :selected-execution-id (getf panel-state :selected-execution-id)))))
+      (:display
+       (append (list :panel-id :display)
+               (when (integerp (getf panel-state :selected-index))
+                 (list :selected-index (getf panel-state :selected-index)))
+               (when (getf panel-state :selected-execution-id)
+                 (list :selected-execution-id (getf panel-state :selected-execution-id)))
+               (when (getf panel-state :selected-app-id)
+                 (list :selected-app-id (getf panel-state :selected-app-id)))))
+      (:governance
+       (append (list :panel-id :governance)
+               (when (integerp (getf panel-state :selected-index))
+                 (list :selected-index (getf panel-state :selected-index)))))
+      (:object-browser
+       (append (list :panel-id :object-browser)
+               (when (integerp (getf panel-state :selected-index))
+                 (list :selected-index (getf panel-state :selected-index)))
+               (when (getf panel-state :selected-kind)
+                 (list :selected-kind (getf panel-state :selected-kind)))))
+      (:inspector
+       (append (list :panel-id :inspector)
+               (when (getf panel-state :focus-object-id)
+                 (list :focus-object-id (getf panel-state :focus-object-id)))))
+      (otherwise
+       (error "Unknown shell desktop panel ~S" resolved-panel-id)))))
+
 (defun shell-desktop-selected-governance-item (governance-queue focus-object-id)
   (or (find focus-object-id
             (or (getf governance-queue :items) '())
@@ -1069,7 +1108,7 @@
                       (getf execution :last-observed-status)
                       (getf execution :status))
           :capability (and execution
-                           (kernel-capability-name (getf execution :capability)))
+                           (capability-name-string (getf execution :capability)))
           :history-count (getf forensics :history-count)
           :app-id (getf inspection-data :app-id)
           :supported-actions (and control-posture
@@ -1187,7 +1226,7 @@
         (otherwise nil)))))
 
 (defun query-shell-workspace-service (session &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (session-summary (service-response-data
                            (query-session-summary-service session)))
          (environment-status (service-response-data
@@ -1332,7 +1371,7 @@
                                                                   :environment active-environment))))
 
 (defun query-shell-desktop-model-service (session &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session
                                                    :environment active-environment)))
@@ -1375,15 +1414,12 @@
                                                            :panels panels))
                               :recommended-action (shell-desktop-recommended-action
                                                    (list :active-panel active-panel
-                                                         :panels panels))
-                              :workspace workspace
-                              :surface-list surface-list
-                              :inspector inspector)))
+                                                         :panels panels)))))
     (make-service-query-response :shell
                                  :desktop-model
                                  desktop-model
                                  :metadata (make-service-metadata :authority :environment
-                                                                  :read-model :shell-desktop-model-v1
+                                                                  :read-model :shell-desktop-model-v2
                                                                   :session session
                                                                   :environment active-environment))))
 
@@ -1396,17 +1432,12 @@
                                :payload '()
                                :metadata '())
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Inspect shell desktop model."
-                                    "shell/desktop-model"
-                                    :authority :environment
-                                    :environment environment
-                                    :payload '()))
+     (query-shell-desktop-model-service session :environment environment))
    :shell/desktop-model
    :desktop-model))
 
 (defun perform-shell-desktop-panel-service (session panel-id &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (desktop-model (service-response-data
                          (query-shell-desktop-model-service session
                                                            :environment active-environment))))
@@ -1434,18 +1465,13 @@
                                :payload (list :panel-id panel-id)
                                :metadata (list :panel-id panel-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Activate shell desktop panel ~A." panel-id)
-                                    "shell/desktop-panel"
-                                    :authority :environment
-                                    :environment environment
-                                    :payload (list :panel-id panel-id)))
+     (perform-shell-desktop-panel-service session panel-id :environment environment))
    :shell/desktop-panel
    :desktop-panel
    :metadata (list :panel-id panel-id)))
 
 (defun perform-shell-desktop-select-service (session panel-id &key index execution-id app-id object-kind environment)
-  (let ((active-environment (ensure-kernel-bound-environment session environment)))
+  (let ((active-environment (ensure-execution-bound-environment session environment)))
     (case panel-id
       (:workspace
        (let ((result (service-response-data
@@ -1574,86 +1600,83 @@
                                               :object-kind object-kind)
                                :metadata (list :panel-id panel-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Select shell desktop state in panel ~A." panel-id)
-                                    "shell/desktop-select"
-                                    :authority :environment
-                                    :environment environment
-                                    :payload (list :panel-id panel-id
-                                                   :index index
-                                                   :execution-id execution-id
-                                                   :app-id app-id
-                                                   :object-kind object-kind)))
+     (perform-shell-desktop-select-service session
+                                           panel-id
+                                           :index index
+                                           :execution-id execution-id
+                                           :app-id app-id
+                                           :object-kind object-kind
+                                           :environment environment))
    :shell/desktop-select
    :desktop-select
    :metadata (list :panel-id panel-id)))
 
 (defun perform-shell-desktop-restore-service (session &key panel-id panel-state environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (resolved-panel-id (or panel-id
-                                (getf panel-state :panel-id))))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
+         (normalized-panel-state (normalize-shell-desktop-restore-panel-state panel-id panel-state))
+         (resolved-panel-id (getf normalized-panel-state :panel-id)))
     (unless (keywordp resolved-panel-id)
       (error "DESKTOP/RESTORE requires :panel-id or a panel-state with :panel-id"))
     (let ((result
             (case resolved-panel-id
               (:workspace
-               (if (or (getf panel-state :selected-execution-id)
-                       (integerp (getf panel-state :selected-index)))
+               (if (or (getf normalized-panel-state :selected-execution-id)
+                       (integerp (getf normalized-panel-state :selected-index)))
                    (service-response-data
                     (perform-shell-desktop-select-service session
                                                           :workspace
-                                                          :execution-id (getf panel-state :selected-execution-id)
-                                                          :index (getf panel-state :selected-index)
+                                                          :execution-id (getf normalized-panel-state :selected-execution-id)
+                                                          :index (getf normalized-panel-state :selected-index)
                                                           :environment active-environment))
                    (service-response-data
                     (perform-shell-desktop-panel-service session
                                                          :workspace
                                                          :environment active-environment))))
               (:display
-               (if (or (getf panel-state :selected-execution-id)
-                       (getf panel-state :selected-app-id)
-                       (integerp (getf panel-state :selected-index)))
+               (if (or (getf normalized-panel-state :selected-execution-id)
+                       (getf normalized-panel-state :selected-app-id)
+                       (integerp (getf normalized-panel-state :selected-index)))
                    (service-response-data
                     (perform-shell-desktop-select-service session
                                                           :display
-                                                          :execution-id (getf panel-state :selected-execution-id)
-                                                          :app-id (getf panel-state :selected-app-id)
-                                                          :index (getf panel-state :selected-index)
+                                                          :execution-id (getf normalized-panel-state :selected-execution-id)
+                                                          :app-id (getf normalized-panel-state :selected-app-id)
+                                                          :index (getf normalized-panel-state :selected-index)
                                                           :environment active-environment))
                    (service-response-data
                     (perform-shell-desktop-panel-service session
                                                          :display
                                                          :environment active-environment))))
               (:governance
-               (if (integerp (getf panel-state :selected-index))
+               (if (integerp (getf normalized-panel-state :selected-index))
                    (service-response-data
                     (perform-shell-desktop-select-service session
                                                           :governance
-                                                          :index (getf panel-state :selected-index)
+                                                          :index (getf normalized-panel-state :selected-index)
                                                           :environment active-environment))
                    (service-response-data
                     (perform-shell-desktop-panel-service session
                                                          :governance
                                                          :environment active-environment))))
               (:object-browser
-               (if (or (getf panel-state :selected-kind)
-                       (integerp (getf panel-state :selected-index)))
+               (if (or (getf normalized-panel-state :selected-kind)
+                       (integerp (getf normalized-panel-state :selected-index)))
                    (service-response-data
                     (perform-shell-desktop-select-service session
                                                           :object-browser
-                                                          :object-kind (getf panel-state :selected-kind)
-                                                          :index (getf panel-state :selected-index)
+                                                          :object-kind (getf normalized-panel-state :selected-kind)
+                                                          :index (getf normalized-panel-state :selected-index)
                                                           :environment active-environment))
                    (service-response-data
                     (perform-shell-desktop-panel-service session
                                                          :object-browser
                                                          :environment active-environment))))
               (:inspector
-               (if (getf panel-state :focus-object-id)
+               (if (getf normalized-panel-state :focus-object-id)
                    (service-response-data
                     (perform-shell-desktop-select-service session
                                                           :inspector
-                                                          :execution-id (getf panel-state :focus-object-id)
+                                                          :execution-id (getf normalized-panel-state :focus-object-id)
                                                           :environment active-environment))
                    (service-response-data
                     (perform-shell-desktop-panel-service session
@@ -1664,7 +1687,7 @@
       (make-service-command-response :shell
                                      :desktop-restore
                                      (list :panel-id resolved-panel-id
-                                           :panel-state panel-state
+                                           :panel-state normalized-panel-state
                                            :result result
                                            :desktop-model (service-response-data
                                                            (query-shell-desktop-model-service
@@ -1676,31 +1699,26 @@
                                                                       :environment active-environment)))))
 
 (defun command-shell-desktop-restore-service (session &key panel-id panel-state environment)
+  (let ((normalized-panel-state (normalize-shell-desktop-restore-panel-state panel-id panel-state)))
   (call-with-shell-actor
    session
    (make-shell-control-request session
                                :desktop-restore
                                :shell/desktop-restore
-                               :payload (list :panel-id panel-id
-                                              :panel-state panel-state)
-                               :metadata (list :panel-id (or panel-id
-                                                             (getf panel-state :panel-id))))
+                               :payload (list :panel-id (getf normalized-panel-state :panel-id)
+                                              :panel-state normalized-panel-state)
+                               :metadata (list :panel-id (getf normalized-panel-state :panel-id)))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Restore shell desktop panel ~A." (or panel-id
-                                                                                      (getf panel-state :panel-id)))
-                                    "shell/desktop-restore"
-                                    :authority :environment
-                                    :environment environment
-                                    :payload (list :panel-id panel-id
-                                                   :panel-state panel-state)))
+     (perform-shell-desktop-restore-service session
+                                            :panel-id (getf normalized-panel-state :panel-id)
+                                            :panel-state normalized-panel-state
+                                            :environment environment))
    :shell/desktop-restore
    :desktop-restore
-   :metadata (list :panel-id (or panel-id
-                                 (getf panel-state :panel-id)))))
+   :metadata (list :panel-id (getf normalized-panel-state :panel-id)))))
 
 (defun perform-shell-desktop-action-service (session action &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (resolved-action
            (if (getf action :action-id)
                (let* ((desktop-model (service-response-data
@@ -1888,13 +1906,7 @@
                                                :action-id (getf action :action-id)
                                                :action-kind (getf action :action-kind)))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Run shell desktop action ~A." (or (getf action :action-id)
-                                                                                   (getf action :action-kind)))
-                                    "shell/desktop-control"
-                                    :authority :environment
-                                    :environment environment
-                                    :payload action))
+     (perform-shell-desktop-action-service session action :environment environment))
    :shell/desktop-control
    :desktop-action
    :metadata (list :panel-id (getf action :panel-id)
@@ -1904,7 +1916,8 @@
 (defun query-shell-surface-list-service (session &key environment)
   (let* ((workspace (service-response-data
                      (query-shell-workspace-service session :environment environment)))
-         (focus-object-id (getf workspace :inspector-focus-object-id)))
+         (focus-object-id (getf workspace :inspector-focus-object-id))
+         (active-environment (ensure-execution-bound-environment session environment)))
     (make-service-query-response :shell
                                  :surface-list
                                  (list :count (getf (getf workspace :execution-surfaces) :count)
@@ -1914,14 +1927,14 @@
                                        :focus-index (shell-workspace-surface-index workspace focus-object-id))
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :shell-surface-list-v1
-                                                                 :session session
-                                                                 :environment (or environment
-                                                                                  (session-bound-environment session))))))
+                                                                  :session session
+                                                                  :environment active-environment))))
 
 (defun query-shell-display-list-service (session &key environment)
   (let* ((workspace (service-response-data
                      (query-shell-workspace-service session :environment environment)))
-         (focus-object-id (getf workspace :inspector-focus-object-id)))
+         (focus-object-id (getf workspace :inspector-focus-object-id))
+         (active-environment (ensure-execution-bound-environment session environment)))
     (make-service-query-response :shell
                                  :display-list
                                  (list :count (getf (getf workspace :display-surfaces) :count)
@@ -1932,8 +1945,7 @@
                                  :metadata (make-service-metadata :authority :environment
                                                                   :read-model :shell-display-list-v1
                                                                   :session session
-                                                                  :environment (or environment
-                                                                                   (session-bound-environment session))))))
+                                                                  :environment active-environment))))
 
 (defun query-shell-display-detail-service (session &rest arguments)
   (let* ((positional-supplied-p (and arguments
@@ -1948,7 +1960,7 @@
                           arguments)))
          (environment (getf options :environment))
          (app-id (getf options :app-id))
-         (active-environment (ensure-kernel-bound-environment session environment))
+         (active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (selected-surface
@@ -1999,7 +2011,7 @@
                           (rest arguments)
                           arguments)))
          (environment (getf options :environment))
-         (active-environment (ensure-kernel-bound-environment session environment))
+         (active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (focus-object-id (or object-id
@@ -2016,9 +2028,9 @@
                                                                       :session session
                                                                       :environment active-environment))
         (let* ((inspection (append (service-response-data
-                                    (query-kernel-inspect-service session
-                                                                  focus-object-id
-                                                                  :environment active-environment))
+                                    (query-execution-detail-service session
+                                                                    focus-object-id
+                                                                    :environment active-environment))
                                    (list :focus-object-id focus-object-id
                                          :workspace-id (getf workspace :workspace-id))))
                (summary (shell-inspector-summary inspection))
@@ -2034,8 +2046,8 @@
                                                                         :environment active-environment))))))
 
 (defun command-shell-focus-set-service (session object-id &key environment source)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
-         (handle (ensure-kernel-handle object-id active-environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
+         (handle (ensure-execution-handle object-id active-environment))
          (focus-object-id (execution-handle-execution-id handle)))
     (set-shell-focus-object-id session focus-object-id)
     (set-shell-active-panel-id session :inspector)
@@ -2058,7 +2070,7 @@
                                                                     :environment active-environment))))
 
 (defun command-shell-surface-select-service (session &key index execution-id environment source)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (surface (cond
@@ -2093,7 +2105,7 @@
                                                                     :environment active-environment))))
 
 (defun command-shell-display-select-service (session &key index execution-id app-id environment source)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (selected-surface
@@ -2132,7 +2144,7 @@
                                                                     :environment active-environment))))
 
 (defun command-shell-surface-step-service (session direction &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (focus-object-id (or (shell-focus-object-id session active-environment)
@@ -2160,7 +2172,7 @@
                                                                        :environment active-environment))))))
 
 (defun command-shell-display-step-service (session direction &key environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (focus-object-id (or (shell-focus-object-id session active-environment)
@@ -2190,7 +2202,7 @@
 
 (defun command-shell-display-control-service (session action
                                                &key execution-id app-id reason note provider environment status)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (workspace (service-response-data
                      (query-shell-workspace-service session :environment active-environment)))
          (selected-surface
@@ -2211,14 +2223,14 @@
       (error "Selected shell display surface has no execution id"))
     (set-shell-focus-object-id session selected-execution-id)
     (set-shell-active-panel-id session :display)
-    (let* ((control-response (command-kernel-control-service session
-                                                             selected-execution-id
-                                                             action
-                                                             :reason reason
-                                                             :note note
-                                                             :provider provider
-                                                             :environment active-environment
-                                                             :status status))
+    (let* ((control-response (command-execution-control-service session
+                                                                selected-execution-id
+                                                                action
+                                                                :reason reason
+                                                                :note note
+                                                                :provider provider
+                                                                :environment active-environment
+                                                                :status status))
            (control-data (service-response-data control-response))
            (controlled-execution-id
              (or (getf (getf control-data :execution) :execution-id)
@@ -2246,7 +2258,7 @@
                                                                       :environment active-environment)))))
 
 (defun command-shell-open-service (session &key execution-id surface-index display-index display-app-id governance-index object-kind object-index environment source)
-  (let ((active-environment (ensure-kernel-bound-environment session environment)))
+  (let ((active-environment (ensure-execution-bound-environment session environment)))
     (cond
       (execution-id
        (let* ((focus-response (command-shell-focus-set-service session
@@ -2383,7 +2395,7 @@
        (error "Shell open requires one of :execution-id, :surface-index, :governance-index, or :object-kind")))))
 
 (defun command-shell-governance-select-service (session &key (index 0) environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (queue (service-response-data
                  (query-shell-governance-queue-service session
                                                        :environment active-environment))))
@@ -2407,7 +2419,7 @@
                                                                       :environment active-environment)))))
 
 (defun command-shell-object-select-service (session object-kind &key (index 0) environment)
-  (let* ((active-environment (ensure-kernel-bound-environment session environment))
+  (let* ((active-environment (ensure-execution-bound-environment session environment))
          (browser (service-response-data
                    (query-shell-object-browser-service session
                                                       :object-kind object-kind

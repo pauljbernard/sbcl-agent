@@ -1,103 +1,5 @@
 (in-package #:sbcl-agent)
 
-(defstruct validation-result
-  kind
-  status
-  executed-at
-  evidence
-  tainted-p)
-
-(defstruct image-reconciliation-record
-  recorded-at
-  replay-id
-  image-summary
-  source-summary
-  status)
-
-(defstruct reconciliation-record
-  status
-  recorded-at
-  summary
-  live-status
-  cold-status
-  reproducibility-status
-  taint-status
-  taint-reasons)
-
-(defstruct checkpoint-record
-  id
-  captured-at
-  source-snapshot
-  image-snapshot-ref
-  worker-summaries
-  validation-baseline)
-
-(defstruct mutation-transaction
-  id
-  work-item-id
-  replay-id
-  scope
-  checkpoint-id
-  state
-  source-mutations
-  image-mutations
-  resource-effects
-  rollback-status
-  rollback-detail
-  quarantine-status)
-
-(defstruct validator-task-record
-  id
-  replay-id
-  kind
-  checkpoint-id
-  status
-  resume-command
-  created-at
-  completed-at)
-
-(defstruct provenance-record
-  source-hash
-  image-snapshot-id
-  introspection-queries
-  executed-mutations
-  before-after-map
-  runtime-observations
-  validation-outputs
-  final-source-diff
-  rollback-availability
-  taint-status
-  taint-reasons
-  approval-checkpoints
-  operator-interventions)
-
-(defstruct work-item
-  id
-  goal
-  status
-  created-at
-  updated-at
-  source-snapshot
-  image-snapshot-ref
-  workflow-record-ref
-  introspection-evidence
-  mutation-intent
-  runtime-observations
-  live-validation-result
-  cold-validation-result
-  pending-validations
-  validator-tasks
-  next-action
-  resume-payload
-  image-reconciliation
-  reconciliation-result
-  rollback-point
-  taint-status
-  closure-decision
-  transaction-ids
-  transactions
-  checkpoints
-  provenance)
 
 (defun work-item-long-horizon-plan (work-item)
   (getf (work-item-mutation-intent work-item) :long-horizon-plan))
@@ -133,19 +35,26 @@
      :active)))
 
 (defun work-item-plan-current-phase (work-item)
-  (cond
-    ((member (work-item-status work-item) '(:awaiting-cold-validation :committed) :test #'eq)
-     :validate)
-    ((member (work-item-status work-item) '(:awaiting-approval :quarantined :failed :rolled-back) :test #'eq)
-     :resolve-blockers)
-    ((eq (work-item-plan-health work-item) :resumable)
-     :resolve-blockers)
-    (t
-     (case (work-item-status work-item)
-       (:planned :plan)
-       ((:checkpointed :mutating) :mutate)
-       (t (or (first (getf (work-item-long-horizon-plan work-item) :planning-phases))
-              :inspect))))))
+  (let* ((transaction (current-work-item-transaction work-item))
+         (transaction-phase (and transaction
+                                 (transaction-current-phase transaction))))
+    (cond
+      ((member transaction-phase '(:verification-pending :verified) :test #'eq)
+       :verify)
+      ((member transaction-phase '(:promotion-pending :promoted) :test #'eq)
+       :promote)
+      ((member (work-item-status work-item) '(:awaiting-cold-validation :committed) :test #'eq)
+       :validate)
+      ((member (work-item-status work-item) '(:awaiting-approval :quarantined :failed :rolled-back) :test #'eq)
+       :resolve-blockers)
+      ((eq (work-item-plan-health work-item) :resumable)
+       :resolve-blockers)
+      (t
+       (case (work-item-status work-item)
+         (:planned :plan)
+         ((:checkpointed :mutating) :mutate)
+         (t (or (first (getf (work-item-long-horizon-plan work-item) :planning-phases))
+                :inspect)))))))
 
 (defun work-item-plan-revision-reason (work-item)
   (cond
@@ -162,6 +71,103 @@
 
 (defun work-item-plan-phase-index (phases phase)
   (position phase phases :test #'eq))
+
+(defun transaction-latest-phase-record (transaction)
+  (car (last (mutation-transaction-lifecycle-phases transaction))))
+
+(defun transaction-current-phase (transaction)
+  (let ((record (and transaction
+                     (transaction-latest-phase-record transaction))))
+    (and record
+         (getf record :phase))))
+
+(defun transaction-verification-state (transaction)
+  (let ((phase (transaction-current-phase transaction)))
+    (cond
+      ((eq phase :verification-pending) :pending)
+      ((member phase '(:verified :promotion-pending :promoted) :test #'eq) :verified)
+      (t nil))))
+
+(defun transaction-promotion-state (transaction)
+  (let ((phase (transaction-current-phase transaction)))
+    (cond
+      ((member phase '(:workspace-materialized :verification-pending) :test #'eq) :not-promoted)
+      ((eq phase :verified) :verified)
+      ((eq phase :promotion-pending) :pending)
+      ((eq phase :promoted) :promoted)
+      (t nil))))
+
+(defun latest-work-item-resource-effect-of-kind (work-item kind)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (car (last (remove-if-not (lambda (entry)
+                                (eq (getf entry :kind) kind))
+                              (and transaction
+                                   (mutation-transaction-resource-effects transaction)))))))
+
+(defun latest-work-item-patch-promotion-payload (work-item)
+  (let* ((decision-effect (latest-work-item-resource-effect-of-kind work-item
+                                                                    :work-plane-verification-decision))
+         (verified-patch (and decision-effect
+                              (getf decision-effect :verified-patch)))
+         (workspace-id (and decision-effect
+                            (getf decision-effect :workspace-id)))
+         (staging-root (and decision-effect
+                            (getf decision-effect :staging-root))))
+    (when verified-patch
+      (list :verified-patch verified-patch
+            :workspace-id workspace-id
+            :staging-root staging-root))))
+
+(defun derived-transaction-phase-next-action (work-item)
+  (let* ((transaction (current-work-item-transaction work-item))
+         (phase (and transaction
+                     (transaction-current-phase transaction))))
+    (case phase
+      (:verification-pending
+       (list :type :verify-workspace-stage
+             :suggested-step :verify-staged-workspace
+             :transaction-phase phase))
+      (:verified
+       (list :type :verify-workspace-stage
+             :suggested-step :confirm-verified-workspace
+             :transaction-phase phase))
+      (:promotion-pending
+       (list :type :promote-workspace-stage
+             :suggested-step :promote-verified-workspace
+             :transaction-phase phase))
+      (otherwise nil))))
+
+(defun derived-transaction-phase-resume-payload (work-item)
+  (let* ((transaction (current-work-item-transaction work-item))
+         (phase (and transaction
+                     (transaction-current-phase transaction)))
+         (checkpoint-id (latest-work-item-checkpoint-id work-item))
+         (rollback-point (work-item-rollback-point work-item))
+         (replay-id (and transaction
+                         (mutation-transaction-replay-id transaction)))
+         (promotion-payload (latest-work-item-patch-promotion-payload work-item)))
+    (case phase
+      (:verification-pending
+       (list :resume-command :verify-workspace-stage
+             :checkpoint-id checkpoint-id
+             :rollback-point rollback-point
+             :replay-id replay-id
+             :transaction-phase phase))
+      (:verified
+       (append (list :resume-command :verify-workspace-stage
+                     :checkpoint-id checkpoint-id
+                     :rollback-point rollback-point
+                     :replay-id replay-id
+                     :transaction-phase phase)
+               promotion-payload))
+      (:promotion-pending
+       (append (list :resume-command :promote-workspace-stage
+                     :checkpoint-id checkpoint-id
+                     :rollback-point rollback-point
+                     :replay-id replay-id
+                     :transaction-phase phase)
+               promotion-payload))
+      (otherwise nil))))
 
 (defun work-item-remaining-planning-phases (work-item)
   (let* ((phases (copy-list (or (getf (work-item-long-horizon-plan work-item) :planning-phases) '())))
@@ -186,6 +192,8 @@
   (let* ((resume-payload (work-item-resume-payload work-item))
          (next-action (work-item-next-action work-item))
          (plan (work-item-long-horizon-plan work-item))
+         (transaction (current-work-item-transaction work-item))
+         (transaction-phase (and transaction (transaction-current-phase transaction)))
          (remaining-phases (work-item-remaining-planning-phases work-item))
          (completed-phase-count (work-item-completed-phase-count work-item))
          (revision-reason (work-item-plan-revision-reason work-item))
@@ -193,6 +201,11 @@
          (latest-operator-steering (car (last (work-item-operator-steering-history work-item)))))
     (when (or plan latest-operator-steering)
       (list :current-phase (work-item-plan-current-phase work-item)
+            :transaction-phase transaction-phase
+            :verification-state (and transaction
+                                     (transaction-verification-state transaction))
+            :promotion-state (and transaction
+                                  (transaction-promotion-state transaction))
             :next-step (or (getf next-action :suggested-step)
                            (getf next-action :type)
                            (getf resume-payload :resume-command))
@@ -216,11 +229,19 @@
 
 (defun enrich-work-item-control-payload (work-item payload)
   (append (copy-list (or payload '()))
-          (let ((plan (work-item-long-horizon-plan work-item)))
-            (when plan
-              (list :long-horizon-plan plan
-                    :plan-health (work-item-plan-health work-item)
-                    :plan-steering (work-item-plan-steering work-item))))))
+          (let* ((plan (work-item-long-horizon-plan work-item))
+                 (transaction (current-work-item-transaction work-item))
+                 (transaction-phase (and transaction
+                                         (transaction-current-phase transaction))))
+            (append
+             (when plan
+               (list :long-horizon-plan plan
+                     :plan-health (work-item-plan-health work-item)
+                     :plan-steering (work-item-plan-steering work-item)))
+             (when transaction
+               (list :transaction-phase transaction-phase
+                     :verification-state (transaction-verification-state transaction)
+                     :promotion-state (transaction-promotion-state transaction)))))))
 
 (defun make-work-item-id ()
   (format nil "work-~D-~D" (get-universal-time) (random 1000000)))
@@ -265,6 +286,9 @@
                                :scope (or scope :transitional-task)
                                :checkpoint-id nil
                                :state :created
+                               :lifecycle-phases (list (list :phase :created
+                                                             :recorded-at (get-universal-time)
+                                                             :detail (list :scope (or scope :transitional-task))))
                                :source-mutations '()
                                :image-mutations '()
                                :resource-effects '()
@@ -557,6 +581,10 @@
         :scope (mutation-transaction-scope transaction)
         :checkpoint-id (mutation-transaction-checkpoint-id transaction)
         :state (mutation-transaction-state transaction)
+        :current-phase (transaction-current-phase transaction)
+        :verification-state (transaction-verification-state transaction)
+        :promotion-state (transaction-promotion-state transaction)
+        :lifecycle-phases (copy-list (mutation-transaction-lifecycle-phases transaction))
         :rollback-status (mutation-transaction-rollback-status transaction)
         :rollback-detail (mutation-transaction-rollback-detail transaction)
         :quarantine-status (mutation-transaction-quarantine-status transaction)
@@ -654,9 +682,31 @@
       (append-work-item-workflow-entry session work-item :observe-runtime :resource-effect payload :status :in-progress))
     payload))
 
+(defun append-work-item-transaction-phase (work-item phase &key detail recorded-at session workflow-kind workflow-payload workflow-status)
+  (let ((transaction (current-work-item-transaction work-item))
+        (phase-record (list :phase phase
+                            :recorded-at (or recorded-at (get-universal-time))
+                            :detail detail)))
+    (when transaction
+      (unless (find phase-record
+                    (mutation-transaction-lifecycle-phases transaction)
+                    :test #'equal)
+        (setf (mutation-transaction-lifecycle-phases transaction)
+              (append (mutation-transaction-lifecycle-phases transaction)
+                      (list phase-record)))))
+    (when (and session workflow-kind)
+      (append-work-item-workflow-entry session
+                                       work-item
+                                       workflow-kind
+                                       phase
+                                       (or workflow-payload phase-record)
+                                       :status (or workflow-status :in-progress)))
+    phase-record))
+
 
 (defun work-item-summary (work-item)
-  (list :id (work-item-id work-item)
+  (let ((transaction (current-work-item-transaction work-item)))
+    (list :id (work-item-id work-item)
         :goal (work-item-goal work-item)
         :status (work-item-status work-item)
         :created-at (work-item-created-at work-item)
@@ -673,6 +723,12 @@
         :cold-validation-result (validation-result-summary (work-item-cold-validation-result work-item))
         :pending-validations (work-item-pending-validations work-item)
         :validator-tasks (mapcar #'validator-task-record-summary (work-item-validator-tasks work-item))
+        :transaction-phase (and transaction
+                                (transaction-current-phase transaction))
+        :verification-state (and transaction
+                                 (transaction-verification-state transaction))
+        :promotion-state (and transaction
+                              (transaction-promotion-state transaction))
         :next-action (work-item-next-action work-item)
         :resume-payload (work-item-resume-payload work-item)
         :corrective-context (work-item-corrective-context work-item)
@@ -691,7 +747,7 @@
         :workflow-record-ref (work-item-workflow-record-ref work-item)
         :transaction-ids (work-item-transaction-ids work-item)
         :checkpoint-count (length (work-item-checkpoints work-item))
-        :provenance (provenance-record-summary (work-item-provenance work-item))))
+        :provenance (provenance-record-summary (work-item-provenance work-item)))))
 
 (defun work-item-detail (work-item)
   (append (work-item-summary work-item)
@@ -778,26 +834,27 @@
                          (workflow-record-quarantine-reason
                           (work-item-workflow-record session work-item)))
                     (latest-work-item-approval-reason session work-item))))
-    (case (work-item-status work-item)
-      (:awaiting-approval
-       (list :type :await-approval
-             :policy policy
-             :resume-command `(resume-work-item ,(work-item-id work-item))))
-      (:quarantined
-       (list :type :operator-review
-             :resume-command `(resume-work-item ,(work-item-id work-item))
-             :reason reason))
-      (:resumed
-       (list :type :continue-transaction
-             :suggested-step :run-live-and-cold-validation))
-      (:awaiting-cold-validation
-       (list :type :complete-pending-validations
-             :suggested-step :run-cold-validation
-             :final-closure-decision (work-item-closure-decision work-item)))
-      (:failed
-       (list :type :review-failure
-             :suggested-step :quarantine-or-rollback))
-      (otherwise nil))))
+    (or (derived-transaction-phase-next-action work-item)
+        (case (work-item-status work-item)
+          (:awaiting-approval
+           (list :type :await-approval
+                 :policy policy
+                 :resume-command `(resume-work-item ,(work-item-id work-item))))
+          (:quarantined
+           (list :type :operator-review
+                 :resume-command `(resume-work-item ,(work-item-id work-item))
+                 :reason reason))
+          (:resumed
+           (list :type :continue-transaction
+                 :suggested-step :run-live-and-cold-validation))
+          (:awaiting-cold-validation
+           (list :type :complete-pending-validations
+                 :suggested-step :run-cold-validation
+                 :final-closure-decision (work-item-closure-decision work-item)))
+          (:failed
+           (list :type :review-failure
+                 :suggested-step :quarantine-or-rollback))
+          (otherwise nil)))))
 
 (defun derived-work-item-resume-payload (session work-item)
   (let* ((transaction (current-work-item-transaction work-item))
@@ -813,42 +870,43 @@
                                      (workflow-record-quarantine-reason
                                       (work-item-workflow-record session work-item)))
                                 reason)))
-    (case (work-item-status work-item)
-      (:awaiting-approval
-       (list :resume-command `(resume-work-item ,(work-item-id work-item))
-             :rollback-point rollback-point
-             :checkpoint-id checkpoint-id
-             :pending-validations pending-validations
-             :validator-actions validator-actions
-             :replay-id replay-id
-             :approval-policy policy))
-      (:quarantined
-       (list :resume-command `(resume-work-item ,(work-item-id work-item))
-             :rollback-point rollback-point
-             :checkpoint-id checkpoint-id
-             :validator-actions validator-actions
-             :replay-id replay-id
-             :quarantine-reason quarantine-reason
-             :operator-options '(:resume :rollback)))
-      (:resumed
-       (list :resume-command :continue-transaction
-             :checkpoint-id checkpoint-id
-             :pending-validations pending-validations
-             :validator-actions validator-actions
-             :replay-id replay-id))
-      (:awaiting-cold-validation
-       (list :resume-command :complete-validations
-             :checkpoint-id checkpoint-id
-             :pending pending-validations
-             :validator-actions validator-actions
-             :replay-id replay-id
-             :rollback-point rollback-point
-             :final-closure-decision (work-item-closure-decision work-item)))
-      (:failed
-       (list :resume-command :quarantine-or-rollback
-             :checkpoint-id checkpoint-id
-             :replay-id replay-id))
-      (otherwise nil))))
+    (or (derived-transaction-phase-resume-payload work-item)
+        (case (work-item-status work-item)
+          (:awaiting-approval
+           (list :resume-command `(resume-work-item ,(work-item-id work-item))
+                 :rollback-point rollback-point
+                 :checkpoint-id checkpoint-id
+                 :pending-validations pending-validations
+                 :validator-actions validator-actions
+                 :replay-id replay-id
+                 :approval-policy policy))
+          (:quarantined
+           (list :resume-command `(resume-work-item ,(work-item-id work-item))
+                 :rollback-point rollback-point
+                 :checkpoint-id checkpoint-id
+                 :validator-actions validator-actions
+                 :replay-id replay-id
+                 :quarantine-reason quarantine-reason
+                 :operator-options '(:resume :rollback)))
+          (:resumed
+           (list :resume-command :continue-transaction
+                 :checkpoint-id checkpoint-id
+                 :pending-validations pending-validations
+                 :validator-actions validator-actions
+                 :replay-id replay-id))
+          (:awaiting-cold-validation
+           (list :resume-command :complete-validations
+                 :checkpoint-id checkpoint-id
+                 :pending pending-validations
+                 :validator-actions validator-actions
+                 :replay-id replay-id
+                 :rollback-point rollback-point
+                 :final-closure-decision (work-item-closure-decision work-item)))
+          (:failed
+           (list :resume-command :quarantine-or-rollback
+                 :checkpoint-id checkpoint-id
+                 :replay-id replay-id))
+          (otherwise nil)))))
 
 (defun recover-work-item-control-state (session work-item
                                         &key (recovery-origin :session-load))
@@ -1130,6 +1188,318 @@
                                         :pending-validations (work-item-pending-validation-kinds work-item)
                                         :validator-actions (work-item-validator-actions work-item)
                                         :replay-id (mutation-transaction-replay-id (current-work-item-transaction work-item))))
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun verify-work-item-staged-workspace (session work-item &key note)
+  (let* ((decision-effect (or (latest-work-item-resource-effect-of-kind work-item
+                                                                        :work-plane-verification-decision)
+                              (error "Work-item ~A has no staged workspace verification decision."
+                                     (work-item-id work-item))))
+         (decision (or (getf decision-effect :decision) '()))
+         (workspace-id (getf decision-effect :workspace-id))
+         (staging-root (getf decision-effect :staging-root)))
+    (unless (getf decision :verified-p)
+      (error "Work-item ~A cannot advance to promotion because staged workspace verification is not satisfied: ~S"
+             (work-item-id work-item)
+             decision))
+    (append-work-item-transaction-phase
+     work-item
+     :promotion-pending
+     :detail (list :work-item-id (work-item-id work-item)
+                   :workspace-id workspace-id
+                   :staging-root staging-root
+                   :note note))
+    (append-work-item-resource-effect
+     work-item
+     (list :kind :work-plane-verification-confirmed
+           :work-item-id (work-item-id work-item)
+           :workspace-id workspace-id
+           :staging-root staging-root
+           :note note
+           :decision decision)
+     session)
+    (setf (work-item-updated-at work-item) (get-universal-time))
+    (set-work-item-next-action session work-item
+                               (derived-transaction-phase-next-action work-item))
+    (set-work-item-resume-payload session work-item
+                                  (derived-transaction-phase-resume-payload work-item))
+    (append-work-item-workflow-entry session
+                                     work-item
+                                     :verify
+                                     :workspace-stage-verified
+                                     (list :workspace-id workspace-id
+                                           :staging-root staging-root
+                                           :note note)
+                                     :status :in-progress)
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun promote-work-item-staged-workspace (session work-item &key note)
+  (let* ((payload (or (latest-work-item-patch-promotion-payload work-item)
+                      (error "Work-item ~A has no verified staged workspace payload to promote."
+                             (work-item-id work-item))))
+         (record (work-item-workflow-record session work-item))
+         (transaction (current-work-item-transaction work-item))
+         (response
+           (command-desktop-task-promote-patch-workspace-service
+            session
+            payload
+            :register-record-p t
+            :async-p t
+            :metadata (append (list :work-item-id (work-item-id work-item))
+                              (when record
+                                (list :workflow-record-id (workflow-record-id record)))
+                              (when note
+                                (list :note note)))))
+         (promotion-result (service-response-data response))
+         (workspace-id (or (getf promotion-result :workspace-id)
+                           (getf payload :workspace-id)))
+         (staging-root (or (getf promotion-result :staging-root)
+                           (getf payload :staging-root)))
+         (queued-p (getf promotion-result :queued-p))
+         (actor-execution-job-id (getf promotion-result :actor-execution-job-id))
+         (task-record (getf promotion-result :task-record)))
+    (when queued-p
+      (append-work-item-resource-effect
+       work-item
+       (list :kind :work-plane-promotion-requested
+             :work-item-id (work-item-id work-item)
+             :workspace-id workspace-id
+             :staging-root staging-root
+             :note note
+             :actor-execution-job-id actor-execution-job-id
+             :task-record task-record
+             :payload payload)
+       session)
+      (when transaction
+        (setf (mutation-transaction-state transaction) :mutating
+              (mutation-transaction-rollback-status transaction) :captured
+              (mutation-transaction-rollback-detail transaction)
+              (list :reason :workspace-promotion-queued
+                    :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                    :actor-execution-job-id actor-execution-job-id
+                    :operator-note note)))
+      (setf (work-item-status work-item) :mutating
+            (work-item-updated-at work-item) (get-universal-time))
+      (set-work-item-next-action
+       session
+       work-item
+       (list :type :observe-promotion-task
+             :task-record-id (and (listp task-record) (getf task-record :id))
+             :actor-execution-job-id actor-execution-job-id
+             :workspace-id workspace-id
+             :staging-root staging-root
+             :transaction-phase :promotion-pending))
+      (set-work-item-resume-payload session work-item nil)
+      (append-work-item-workflow-entry session
+                                       work-item
+                                       :promote
+                                       :workspace-promotion-requested
+                                       (list :workspace-id workspace-id
+                                             :staging-root staging-root
+                                             :task-record-id (and (listp task-record)
+                                                                  (getf task-record :id))
+                                             :actor-execution-job-id actor-execution-job-id
+                                             :note note)
+                                       :status :in-progress)
+      (when record
+        (append-workflow-record-entry
+         session
+         record
+         :promote
+         :workspace-promotion-requested
+         (list :work-item-id (work-item-id work-item)
+               :workspace-id workspace-id
+               :staging-root staging-root
+               :task-record-id (and (listp task-record) (getf task-record :id))
+               :actor-execution-job-id actor-execution-job-id
+               :status :queued)
+         :status :in-progress)))
+    (refresh-work-item-taint-state work-item)
+    (refresh-work-item-pending-validations session work-item)
+    work-item))
+
+(defun reconcile-work-item-promotion-task-completion (session task-record invocation-result)
+  (let* ((request-metadata (and task-record
+                                (desktop-task-record-request-metadata task-record)))
+         (work-item-id (or (and (listp request-metadata)
+                                (or (getf request-metadata :work-item-id)
+                                    (getf request-metadata :WORK-ITEM-ID)))
+                           (and (listp (desktop-task-record-metadata task-record))
+                                (or (getf (desktop-task-record-metadata task-record) :work-item-id)
+                                    (getf (desktop-task-record-metadata task-record) :WORK-ITEM-ID)))))
+         (work-item (and work-item-id
+                         (find-work-item session work-item-id))))
+    (when (and work-item
+               (eq (desktop-task-record-target task-record) :workspace)
+               (eq (desktop-task-record-operation task-record) :promote-patch))
+      (let* ((record (work-item-workflow-record session work-item))
+             (transaction (current-work-item-transaction work-item))
+             (promotion-result invocation-result)
+             (patch-results (or (getf promotion-result :patch) '()))
+             (phase-timeline (or (getf promotion-result :phase-timeline) '()))
+             (workspace-id (or (getf promotion-result :workspace-id)
+                               (and (listp request-metadata)
+                                    (getf request-metadata :workspace-id))))
+             (staging-root (or (getf promotion-result :staging-root)
+                               (and (listp request-metadata)
+                                    (getf request-metadata :staging-root))))
+             (closure-decision (or (work-item-closure-decision work-item)
+                                   :committed-to-source)))
+        (dolist (phase phase-timeline)
+          (append-work-item-transaction-phase
+           work-item
+           (getf phase :phase)
+           :detail (append (copy-list (or (getf phase :detail) '()))
+                           (list :work-item-id (work-item-id work-item)
+                                 :workspace-id workspace-id
+                                 :staging-root staging-root
+                                 :task-record-id (desktop-task-record-id task-record)))
+           :recorded-at (getf phase :recorded-at)))
+        (append-work-item-resource-effect
+         work-item
+         (list :kind :work-plane-promotion
+               :work-item-id (work-item-id work-item)
+               :workspace-id workspace-id
+               :staging-root staging-root
+               :task-record-id (desktop-task-record-id task-record)
+               :actor-execution-job-id (or (getf request-metadata :actor-execution-job-id)
+                                           (getf (desktop-task-record-metadata task-record) :actor-execution-job-id))
+               :result patch-results)
+         session)
+        (when patch-results
+          (append-work-item-source-mutation
+           work-item
+           (list :kind :conversation-patch
+                 :phase :promoted-via-desktop-task-completion
+                 :work-item-id (work-item-id work-item)
+                 :workspace-id workspace-id
+                 :staging-root staging-root
+                 :promotion-state :promoted
+                 :result patch-results)
+           session))
+        (when transaction
+          (setf (mutation-transaction-state transaction) :committed
+                (mutation-transaction-rollback-status transaction) :not-needed
+                (mutation-transaction-rollback-detail transaction)
+                (list :reason :workspace-promotion-completed
+                      :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                      :task-record-id (desktop-task-record-id task-record))))
+        (setf (work-item-status work-item) :committed
+              (work-item-closure-decision work-item) closure-decision
+              (work-item-updated-at work-item) (get-universal-time))
+        (set-work-item-next-action session work-item nil)
+        (set-work-item-resume-payload session work-item nil)
+        (append-work-item-workflow-entry session
+                                         work-item
+                                         :promote
+                                         :workspace-promotion-completed
+                                         (list :workspace-id workspace-id
+                                               :staging-root staging-root
+                                               :task-record-id (desktop-task-record-id task-record)
+                                               :count (length patch-results))
+                                         :status :committed)
+        (when record
+          (close-workflow-record session
+                                 record
+                                 (list :work-item-status :committed
+                                       :closure-decision closure-decision
+                                       :rollback-point (work-item-rollback-point work-item))
+                                 :status :committed
+                                 :evidence (work-item-summary work-item)))
+        (refresh-work-item-taint-state work-item)
+        (refresh-work-item-pending-validations session work-item)
+        work-item))))
+
+(defun reconcile-direct-kernel-work-item-patch-result (session work-item result)
+  (let* ((patch-results (or (getf result :patch) '()))
+         (verified-patch (getf result :verified-patch))
+         (phase-timeline (or (getf result :phase-timeline) '()))
+         (workspace-id (getf result :workspace-id))
+         (staging-root (getf result :staging-root))
+         (verification-decision (getf result :verification-decision))
+         (verification-report (getf result :verification-report))
+         (promotion-state (getf result :promotion-state))
+         (transaction (current-work-item-transaction work-item))
+         (awaiting-promotion-p (and (listp verification-decision)
+                                    (getf verification-decision :verified-p)
+                                    (eq promotion-state :verified))))
+    (dolist (phase phase-timeline)
+      (append-work-item-transaction-phase
+       work-item
+       (getf phase :phase)
+       :detail (append (copy-list (or (getf phase :detail) '()))
+                       (list :work-item-id (work-item-id work-item)
+                             :workspace-id workspace-id
+                             :staging-root staging-root
+                             :promotion-state promotion-state))
+       :recorded-at (getf phase :recorded-at)))
+    (when verification-report
+      (append-work-item-resource-effect
+       work-item
+       (list :kind :work-plane-verification
+             :work-item-id (work-item-id work-item)
+             :workspace-id workspace-id
+             :staging-root staging-root
+             :promotion-state promotion-state
+             :verification verification-report)
+       session))
+    (when verification-decision
+      (append-work-item-resource-effect
+       work-item
+       (list :kind :work-plane-verification-decision
+             :work-item-id (work-item-id work-item)
+             :workspace-id workspace-id
+             :staging-root staging-root
+             :promotion-state promotion-state
+             :verified-patch verified-patch
+             :decision verification-decision)
+       session))
+    (cond
+      (awaiting-promotion-p
+       (when transaction
+         (setf (mutation-transaction-state transaction) :mutating
+               (mutation-transaction-rollback-status transaction) :captured
+               (mutation-transaction-rollback-detail transaction)
+               (list :reason :staged-workspace-verified
+                     :recommended-action :resume-for-promotion
+                     :workspace-id workspace-id
+                     :staging-root staging-root)))
+       (setf (work-item-status work-item) :mutating
+             (work-item-updated-at work-item) (get-universal-time)
+             (work-item-closure-decision work-item) nil)
+       (set-work-item-next-action session work-item
+                                  (derived-transaction-phase-next-action work-item))
+       (set-work-item-resume-payload session work-item
+                                     (derived-transaction-phase-resume-payload work-item)))
+      ((eq promotion-state :promoted)
+       (when transaction
+         (setf (mutation-transaction-state transaction) :committed
+               (mutation-transaction-rollback-status transaction) :not-needed
+               (mutation-transaction-rollback-detail transaction)
+               (list :reason :commit-succeeded
+                     :workspace-id workspace-id
+                     :staging-root staging-root)))
+       (setf (work-item-status work-item) :committed
+             (work-item-updated-at work-item) (get-universal-time)
+             (work-item-closure-decision work-item)
+             (or (work-item-closure-decision work-item) :committed-to-source))
+       (when patch-results
+         (append-work-item-source-mutation
+          work-item
+          (list :kind :conversation-patch
+                :phase :promoted
+                :work-item-id (work-item-id work-item)
+                :workspace-id workspace-id
+                :staging-root staging-root
+                :promotion-state promotion-state
+                :result patch-results)
+          session))
+       (set-work-item-next-action session work-item nil)
+       (set-work-item-resume-payload session work-item nil)))
     (refresh-work-item-taint-state work-item)
     (refresh-work-item-pending-validations session work-item)
     work-item))
@@ -1554,6 +1924,10 @@
               (mutation-transaction-rollback-detail transaction)
               (list :checkpoint-id (checkpoint-record-id checkpoint)
                     :restorable-p nil))))
+    (append-work-item-transaction-phase
+     work-item
+     :checkpoint-captured
+     :detail (list :checkpoint-id (checkpoint-record-id checkpoint)))
     (append-work-item-workflow-entry session work-item :checkpoint :checkpoint-created (checkpoint-summary checkpoint) :status :checkpointed)
     (refresh-work-item-pending-validations session work-item)
     (set-work-item-resume-payload session work-item
@@ -1701,10 +2075,32 @@
             (result-payload (and (listp result) (getf result :result)))
             (patch-results (and (listp (and (listp result) (getf result :result)))
                                 (getf (getf result :result) :patch)))
+            (patch-verified-results (and (listp (and (listp result) (getf result :result)))
+                                         (getf (getf result :result) :verified-patch)))
+            (patch-verification-decision (and (listp (and (listp result) (getf result :result)))
+                                              (getf (getf result :result) :verification-decision)))
+            (patch-verification-report (and (listp (and (listp result) (getf result :result)))
+                                           (getf (getf result :result) :verification-report)))
+            (patch-phase-timeline (and (listp (and (listp result) (getf result :result)))
+                                       (getf (getf result :result) :phase-timeline)))
+            (patch-workspace-id (and (listp (and (listp result) (getf result :result)))
+                                     (getf (getf result :result) :workspace-id)))
+            (patch-staging-root (and (listp (and (listp result) (getf result :result)))
+                                     (getf (getf result :result) :staging-root)))
+            (patch-promotion-state (and (listp (and (listp result) (getf result :result)))
+                                        (getf (getf result :result) :promotion-state)))
             (policy-id (getf (operation-policy-decision operation) :policy-id)))
+        (let* ((work-plane-awaiting-promotion-p
+                 (and (eq policy-id :workspace-write)
+                      (listp patch-verification-decision)
+                      (getf patch-verification-decision :verified-p)
+                      (eq patch-promotion-state :verified)))
+               (effective-status (if work-plane-awaiting-promotion-p
+                                     :mutating
+                                     status)))
         (when transaction
           (setf (mutation-transaction-state transaction)
-                (case status
+                (case effective-status
                   (:planned (if (mutation-transaction-checkpoint-id transaction)
                                 (mutation-transaction-state transaction)
                                 :planned))
@@ -1716,42 +2112,103 @@
                   (:failed :failed)
                   (t (or (mutation-transaction-state transaction) :created)))
                 (mutation-transaction-rollback-status transaction)
-                (case status
+                (case effective-status
                   (:rolled-back :rolled-back)
                   (:failed :required)
                   (:awaiting-cold-validation :captured)
                   (:committed :not-needed)
+                  (:mutating :captured)
                   (:quarantined :required)
                   (t (mutation-transaction-rollback-status transaction)))
                 (mutation-transaction-rollback-detail transaction)
-                (case status
+                (case effective-status
                   (:failed (list :reason error :recommended-action :rollback-or-quarantine))
                   (:awaiting-cold-validation (list :reason :warm-image-validation-only
                                                    :recommended-action :run-cold-validation
                                                    :operation-id (operation-id operation)
                                                    :turn-id (operation-turn-id operation)))
+                  (:mutating (if work-plane-awaiting-promotion-p
+                                 (list :reason :staged-workspace-verified
+                                       :recommended-action :resume-for-promotion
+                                       :operation-id (operation-id operation)
+                                       :turn-id (operation-turn-id operation))
+                                 (mutation-transaction-rollback-detail transaction)))
                   (:rolled-back (list :reason :cancelled :restored-p nil))
                   (:quarantined (list :reason error :recommended-action :operator-review))
                   (:committed (list :reason :commit-succeeded
                                     :operation-id (operation-id operation)
                                     :turn-id (operation-turn-id operation)))
                   (t (mutation-transaction-rollback-detail transaction)))))
-        (setf (work-item-status work-item) status
+        (setf (work-item-status work-item) effective-status
               (work-item-updated-at work-item) (get-universal-time)
-              (work-item-closure-decision work-item) closure-decision
+              (work-item-closure-decision work-item) (unless work-plane-awaiting-promotion-p
+                                                      closure-decision)
               (work-item-rollback-point work-item)
               (list :transaction-id (first (last (work-item-transaction-ids work-item)))
-                    :rollback-status (if (member status '(:rolled-back :failed) :test #'eq)
+                    :rollback-status (if (member effective-status '(:rolled-back :failed) :test #'eq)
                                          :available
                                          :captured))
               (provenance-record-rollback-availability (work-item-provenance work-item))
-              (if (member status '(:rolled-back :failed) :test #'eq) :available :captured))
-        (when (and patch-results (member status '(:mutating :committed) :test #'eq))
+              (if (member effective-status '(:rolled-back :failed) :test #'eq) :available :captured))
+        (when (and patch-results (eq effective-status :mutating))
+          (append-work-item-resource-effect
+           work-item
+           (list :kind :work-plane-stage
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :workspace-id patch-workspace-id
+                 :staging-root patch-staging-root
+                 :promotion-state patch-promotion-state
+                 :result patch-results)
+           session))
+        (when (and patch-phase-timeline
+                   (member status '(:awaiting-cold-validation :committed) :test #'eq))
+          (dolist (phase patch-phase-timeline)
+            (append-work-item-transaction-phase
+             work-item
+             (getf phase :phase)
+             :detail (append (copy-list (or (getf phase :detail) '()))
+                             (list :operation-id (operation-id operation)
+                                   :turn-id (operation-turn-id operation)
+                                   :workspace-id patch-workspace-id
+                                   :staging-root patch-staging-root
+                                   :promotion-state patch-promotion-state))
+             :recorded-at (getf phase :recorded-at))))
+        (when (and patch-verification-report
+                   (member status '(:awaiting-cold-validation :committed) :test #'eq))
+          (append-work-item-resource-effect
+           work-item
+           (list :kind :work-plane-verification
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :workspace-id patch-workspace-id
+                 :staging-root patch-staging-root
+                 :promotion-state patch-promotion-state
+                 :verification patch-verification-report)
+           session))
+        (when (and patch-verification-decision
+                   (member status '(:awaiting-cold-validation :committed) :test #'eq))
+          (append-work-item-resource-effect
+           work-item
+           (list :kind :work-plane-verification-decision
+                 :operation-id (operation-id operation)
+                 :turn-id (operation-turn-id operation)
+                 :workspace-id patch-workspace-id
+                 :staging-root patch-staging-root
+                 :promotion-state patch-promotion-state
+                 :verified-patch patch-verified-results
+                 :decision patch-verification-decision)
+           session))
+        (when (and patch-results (eq effective-status :committed))
           (append-work-item-source-mutation
            work-item
            (list :kind :conversation-patch
+                 :phase :promoted
                  :operation-id (operation-id operation)
                  :turn-id (operation-turn-id operation)
+                 :workspace-id patch-workspace-id
+                 :staging-root patch-staging-root
+                 :promotion-state patch-promotion-state
                  :result patch-results)
            session))
         (when (and (eq policy-id :git-write)
@@ -1765,7 +2222,7 @@
                  :result result-payload)
            session))
         (when (and (eq policy-id :runtime-eval-mutate)
-                   (member status '(:mutating :committed) :test #'eq))
+                   (member effective-status '(:mutating :committed) :test #'eq))
           (append-work-item-image-mutation
            work-item
            (list :kind :conversation-runtime-mutation
@@ -1787,48 +2244,52 @@
         (refresh-work-item-taint-state work-item)
         (refresh-work-item-pending-validations session work-item)
         (set-work-item-next-action session work-item
-                                   (case status
-                                     (:planned (list :type :checkpoint :suggested-step :checkpoint))
-                                     (:checkpointed (list :type :mutate :suggested-step :resume-turn))
-                                     (:mutating (list :type :observe-runtime :suggested-step :await-runtime-effects))
-                                     (:awaiting-cold-validation (list :type :complete-pending-validations
-                                                                      :suggested-step :run-cold-validation
-                                                                      :final-closure-decision closure-decision))
-                                     (:committed nil)
-                                     (:failed (list :type :review-failure :suggested-step :quarantine-or-rollback))
-                                     (:rolled-back nil)
-                                     (:quarantined (list :type :operator-review :suggested-step :resume-or-rollback))
-                                     (t (work-item-next-action work-item))))
+                                   (or (and (eq policy-id :workspace-write)
+                                            (derived-transaction-phase-next-action work-item))
+                                       (case effective-status
+                                         (:planned (list :type :checkpoint :suggested-step :checkpoint))
+                                         (:checkpointed (list :type :mutate :suggested-step :resume-turn))
+                                         (:mutating (list :type :observe-runtime :suggested-step :await-runtime-effects))
+                                         (:awaiting-cold-validation (list :type :complete-pending-validations
+                                                                          :suggested-step :run-cold-validation
+                                                                          :final-closure-decision closure-decision))
+                                         (:committed nil)
+                                         (:failed (list :type :review-failure :suggested-step :quarantine-or-rollback))
+                                         (:rolled-back nil)
+                                         (:quarantined (list :type :operator-review :suggested-step :resume-or-rollback))
+                                         (t (work-item-next-action work-item)))))
         (set-work-item-resume-payload session work-item
-                                      (case status
-                                        (:planned (list :resume-command :checkpoint
-                                                        :checkpoint-id (latest-work-item-checkpoint-id work-item)
-                                                        :replay-id (mutation-transaction-replay-id transaction)
-                                                        :rollback-point (work-item-rollback-point work-item)))
-                                        (:checkpointed (list :resume-command :turn/resume
-                                                             :turn-id (operation-turn-id operation)
+                                      (or (and (eq policy-id :workspace-write)
+                                               (derived-transaction-phase-resume-payload work-item))
+                                          (case effective-status
+                                            (:planned (list :resume-command :checkpoint
+                                                            :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                            :replay-id (mutation-transaction-replay-id transaction)
+                                                            :rollback-point (work-item-rollback-point work-item)))
+                                            (:checkpointed (list :resume-command :turn/resume
+                                                                 :turn-id (operation-turn-id operation)
+                                                                 :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                                 :replay-id (mutation-transaction-replay-id transaction)))
+                                            (:mutating (list :resume-command :observe-runtime
                                                              :checkpoint-id (latest-work-item-checkpoint-id work-item)
-                                                             :replay-id (mutation-transaction-replay-id transaction)))
-                                        (:mutating (list :resume-command :observe-runtime
-                                                         :checkpoint-id (latest-work-item-checkpoint-id work-item)
-                                                         :replay-id (mutation-transaction-replay-id transaction)
-                                                         :operation-id (operation-id operation)))
-                                        (:awaiting-cold-validation (list :resume-command :complete-validations
-                                                                         :checkpoint-id (latest-work-item-checkpoint-id work-item)
-                                                                         :pending (work-item-pending-validations work-item)
-                                                                         :validator-actions (work-item-validator-actions work-item)
-                                                                         :replay-id (mutation-transaction-replay-id transaction)
-                                                                         :operation-id (operation-id operation)
-                                                                         :rollback-point (work-item-rollback-point work-item)
-                                                                         :final-closure-decision closure-decision))
-                                        (:committed nil)
-                                        (:rolled-back nil)
-                                        (:failed (list :resume-command :quarantine-or-rollback
-                                                       :checkpoint-id (latest-work-item-checkpoint-id work-item)
-                                                       :replay-id (mutation-transaction-replay-id transaction)
-                                                       :error error))
-                                        (:quarantined (work-item-resume-payload work-item))
-                                        (t (work-item-resume-payload work-item))))
+                                                             :replay-id (mutation-transaction-replay-id transaction)
+                                                             :operation-id (operation-id operation)))
+                                            (:awaiting-cold-validation (list :resume-command :complete-validations
+                                                                             :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                                             :pending (work-item-pending-validations work-item)
+                                                                             :validator-actions (work-item-validator-actions work-item)
+                                                                             :replay-id (mutation-transaction-replay-id transaction)
+                                                                             :operation-id (operation-id operation)
+                                                                             :rollback-point (work-item-rollback-point work-item)
+                                                                             :final-closure-decision closure-decision))
+                                            (:committed nil)
+                                            (:rolled-back nil)
+                                            (:failed (list :resume-command :quarantine-or-rollback
+                                                           :checkpoint-id (latest-work-item-checkpoint-id work-item)
+                                                           :replay-id (mutation-transaction-replay-id transaction)
+                                                           :error error))
+                                            (:quarantined (work-item-resume-payload work-item))
+                                            (t (work-item-resume-payload work-item)))))
         (append-work-item-runtime-observation
          session
          work-item
@@ -1836,16 +2297,16 @@
          (list :operation-id (operation-id operation)
                :turn-id (operation-turn-id operation)
                :operation-name (operation-name operation)
-               :work-item-status status
+               :work-item-status effective-status
                :error error))
         (append-work-item-workflow-entry session work-item :reconcile :conversation-operation-status-transition
                                          (list :operation-id (operation-id operation)
                                                :turn-id (operation-turn-id operation)
                                                :operation-name (operation-name operation)
-                                               :status status
-                                               :closure-decision closure-decision
+                                               :status effective-status
+                                               :closure-decision (work-item-closure-decision work-item)
                                                :error error)
-                                         :status (case status
+                                         :status (case effective-status
                                                    (:planned :planned)
                                                    (:mutating :in-progress)
                                                    (:awaiting-cold-validation :awaiting-cold-validation)
@@ -1853,31 +2314,31 @@
                                                    (:failed :requires-review)
                                                    (:rolled-back :rolled-back)
                                                    (t :open)))
-        (when (member status '(:committed :failed :rolled-back) :test #'eq)
+        (when (member effective-status '(:committed :failed :rolled-back) :test #'eq)
           (update-work-item-validation-results
            session
            work-item
-           (if (eq status :committed) :passed :failed)
+           (if (eq effective-status :committed) :passed :failed)
            (list :operation-id (operation-id operation)
-                 :status status
+                 :status effective-status
                  :result-summary result-payload)
-           (if (eq status :committed) :passed :failed)
+           (if (eq effective-status :committed) :passed :failed)
            (list :operation-id (operation-id operation)
-                 :status status
+                 :status effective-status
                  :requires-fresh-run-p t))
           (let ((record (work-item-workflow-record session work-item)))
             (when record
               (close-workflow-record session
                                      record
-                                     (list :work-item-status status
-                                           :closure-decision closure-decision
+                                     (list :work-item-status effective-status
+                                           :closure-decision (work-item-closure-decision work-item)
                                            :rollback-point (work-item-rollback-point work-item)
                                            :reconciliation (reconciliation-record-view (work-item-reconciliation-result work-item))
                                            :operation-id (operation-id operation))
-                                     :status (case status
+                                     :status (case effective-status
                                                (:committed :committed)
                                                (:failed :quarantined)
                                                (:rolled-back :rolled-back)
                                                (t :closed))
                                      :evidence (work-item-summary work-item)))))
-      work-item))))
+      work-item)))))

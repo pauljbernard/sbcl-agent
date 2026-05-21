@@ -76,10 +76,15 @@
                          :retrieval-category (getf (getf result :retrieval-summary) :category)
                          :agenda-step-count (getf (getf result :action-agenda-summary) :step-count)))))
 
+(defun repo-local-eval-root (relative)
+  (namestring
+   (merge-pathnames relative
+                    (uiop:ensure-directory-pathname (current-workspace-root)))))
+
 (defun run-governed-mutation-eval ()
   (let* ((provider (make-instance 'patch-action-provider))
-         (session (sbcl-agent::make-default-session :cwd "/tmp/sbcl-agent-eval-governed-mutation/"))
-         (command (sbcl-agent::normalize-form-command '(say "prepare governed patch"))))
+         (session (sbcl-agent::make-default-session :cwd (current-workspace-root)))
+         (command (sbcl-agent::normalize-form-command '(say "prepare patch"))))
     (multiple-value-bind (result kind updated-session)
         (sbcl-agent::execute-command command provider session)
       (declare (ignore updated-session))
@@ -89,25 +94,32 @@
         (error "Expected awaiting approval turn state for governed mutation eval"))
       (unless (= (getf result :staged-action-count) 1)
         (error "Expected one staged governed action"))
-      (list :metrics (list :dispatch kind
-                           :turn-status (getf (getf result :turn) :status)
-                           :staged-action-count (getf result :staged-action-count)
-                           :agenda-step-count (getf (getf result :action-agenda-summary) :step-count))))))
+      (list :metrics
+            (list :dispatch kind
+                  :turn-status (getf (getf result :turn) :status)
+                  :staged-action-count (getf result :staged-action-count)
+                  :agenda-step-count
+                  (getf (getf result :action-agenda-summary) :step-count))))))
 
 (defun run-followup-recovery-eval ()
   (let* ((provider (make-instance 'followup-patch-provider))
-         (session (sbcl-agent::make-default-session :cwd "/tmp/sbcl-agent-eval-followup/")))
-    (sbcl-agent::execute-command
-     (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
-     provider
-     session)
+         (session (sbcl-agent::make-default-session
+                   :cwd (repo-local-eval-root #P"tmp/eval-followup-recovery/"))))
+    (let* ((say-result
+             (nth-value
+              0
+              (sbcl-agent::execute-command
+               (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
+               provider
+               session)))
+           (turn-id (getf (getf say-result :turn) :id)))
     (sbcl-agent::execute-command
      (sbcl-agent::normalize-form-command '(approve :workspace-write))
      provider
      session)
     (multiple-value-bind (resume-result resume-kind resumed-session)
         (sbcl-agent::execute-command
-         (sbcl-agent::normalize-form-command '(turn/resume))
+         (sbcl-agent::normalize-form-command (list 'turn/resume turn-id))
          provider
          session)
       (declare (ignore resumed-session))
@@ -121,7 +133,7 @@
                            :followup-p t
                            :followup-agenda-step-count
                            (getf (getf (getf resume-result :followup) :action-agenda-summary)
-                                 :step-count))))))
+                                 :step-count)))))))
 
 (defun run-runtime-debugging-eval ()
   (let* ((session (make-test-session :cwd "/tmp/sbcl-agent-eval-runtime-debugging/"))
@@ -175,43 +187,49 @@
 
 (defun run-long-horizon-eval ()
   (let* ((provider (make-instance 'followup-patch-provider))
-         (session (sbcl-agent::make-default-session :cwd "/tmp/sbcl-agent-eval-long-horizon/")))
-    (sbcl-agent::execute-command
-     (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
-     provider
-     session)
-    (sbcl-agent::execute-command
-     (sbcl-agent::normalize-form-command '(approve :workspace-write))
-     provider
-     session)
-    (multiple-value-bind (resume-result resume-kind resumed-session)
-        (sbcl-agent::execute-command
-         (sbcl-agent::normalize-form-command '(turn/resume))
-         provider
-         session)
-      (declare (ignore resumed-session))
-      (unless (eq resume-kind :turn-resume)
-        (error "Expected turn/resume dispatch in long-horizon eval"))
+         (session (sbcl-agent::make-default-session
+                   :cwd (repo-local-eval-root #P"tmp/eval-long-horizon/"))))
+    (let* ((say-result
+             (nth-value
+              0
+              (sbcl-agent::execute-command
+               (sbcl-agent::normalize-form-command '(say "prepare patch and continue"))
+               provider
+               session)))
+           (turn-id (getf (getf say-result :turn) :id)))
+      (sbcl-agent::execute-command
+       (sbcl-agent::normalize-form-command '(approve :workspace-write))
+       provider
+       session)
+      (multiple-value-bind (resume-result resume-kind resumed-session)
+          (sbcl-agent::execute-command
+           (sbcl-agent::normalize-form-command (list 'turn/resume turn-id))
+           provider
+           session)
+        (declare (ignore resumed-session))
+        (unless (eq resume-kind :turn-resume)
+          (error "Expected turn/resume dispatch in long-horizon eval"))
         (let* ((turn (sbcl-agent::most-recent-thread-turn session))
                (work-item-id (getf (sbcl-agent::turn-metadata turn) :work-item-id))
                (work-item (and work-item-id (sbcl-agent::find-work-item session work-item-id)))
                (summary (and work-item (sbcl-agent::work-item-summary work-item))))
-        (unless (listp (and summary (getf summary :long-horizon-plan)))
-          (error "Expected durable long-horizon plan in work-item summary"))
-        (unless (listp (and summary (getf summary :plan-steering)))
-          (error "Expected long-horizon steering snapshot in work-item summary"))
-        (unless (member (getf (getf summary :plan-steering) :revision-reason)
-                        '(:blocked-awaiting-resume :validation-pending :incident-recovery :partial-progress :steady-state)
-                        :test #'eq)
-          (error "Expected a valid long-horizon revision reason in work-item steering"))
-        (unless (listp (getf resume-result :followup))
-          (error "Expected structured follow-up payload in long-horizon eval"))
-        (list :metrics (list :resume-kind resume-kind
-                             :plan-health (and summary (getf summary :plan-health))
-                             :current-phase (and summary (getf (getf summary :plan-steering) :current-phase))
-                             :revision-reason (and summary (getf (getf summary :plan-steering) :revision-reason))
-                             :agenda-step-count (getf (getf summary :long-horizon-plan) :agenda-step-count)
-                             :followup-p (getf (getf resume-result :followup) :followup-p)))))))
+          (unless (listp (and summary (getf summary :long-horizon-plan)))
+            (error "Expected durable long-horizon plan in work-item summary"))
+          (unless (listp (and summary (getf summary :plan-steering)))
+            (error "Expected long-horizon steering snapshot in work-item summary"))
+          (unless (member (getf (getf summary :plan-steering) :revision-reason)
+                          '(:blocked-awaiting-resume :validation-pending :incident-recovery :partial-progress :steady-state)
+                          :test #'eq)
+            (error "Expected a valid long-horizon revision reason in work-item steering"))
+          (unless (listp (getf resume-result :followup))
+            (error "Expected structured follow-up payload in long-horizon eval"))
+          (list :metrics
+                (list :resume-kind resume-kind
+                      :plan-health (and summary (getf summary :plan-health))
+                      :current-phase (and summary (getf (getf summary :plan-steering) :current-phase))
+                      :revision-reason (and summary (getf (getf summary :plan-steering) :revision-reason))
+                      :agenda-step-count (getf (getf summary :long-horizon-plan) :agenda-step-count)
+                      :followup-p (getf (getf resume-result :followup) :followup-p))))))))
 
 (defun run-parallel-orchestration-eval ()
   (let* ((provider (make-instance 'slow-test-provider))
@@ -291,6 +309,27 @@
           :implemented-score implemented-score
           :results results)))
 
+(defun internal-evaluation-smoke-report ()
+  (let* ((results (list (run-evaluation-case :repo-q-and-a #'run-repo-q-and-a-eval)
+                        (run-evaluation-case :governed-mutation #'run-governed-mutation-eval)
+                        (run-evaluation-case :runtime-debugging #'run-runtime-debugging-eval)
+                        (run-evaluation-case :self-improvement #'run-self-improvement-eval)))
+         (completed (count-if (lambda (entry)
+                                (member (getf entry :status) '(:passed :failed) :test #'eq))
+                              results))
+         (passed (count :passed results :key (lambda (entry) (getf entry :status)) :test #'eq))
+         (implemented-score (if (> completed 0)
+                                (/ (reduce #'+ results :key (lambda (entry) (or (getf entry :score) 0.0)))
+                                   completed)
+                                0.0)))
+    (list :generated-at (get-universal-time)
+          :mode :smoke
+          :family-count (length *evaluation-task-families*)
+          :implemented-family-count completed
+          :passed-family-count passed
+          :implemented-score implemented-score
+          :results results)))
+
 (defun ensure-evaluation-report-directory ()
   (let ((root (merge-pathnames #P"tmp/evals/"
                                (uiop:ensure-directory-pathname
@@ -325,6 +364,17 @@
 
 (defun run-internal-evaluations ()
   (let* ((report (internal-evaluation-report))
+         (path (write-evaluation-report report))
+         (session (and (boundp 'sbcl-agent::*current-session*)
+                       sbcl-agent::*current-session*)))
+    (when session
+      (sbcl-agent::remember-evaluation-report-memory session report))
+    (print-evaluation-report report)
+    (format t "evaluation-report-path> ~A~%" (namestring path))
+    report))
+
+(defun run-internal-evaluations-smoke ()
+  (let* ((report (internal-evaluation-smoke-report))
          (path (write-evaluation-report report))
          (session (and (boundp 'sbcl-agent::*current-session*)
                        sbcl-agent::*current-session*)))

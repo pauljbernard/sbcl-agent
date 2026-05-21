@@ -39,7 +39,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -135,23 +135,20 @@
                                                :linked-mutation-ids linked-mutation-ids
                                                :metadata metadata))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (or description "Create an intent record.")
-                                    "intent/create"
-                                    :authority :environment
-                                    :payload (list :description description
-                                                   :scope scope
-                                                   :constraints constraints
-                                                   :expected-behaviors expected-behaviors
-                                                   :non-goals non-goals
-                                                   :priority priority
-                                                   :version version
-                                                   :status status
-                                                   :linked-runtime-objects linked-runtime-objects
-                                                   :linked-source-artifacts linked-source-artifacts
-                                                   :linked-event-ids linked-event-ids
-                                                   :linked-mutation-ids linked-mutation-ids
-                                                   :metadata metadata)))
+     (perform-intent-create-service session
+                                    :description description
+                                    :scope scope
+                                    :constraints constraints
+                                    :expected-behaviors expected-behaviors
+                                    :non-goals non-goals
+                                    :priority priority
+                                    :version version
+                                    :status status
+                                    :linked-runtime-objects linked-runtime-objects
+                                    :linked-source-artifacts linked-source-artifacts
+                                    :linked-event-ids linked-event-ids
+                                    :linked-mutation-ids linked-mutation-ids
+                                    :metadata metadata))
    :intent/create
    :create))
 
@@ -224,25 +221,20 @@
                                                :metadata metadata)
                                 :intent-id intent-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (or description
-                                        (format nil "Update intent ~A." intent-id))
-                                    "intent/update"
-                                    :authority :environment
-                                    :payload (list :intent-id intent-id
-                                                   :description description
-                                                   :scope scope
-                                                   :constraints constraints
-                                                   :expected-behaviors expected-behaviors
-                                                   :non-goals non-goals
-                                                   :priority priority
-                                                   :version version
-                                                   :status status
-                                                   :linked-runtime-objects linked-runtime-objects
-                                                   :linked-source-artifacts linked-source-artifacts
-                                                   :linked-event-ids linked-event-ids
-                                                   :linked-mutation-ids linked-mutation-ids
-                                                   :metadata metadata)))
+     (perform-intent-update-service session intent-id
+                                    :description description
+                                    :scope scope
+                                    :constraints constraints
+                                    :expected-behaviors expected-behaviors
+                                    :non-goals non-goals
+                                    :priority priority
+                                    :version version
+                                    :status status
+                                    :linked-runtime-objects linked-runtime-objects
+                                    :linked-source-artifacts linked-source-artifacts
+                                    :linked-event-ids linked-event-ids
+                                    :linked-mutation-ids linked-mutation-ids
+                                    :metadata metadata))
    :intent/update
    :update
    :intent-id intent-id))
@@ -266,11 +258,7 @@
                                 :payload (list :intent-id intent-id)
                                 :intent-id intent-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Select intent ~A." intent-id)
-                                    "intent/select"
-                                    :authority :environment
-                                    :payload (list :intent-id intent-id)))
+     (perform-intent-select-service session intent-id))
    :intent/select
    :select
    :intent-id intent-id))

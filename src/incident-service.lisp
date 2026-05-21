@@ -3,19 +3,19 @@
 (defun incident-associated-execution-summaries (session incident)
   (let ((environment (session-bound-environment session)))
     (when environment
-      (let* ((direct (kernel-find-executions-by-target :incident-id
+      (let* ((direct (find-execution-handles-by-target :incident-id
                                                        (incident-id incident)
                                                        environment))
              (via-work-item (and (incident-work-item-id incident)
-                                 (kernel-find-executions-by-target :work-item-id
+                                 (find-execution-handles-by-target :work-item-id
                                                                    (incident-work-item-id incident)
                                                                    environment)))
              (via-turn (and (incident-turn-id incident)
-                            (kernel-find-executions-by-target :turn-id
+                            (find-execution-handles-by-target :turn-id
                                                               (incident-turn-id incident)
                                                               environment)))
              (combined (append direct via-work-item via-turn)))
-        (mapcar #'kernel-execution-summary
+        (mapcar #'execution-handle-summary
                 (remove-duplicates combined
                                    :key #'execution-handle-execution-id
                                    :test #'string=))))))
@@ -139,7 +139,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -153,8 +153,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -181,11 +180,7 @@
      request
      (lambda ()
        (actorize-incident-query-response
-        (command-kernel-invoke-service session
-                                       "Read incident list."
-                                       "incident/list"
-                                       :authority :operator
-                                       :payload payload)
+        (query-incident-list-service session :thread-id thread-id :turn-id turn-id)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :context (make-actor-execution-context
                :actor-id (actor-address-id actor-address)
@@ -214,11 +209,7 @@
      request
      (lambda ()
        (actorize-incident-query-response
-        (command-kernel-invoke-service session
-                                       "Read incident detail."
-                                       "incident/detail"
-                                       :authority :operator
-                                       :payload payload)
+        (query-incident-detail-service session incident-id)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :context (make-actor-execution-context
                :actor-id (actor-address-id actor-address)

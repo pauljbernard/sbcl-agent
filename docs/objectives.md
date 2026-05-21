@@ -15,8 +15,8 @@ Those documents explain why the project exists and what conceptual model it is u
 
 For the transition from current system to target system, this document should now be read with:
 
-- [sbcl-agent / sbcl-agent-ux Current-State Gap Analysis]({{ '/agentos-current-state-gap-analysis.html' | relative_url }})
-- [IntentOS Target-State Architecture]({{ '/agentos-target-state-architecture.html' | relative_url }})
+- [Historical Baseline Assessment]({{ '/agentos-current-state-gap-analysis.html' | relative_url }})
+- [Historical IntentOS Target-State Architecture]({{ '/agentos-target-state-architecture.html' | relative_url }})
 - [IntentOS Constitution]({{ '/intentos-constitution.html' | relative_url }})
 - [IntentOS Requirements]({{ '/intentos-requirements.html' | relative_url }})
 
@@ -153,7 +153,7 @@ Work-items, validations, checkpoints, approvals, and reconciliations operate as 
 Near-term success means:
 
 - the docs describe the current runtime honestly
-- the docs describe the current execution-kernel transition honestly
+- the docs describe the current actor-runtime and execution-core transition honestly
 - the docs explain the problem before the architecture
 - the shell and docs use one consistent vocabulary
 - conversation primitives are documented as implemented, not just planned
@@ -165,7 +165,7 @@ Near-term success means:
 Longer-term success means:
 
 - a concrete Environment object in the codebase
-- a non-bypassable execution-kernel boundary
+- a non-bypassable execution and governance boundary
 - runtime-native tools for governed image inspection and mutation
 - a first-class shell over execution surfaces
 - compatibility-backed hosted executions treated as governed executions rather than raw process launches
@@ -179,7 +179,7 @@ Longer-term success means:
 Against the accepted target architecture, the repository now satisfies the core objective set:
 
 - the `Environment` object is real
-- the execution-kernel boundary is real
+- the execution and governance boundary is real
 - governed compatibility execution is real
 - the shell and desktop host model are real
 - the developer platform is real

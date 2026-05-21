@@ -7,10 +7,41 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun actorize-rgp-command-response (response
+                                      &key actor-execution-job-id
+                                        governance-authority
+                                        policy-id
+                                        approval-required-p
+                                        approval-granted-p)
+  (if (listp response)
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (when actor-execution-job-id
+          (setf (getf metadata :actor-execution-job-id) actor-execution-job-id))
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
+              (getf response :metadata) metadata)
+        (when (keyword-plist-p data)
+          (let ((updated-data (copy-list data)))
+            (when actor-execution-job-id
+              (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id))
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
                   (getf response :data) updated-data)))
         response)
       response))
@@ -26,12 +57,7 @@
                                        :metadata (list :rgp-query-kind :workspace))
      (lambda ()
        (actorize-rgp-query-response
-        (command-kernel-invoke-service session
-                                       "Read RGP workspace summary."
-                                       "rgp/workspace"
-                                       :authority :operator
-                                       :environment active-environment
-                                       :payload '())
+        (query-rgp-workspace-service session active-environment)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :rgp/workspace
      :rgp-workspace-query)))
@@ -67,12 +93,7 @@
                                        :metadata (list :rgp-query-kind :artifacts))
      (lambda ()
        (actorize-rgp-query-response
-        (command-kernel-invoke-service session
-                                       "Read RGP artifacts."
-                                       "rgp/artifacts"
-                                       :authority :operator
-                                       :environment active-environment
-                                       :payload '())
+        (query-rgp-artifacts-service session active-environment)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :rgp/artifacts
      :rgp-artifacts-query)))
@@ -89,12 +110,7 @@
                                                        :rgp-query-kind :artifact-detail))
      (lambda ()
        (actorize-rgp-query-response
-        (command-kernel-invoke-service session
-                                       "Read RGP artifact detail."
-                                       "rgp/artifact-detail"
-                                       :authority :operator
-                                       :environment active-environment
-                                       :payload (list :artifact-id artifact-id))
+        (query-rgp-artifact-detail-service session artifact-id active-environment)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :rgp/artifact-detail
      :rgp-artifact-detail-query)))
@@ -110,12 +126,7 @@
                                        :metadata (list :rgp-query-kind :approvals))
      (lambda ()
        (actorize-rgp-query-response
-        (command-kernel-invoke-service session
-                                       "Read RGP approvals."
-                                       "rgp/approvals"
-                                       :authority :operator
-                                       :environment active-environment
-                                       :payload '())
+        (query-rgp-approvals-service session active-environment)
         :actor-execution-job-id (current-actor-execution-job-id)))
      :rgp/approvals
      :rgp-approvals-query)))
@@ -488,7 +499,8 @@
                                                            session
                                                            (getf approval-plist :execution-handles)
                                                            :environment active-environment))))))
-                                         (environment-rgp-approval-summaries active-environment))
+                                         (environment-rgp-approval-summaries active-environment
+                                                                            session))
                                  :metadata (make-service-metadata :authority :environment
                                                                  :read-model :rgp-approvals-v1
                                                                  :session session
@@ -614,35 +626,49 @@
          (approval-response (command-request-work-item-approval-service session
                                                                         work-item-id
                                                                         policy
-                                                                        :reason reason)))
-    (make-service-command-response :rgp
-                                   :approve
-                                   (list :binding (rgp-binding-summary active-environment)
-                                         :approval (getf (service-response-data approval-response) :wait)
-                                         :work-item (getf (service-response-data approval-response) :work-item)
-                                         :workflow-record (getf (service-response-data approval-response) :workflow-record))
-                                   :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :rgp-command-v1
-                                                                    :session session
-                                                                    :environment active-environment
-                                                                    :work-item-id work-item-id
-                                                                    :policy-id policy))))
+                                                                        :reason reason))
+         (approval-metadata (service-response-metadata approval-response)))
+    (actorize-rgp-command-response
+     (make-service-command-response :rgp
+                                    :approve
+                                    (list :binding (rgp-binding-summary active-environment)
+                                          :approval (getf (service-response-data approval-response) :wait)
+                                          :work-item (getf (service-response-data approval-response) :work-item)
+                                          :workflow-record (getf (service-response-data approval-response) :workflow-record))
+                                    :metadata (make-service-metadata :authority :environment
+                                                                     :command-model :rgp-command-v2
+                                                                     :session session
+                                                                     :environment active-environment
+                                                                     :work-item-id work-item-id
+                                                                     :policy-id policy))
+     :actor-execution-job-id (getf approval-metadata :actor-execution-job-id)
+     :governance-authority (or (getf approval-metadata :governance-authority) :actor-runtime)
+     :policy-id (or (getf approval-metadata :policy-id) policy)
+     :approval-required-p (getf approval-metadata :approval-required-p)
+     :approval-granted-p (getf approval-metadata :approval-granted-p))))
 
 (defun command-rgp-resume-service (session work-item-id &key note environment)
   (let* ((active-environment (ensure-rgp-bound-environment session environment))
          (resume-response (command-work-item-resume-service session
                                                             work-item-id
-                                                            :note note)))
-    (make-service-command-response :rgp
-                                   :resume
-                                   (list :binding (rgp-binding-summary active-environment)
-                                         :approval (getf (service-response-data resume-response) :wait)
-                                         :work-item (getf (service-response-data resume-response) :work-item)
-                                         :actor-execution-job-id
-                                         (or (getf (service-response-data resume-response) :actor-execution-job-id)
-                                             (getf (service-response-metadata resume-response) :actor-execution-job-id)))
-                                   :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :rgp-command-v1
-                                                                    :session session
-                                                                    :environment active-environment
-                                                                    :work-item-id work-item-id))))
+                                                            :note note))
+         (resume-metadata (service-response-metadata resume-response)))
+    (actorize-rgp-command-response
+     (make-service-command-response :rgp
+                                    :resume
+                                    (list :binding (rgp-binding-summary active-environment)
+                                          :approval (getf (service-response-data resume-response) :wait)
+                                          :work-item (getf (service-response-data resume-response) :work-item)
+                                          :actor-execution-job-id
+                                          (or (getf (service-response-data resume-response) :actor-execution-job-id)
+                                              (getf resume-metadata :actor-execution-job-id)))
+                                    :metadata (make-service-metadata :authority :environment
+                                                                     :command-model :rgp-command-v2
+                                                                     :session session
+                                                                     :environment active-environment
+                                                                     :work-item-id work-item-id))
+     :actor-execution-job-id (getf resume-metadata :actor-execution-job-id)
+     :governance-authority (or (getf resume-metadata :governance-authority) :actor-runtime)
+     :policy-id (getf resume-metadata :policy-id)
+     :approval-required-p (getf resume-metadata :approval-required-p)
+     :approval-granted-p (getf resume-metadata :approval-granted-p))))

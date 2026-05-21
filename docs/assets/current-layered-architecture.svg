@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="720" viewBox="0 0 1200 720" role="img" aria-labelledby="title desc">
   <title id="title">Current layered sbcl-agent architecture</title>
-  <desc id="desc">Four-layer architecture showing React Surface over Actor System over Governed Kernel over SBCL Common Lisp runtime.</desc>
+  <desc id="desc">Four-layer architecture showing React Surface over Actor System over a Concurrency and Execution Core over the SBCL Common Lisp runtime.</desc>
   <style>
     .bg { fill: #0f172a; }
     .card { fill: #ffffff; stroke: #cbd5e1; stroke-width: 2; rx: 18; ry: 18; }
@@ -32,8 +32,8 @@
   <text class="small" x="220" y="398">ContextChatActor, GovernanceActor, RuntimeActor, EditorActor, EnvironmentActor, MCP pool</text>
 
   <rect class="card accent3" x="180" y="460" width="840" height="110"/>
-  <text class="label" x="220" y="510">Governed Kernel</text>
-  <text class="text" x="220" y="545">invoke, inspect, control, policy, execution handles, capability registry</text>
+  <text class="label" x="220" y="510">Concurrency / Execution Core</text>
+  <text class="text" x="220" y="545">invoke, inspect, control, worker pools, execution handles, capability registry</text>
 
   <rect class="card accent4" x="180" y="620" width="840" height="70"/>
   <text class="label" x="220" y="664">SBCL / Common Lisp Runtime</text>

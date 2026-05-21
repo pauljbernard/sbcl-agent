@@ -64,6 +64,31 @@
                     (getf (getf response :metadata) :environment-id)
                     "environment status metadata should include the environment id"))))
 
+(defun trust-boundary-service-contract-test ()
+  (assert-equal :control-plane
+                (sbcl-agent::package-trust-tier "sbcl-agent.system.kernel")
+                "trust boundary helpers should classify kernel namespace as control-plane")
+  (assert-equal :work-plane
+                (sbcl-agent::package-trust-tier "sbcl-agent.work.workspace.demo")
+                "trust boundary helpers should classify workspace namespace as work-plane")
+  (assert-equal :candidate
+                (sbcl-agent::package-trust-tier "sbcl-agent.candidate.actor.demo")
+                "trust boundary helpers should classify candidate actor namespace as candidate")
+  (assert-equal :generated
+                (sbcl-agent::package-trust-tier "sbcl-agent.generated.system.demo")
+                "trust boundary helpers should classify generated namespace as generated")
+  (assert-true (sbcl-agent::trusted-control-plane-package-p "sbcl-agent.system.trace")
+               "trust boundary helpers should recognize control-plane packages as trusted")
+  (assert-true (sbcl-agent::mutable-work-plane-package-p "sbcl-agent.work.workspace.demo")
+               "trust boundary helpers should recognize mutable work-plane packages")
+  (assert-true (sbcl-agent::candidate-runtime-package-p "sbcl-agent.candidate.actor.demo")
+               "trust boundary helpers should recognize candidate runtime packages")
+  (assert-true (sbcl-agent::generated-runtime-package-p "sbcl-agent.generated.system.demo")
+               "trust boundary helpers should recognize generated runtime packages")
+  (assert-equal :application
+                (sbcl-agent::package-trust-tier "sbcl-agent")
+                "trust boundary helpers should keep the legacy shared package classified as application during transition"))
+
 (defun environment-desktop-preferences-service-contract-test ()
   (let* ((session (make-test-session :cwd "/tmp/environment-desktop-preferences-service-contract/"))
          (environment (sbcl-agent::ensure-environment))
@@ -1578,7 +1603,7 @@
                                                                  :package "SBCL-AGENT-USER"
                                                                  :mutating t)))
      "Approval required for :RUNTIME-EVAL-MUTATE"
-     "kernel invoke should enforce approval-required runtime mutation policy before dispatch")
+     "execution invoke should enforce approval-required runtime mutation policy before dispatch")
     (sbcl-agent::approve-policy session :runtime-package-switch)
     (sbcl-agent::approve-policy session :runtime-eval-mutate)
 
@@ -1623,10 +1648,10 @@
                                      :key (lambda (profile) (getf profile :name))
                                      :test #'string=)))
       (assert-true (stringp provider-execution-id)
-                   "kernel invoke should assign an execution handle to provider configuration commands")
+                   "execution invoke should assign an execution handle to provider configuration commands")
       (assert-equal "kernel-local"
                     (getf configured-profile :name)
-                    "kernel invoke should dispatch environment/provider-configure through the environment provider service"))
+                    "execution invoke should dispatch environment/provider-configure through the environment provider service"))
 
     (let* ((rgp-bind-response
              (sbcl-agent::command-kernel-invoke-service session
@@ -1637,10 +1662,10 @@
            (rgp-bind-execution-id (getf (sbcl-agent::service-response-metadata rgp-bind-response)
                                         :execution-id)))
       (assert-true (stringp rgp-bind-execution-id)
-                   "kernel invoke should assign an execution handle to rgp bind commands")
+                   "execution invoke should assign an execution handle to rgp bind commands")
       (assert-equal "kernel-rgp-req"
                     (getf (getf (sbcl-agent::service-response-data rgp-bind-response) :binding) :request-id)
-                    "kernel invoke should dispatch rgp/bind through the rgp bind service"))
+                    "execution invoke should dispatch rgp/bind through the rgp bind service"))
 
     (let* ((task-enqueue-response
              (sbcl-agent::command-kernel-invoke-service session
@@ -1653,7 +1678,7 @@
            (task-inspect (sbcl-agent::service-response-data
                           (sbcl-agent::query-kernel-inspect-service session task-execution-id))))
       (assert-true (stringp task-execution-id)
-                   "kernel invoke should assign an execution handle to task enqueue commands")
+                   "execution invoke should assign an execution handle to task enqueue commands")
       (assert-equal :task
                     (getf task-inspect :object-kind)
                     "kernel inspect should classify task enqueue executions as task objects"))
@@ -1668,7 +1693,7 @@
            (worker-inspect (sbcl-agent::service-response-data
                             (sbcl-agent::query-kernel-inspect-service session worker-execution-id))))
       (assert-true (stringp worker-execution-id)
-                   "kernel invoke should assign an execution handle to worker start commands")
+                   "execution invoke should assign an execution handle to worker start commands")
       (assert-equal :worker
                     (getf worker-inspect :object-kind)
                     "kernel inspect should classify worker start executions as worker objects"))
@@ -1683,7 +1708,7 @@
            (authority-inspect (sbcl-agent::service-response-data
                                (sbcl-agent::query-kernel-inspect-service session authority-execution-id))))
       (assert-true (stringp authority-execution-id)
-                   "kernel invoke should assign an execution handle to authority grant commands")
+                   "execution invoke should assign an execution handle to authority grant commands")
       (assert-equal :execution
                     (getf authority-inspect :object-kind)
                     "kernel inspect should classify authority grants as generic execution objects when no more specific target exists"))
@@ -1698,7 +1723,7 @@
            (thread-inspect (sbcl-agent::service-response-data
                             (sbcl-agent::query-kernel-inspect-service session thread-execution-id))))
       (assert-true (stringp thread-execution-id)
-                   "kernel invoke should assign an execution handle to thread creation commands")
+                   "execution invoke should assign an execution handle to thread creation commands")
       (assert-equal :thread
                     (getf thread-inspect :object-kind)
                     "kernel inspect should resolve thread execution handles through the conversation target model"))
@@ -1719,7 +1744,7 @@
              (getf (sbcl-agent::service-response-metadata desktop-task-response)
                    :execution-id)))
       (assert-true (stringp desktop-task-execution-id)
-                   "kernel invoke should assign an execution handle to desktop-task invoke commands")
+                   "execution invoke should assign an execution handle to desktop-task invoke commands")
       (assert-equal :invoke
                     (getf desktop-task-response :operation)
                     "desktop-task invoke should identify the invoke operation")
@@ -1753,7 +1778,7 @@
            (session-save-execution-id (getf (sbcl-agent::service-response-metadata session-save-response)
                                             :execution-id)))
       (assert-true (stringp session-save-execution-id)
-                   "kernel invoke should assign an execution handle to session save commands"))
+                   "execution invoke should assign an execution handle to session save commands"))
 
     (let* ((session-load-response
              (sbcl-agent::command-kernel-invoke-service session
@@ -1769,10 +1794,10 @@
                                        (sbcl-agent::query-kernel-inspect-service loaded-session
                                                                                  session-load-execution-id)))))
       (assert-true (stringp session-load-execution-id)
-                   "kernel invoke should assign an execution handle to session load commands")
+                   "execution invoke should assign an execution handle to session load commands")
       (assert-equal "/tmp/kernel-session-save.sexp"
                     (getf session-load-payload :loaded)
-                    "kernel invoke should preserve the loaded session path in the kernelized response")
+                    "execution invoke should preserve the loaded session path in the registered response")
       (assert-equal :execution
                     (getf session-load-inspect :object-kind)
                     "kernel inspect should expose session/load as a generic execution object"))
@@ -1785,7 +1810,7 @@
            (environment-save-execution-id (getf (sbcl-agent::service-response-metadata environment-save-response)
                                                 :execution-id)))
       (assert-true (stringp environment-save-execution-id)
-                   "kernel invoke should assign an execution handle to environment save commands"))
+                   "execution invoke should assign an execution handle to environment save commands"))
 
     (let* ((environment-load-response
              (sbcl-agent::command-kernel-invoke-service session
@@ -1801,10 +1826,10 @@
                                            (sbcl-agent::query-kernel-inspect-service loaded-session
                                                                                      environment-load-execution-id)))))
       (assert-true (stringp environment-load-execution-id)
-                   "kernel invoke should assign an execution handle to environment load commands")
+                   "execution invoke should assign an execution handle to environment load commands")
       (assert-equal "/tmp/kernel-environment-save.sexp"
                     (getf environment-load-payload :loaded)
-                    "kernel invoke should preserve the loaded environment path in the kernelized response")
+                    "execution invoke should preserve the loaded environment path in the registered response")
       (assert-equal :execution
                     (getf environment-load-inspect :object-kind)
                     "kernel inspect should expose environment/load as a generic execution object"))
@@ -1839,16 +1864,16 @@
                     "kernel inspect should preserve compatibility execution argv")
       (assert-equal :host-process
                     (getf compatibility-target :kind)
-                    "kernel execution target should persist compatibility metadata")
+                    "execution target should persist compatibility metadata")
       (assert-equal :process-run
                     (getf compatibility-target :sandbox-profile)
-                    "kernel execution target should persist compatibility sandbox posture")
+                    "execution target should persist compatibility sandbox posture")
       (assert-equal :host-process-sync
                     (getf compatibility-target :backend-adapter-id)
-                    "kernel execution target should persist the backend adapter id for attached compatibility tools")
+                    "execution target should persist the backend adapter id for attached compatibility tools")
       (assert-equal :attached-host-process
                     (getf (getf compatibility-target :backend-profile) :runtime-class)
-                    "kernel execution target should expose attached host-process runtime posture for proc/run")
+                    "execution target should expose attached host-process runtime posture for proc/run")
       (assert-service-metadata-shape compatibility-response "compatibility executions service")
       (assert-equal :compatibility
                     (getf compatibility-response :domain)
@@ -1885,15 +1910,15 @@
                                      :test #'string=)))
         (assert-equal :surfaces
                       (getf surface-response :operation)
-                      "kernel execution surfaces query should identify the surfaces operation")
-        (assert-service-metadata-shape surface-response "kernel execution surfaces service")
+                      "execution surfaces query should identify the surfaces operation")
+        (assert-service-metadata-shape surface-response "execution surfaces service")
         (assert-true (> (getf surface-data :count) 0)
-                     "kernel execution surfaces query should return execution-backed surfaces")
+                     "execution surfaces query should return execution-backed surfaces")
         (assert-true matching-surface
-                     "kernel execution surfaces query should include the compatibility execution surface")
+                     "execution surfaces query should include the compatibility execution surface")
         (assert-equal "compatibility"
                       (getf matching-surface :surface-kind)
-                      "kernel execution surfaces query should classify compatibility surfaces explicitly")))
+                      "execution surfaces query should classify compatibility surfaces explicitly")))
 
     (let* ((spawn-command (sbcl-agent::command-invoke-tool-service session :proc/spawn '(:argv ("/bin/sleep" "5"))))
            (spawn-execution-id (getf (sbcl-agent::service-response-metadata spawn-command) :execution-id))
@@ -1955,7 +1980,7 @@
            (linux-echo-inspect (sbcl-agent::service-response-data
                                 (sbcl-agent::query-kernel-inspect-service session linux-echo-execution-id))))
       (assert-true (stringp linux-echo-execution-id)
-                   "kernel invoke should assign an execution handle to linux app invocations")
+                   "execution invoke should assign an execution handle to linux app invocations")
       (assert-equal :compatibility-execution
                     (getf linux-echo-inspect :object-kind)
                     "kernel inspect should classify linux app invocations as compatibility executions")
@@ -2019,7 +2044,7 @@
                                                                          :stop))
            (linux-sleep-stop-data (sbcl-agent::service-response-data linux-sleep-stop)))
       (assert-true (stringp linux-sleep-execution-id)
-                   "kernel invoke should assign an execution handle to detached linux app invocations")
+                   "execution invoke should assign an execution handle to detached linux app invocations")
       (assert-equal :linux-app
                     (getf (getf linux-sleep-inspect :inspection) :kind)
                     "kernel inspect should classify linux.sleep as a linux-app compatibility execution")
@@ -2135,7 +2160,7 @@
                                                                     :stop))
            (managed-stop-data (sbcl-agent::service-response-data managed-stop)))
       (assert-true (stringp managed-execution-id)
-                   "kernel invoke should assign an execution handle to managed desktop surface app launches")
+                   "execution invoke should assign an execution handle to managed desktop surface app launches")
       (assert-equal :linux-app
                     (getf (getf managed-inspect :inspection) :kind)
                     "kernel inspect should classify managed desktop surface launches as linux-app compatibility executions")
@@ -2177,7 +2202,7 @@
                                                                         :session session))
            (apps-entry (first (getf (sbcl-agent::service-response-data apps-response) :entries))))
       (assert-true (stringp linux-echo-execution-id)
-                   "kernel invoke should still assign an execution handle to repeated linux app launches")
+                   "execution invoke should still assign an execution handle to repeated linux app launches")
       (assert-true (> (getf apps-entry :execution-count) 0)
                    "compatibility apps query should expose execution counts for launched apps")
       (assert-true (find linux-echo-execution-id
@@ -2325,19 +2350,72 @@
                             :governance-preflight)))
       (assert-equal :runtime-mutation
                     (getf preflight :mutation-class)
-                    "kernel invoke should classify mutating runtime eval through shared governance preflight")
+                    "execution invoke should classify mutating runtime eval through shared governance preflight")
       (assert-equal :runtime-eval-mutate
                     (getf preflight :policy-id)
-                    "kernel invoke should expose the governing policy in shared preflight")
+                    "execution invoke should expose the governing policy in shared preflight")
       (assert-equal t
                     (getf preflight :approval-required-p)
-                    "kernel invoke should expose approval posture in shared preflight")
+                    "execution invoke should expose approval posture in shared preflight")
       (assert-equal t
                     (getf preflight :approval-granted-p)
-                    "kernel invoke should expose granted approval posture in shared preflight")
+                    "execution invoke should expose granted approval posture in shared preflight")
       (assert-equal t
                     (getf preflight :checkpoint-required-p)
-                    "kernel invoke should mark mutating runtime eval as checkpoint-requiring"))
+                    "execution invoke should mark mutating runtime eval as checkpoint-requiring"))
+
+    (let ((preflight (sbcl-agent::kernel-governance-preflight
+                      session
+                      :runtime/eval
+                      (list :form "(values :ok)"
+                            :package "SBCL-AGENT.SYSTEM.KERNEL"
+                            :mutating t)
+                      nil
+                      nil)))
+      (assert-equal "SBCL-AGENT.SYSTEM.KERNEL"
+                    (getf preflight :runtime-package-name)
+                    "execution invoke should surface the requested runtime package in governance preflight")
+      (assert-equal :control-plane
+                    (getf preflight :runtime-package-trust-tier)
+                    "execution invoke should classify control-plane runtime namespaces explicitly in governance preflight")
+      (assert-equal t
+                    (getf preflight :protected-control-plane-p)
+                    "execution invoke should flag protected control-plane runtime packages during governance preflight"))
+
+    (let ((candidate-preflight (sbcl-agent::kernel-governance-preflight
+                                session
+                                :runtime/eval
+                                (list :form "(values :candidate)"
+                                      :package "SBCL-AGENT.CANDIDATE.ACTOR.DEMO"
+                                      :mutating t)
+                                nil
+                                nil))
+          (generated-preflight (sbcl-agent::kernel-governance-preflight
+                                session
+                                :runtime/eval
+                                (list :form "(values :generated)"
+                                      :package "SBCL-AGENT.GENERATED.SYSTEM.DEMO"
+                                      :mutating t)
+                                nil
+                                nil)))
+      (assert-equal :candidate
+                    (getf candidate-preflight :runtime-package-trust-tier)
+                    "kernel governance preflight should classify candidate runtime namespaces explicitly")
+      (assert-equal t
+                    (getf candidate-preflight :candidate-runtime-p)
+                    "kernel governance preflight should flag candidate runtime namespaces")
+      (assert-equal nil
+                    (getf candidate-preflight :protected-control-plane-p)
+                    "kernel governance preflight should not treat candidate runtime namespaces as control-plane")
+      (assert-equal :generated
+                    (getf generated-preflight :runtime-package-trust-tier)
+                    "kernel governance preflight should classify generated runtime namespaces explicitly")
+      (assert-equal t
+                    (getf generated-preflight :generated-runtime-p)
+                    "kernel governance preflight should flag generated runtime namespaces")
+      (assert-equal nil
+                    (getf generated-preflight :protected-control-plane-p)
+                    "kernel governance preflight should not treat generated runtime namespaces as control-plane"))
 
     (let* ((work-item (sbcl-agent::create-work-item session "Kernel preflight checkpoint work"))
            (invoke-response (sbcl-agent::command-kernel-invoke-service session
@@ -2349,13 +2427,13 @@
            (preflight (getf (sbcl-agent::service-response-metadata invoke-response)
                             :governance-preflight)))
       (assert-true (stringp (getf preflight :checkpoint-id))
-                   "kernel invoke should create a checkpoint for bound governed work before mutation dispatch")
+                   "execution invoke should create a checkpoint for bound governed work before mutation dispatch")
       (assert-equal t
                     (getf preflight :checkpoint-present-p)
-                    "kernel invoke should report the created checkpoint in shared governance preflight")
+                    "execution invoke should report the created checkpoint in shared governance preflight")
       (assert-equal (getf preflight :checkpoint-id)
                     (sbcl-agent::latest-work-item-checkpoint-id work-item)
-                    "kernel invoke should attach the created checkpoint to the bound work-item"))
+                    "execution invoke should attach the created checkpoint to the bound work-item"))
 
     (let* ((work-item (sbcl-agent::create-work-item session "Kernel inspection governed work"))
            (approval-command (sbcl-agent::command-request-work-item-approval-service session
@@ -2486,7 +2564,7 @@
                                                     :context (list :work-item-id (sbcl-agent::work-item-id work-item))
                                                     :payload (list :package "SBCL-AGENT-USER")))
        "Kernel invoke blocked for governed mutation"
-       "kernel invoke should block governed mutation when the bound work-item is awaiting approval")
+       "execution invoke should block governed mutation when the bound work-item is awaiting approval")
       (sbcl-agent::command-kernel-control-service session
                                                   approval-execution-id
                                                   :quarantine
@@ -2499,7 +2577,7 @@
                                                     :context (list :work-item-id (sbcl-agent::work-item-id work-item))
                                                     :payload (list :package "SBCL-AGENT-USER")))
        "Kernel invoke blocked for governed mutation"
-       "kernel invoke should block governed mutation when the bound work-item is quarantined"))
+       "execution invoke should block governed mutation when the bound work-item is quarantined"))
 
     (let* ((work-item (sbcl-agent::create-work-item session "Kernel workflow mutation gating work"))
            (work-item-id (sbcl-agent::work-item-id work-item))
@@ -2523,7 +2601,7 @@
                                                                    :next-step :run-cold-validation
                                                                    :note "Should not pass")))
        "Kernel invoke blocked for governed mutation"
-       "kernel invoke should block workflow steering mutation when the bound work-item is quarantined"))
+       "execution invoke should block workflow steering mutation when the bound work-item is quarantined"))
 
     (let* ((validation-session (make-test-session :cwd "/tmp/kernel-validation-control/"))
            (invoke-response
@@ -2571,7 +2649,7 @@
                                                     :workspace/patch
                                                     :payload '((:write "src/kernel-self-mod-test.lisp" "blocked"))))
        "Kernel invoke blocked for self-modifying mutation"
-       "kernel invoke should block self-modifying patch mutations without governed work-item binding")
+       "execution invoke should block self-modifying patch mutations without governed work-item binding")
       (assert-signals-error
        (lambda ()
          (sbcl-agent::command-kernel-invoke-service self-mod-session
@@ -2579,7 +2657,7 @@
                                                     :runtime/reload-file
                                                     :payload (list :path "src/main.lisp")))
        "Kernel invoke blocked for self-modifying mutation"
-       "kernel invoke should block self-modifying runtime reload without governed work-item binding")
+       "execution invoke should block self-modifying runtime reload without governed work-item binding")
       (assert-signals-error
        (lambda ()
          (sbcl-agent::command-kernel-invoke-service self-mod-session
@@ -2589,7 +2667,17 @@
                                                                    :package "SBCL-AGENT"
                                                                    :mutating t)))
        "Kernel invoke blocked for self-modifying mutation"
-       "kernel invoke should block self-modifying runtime eval without governed work-item binding"))
+       "execution invoke should block self-modifying runtime eval without governed work-item binding")
+      (assert-signals-error
+       (lambda ()
+         (sbcl-agent::command-kernel-invoke-service self-mod-session
+                                                    "Blocked control-plane runtime eval"
+                                                    :runtime/eval
+                                                    :payload (list :form "(values :control-plane)"
+                                                                   :package "SBCL-AGENT.SYSTEM.KERNEL"
+                                                                   :mutating t)))
+       "Kernel invoke blocked for self-modifying mutation"
+       "execution invoke should block control-plane runtime eval without governed work-item binding"))
 
     (let* ((authority-command (sbcl-agent::command-approve-policy-service session :process-run))
            (authority-execution-id (getf (sbcl-agent::service-response-metadata authority-command) :execution-id)))
@@ -2741,6 +2829,9 @@
       (assert-equal (sbcl-agent::work-item-id work-item)
                     (getf (sbcl-agent::service-response-data work-plan-response) :id)
                     "work-item plan service should preserve the work-item identity")
+      (assert-equal :created
+                    (getf (sbcl-agent::service-response-data work-plan-response) :transaction-phase)
+                    "work-item plan service should surface the transaction phase")
       (assert-true (listp (getf (sbcl-agent::service-response-data work-plan-response) :plan-steering))
                    "work-item plan service should expose the long-horizon steering snapshot"))
     (let* ((incident (sbcl-agent::create-incident session
@@ -2833,7 +2924,7 @@
                     "session load service should identify load operation")
       (assert-service-metadata-shape load-response "session load service")
       (assert-equal "Service-backed session"
-                    (sbcl-agent::agent-session-plan loaded-session)
+                    (sbcl-agent::session-plan-display-value loaded-session)
                     "session load service should restore the saved session plan"))))
 
 (defun shell-service-contract-test ()
@@ -3549,8 +3640,8 @@
                   (getf manifest :package-format)
                   "platform manifest service should expose the package format")
     (assert-equal '(:invoke :inspect :control)
-                  (getf manifest :kernel-api)
-                  "platform manifest service should expose the execution-kernel api")
+                  (getf manifest :runtime-api)
+                  "platform manifest service should expose the execution runtime api")
     (assert-true (> (getf manifest :workflow-count) 0)
                  "platform manifest service should expose governed workflow inventory")
     (assert-true (> (getf manifest :sdk-command-count) 0)
@@ -3659,29 +3750,29 @@
                      "platform package service should persist a top-level sdk command contents index")
         (assert-true (search "\"desktop-host-shell\"" contents)
                      "platform package service should persist desktop host workflow metadata")))
-      (let* ((kernel-output-path "/tmp/platform-service-contract-kernel.aop")
-             (kernel-package-data
+      (let* ((package-output-path "/tmp/platform-service-contract-runtime.aop")
+             (package-command-data
                (sbcl-agent::execute-platform-package-command
-                (list :output-path kernel-output-path
-                      :package-id "demo-kit-kernel"
+                (list :output-path package-output-path
+                      :package-id "demo-kit-runtime"
                       :package-version "1.2.1"
-                      :title "Demo Kit Kernel"
+                      :title "Demo Kit Runtime"
                       :capabilities '(:proc/run))
                 session))
-             (kernel-package-handle
+             (package-command-handle
                (sbcl-agent::kernel-find-execution-by-target :platform-package-id
-                                                            "demo-kit-kernel"
+                                                            "demo-kit-runtime"
                                                             (sbcl-agent::session-bound-environment session))))
-        (assert-equal "demo-kit-kernel"
-                      (getf kernel-package-data :package-id)
+        (assert-equal "demo-kit-runtime"
+                      (getf package-command-data :package-id)
                       "shell platform package execution should preserve package data")
-        (assert-true (listp kernel-package-handle)
-                     "shell platform package execution should record a kernel execution handle")
+        (assert-true (listp package-command-handle)
+                     "shell platform package execution should record an execution handle")
         (assert-equal "platform/package"
-                      (getf kernel-package-handle :capability)
-                      "shell platform package execution should record the kernel capability")
-        (assert-equal "demo-kit-kernel"
-                      (getf (getf kernel-package-handle :target) :platform-package-id)
+                      (getf package-command-handle :capability)
+                      "shell platform package execution should record the execution capability")
+        (assert-equal "demo-kit-runtime"
+                      (getf (getf package-command-handle :target) :platform-package-id)
                       "shell platform package execution should capture the platform package target"))
       (let* ((show-response (sbcl-agent::query-platform-package-service output-path
                                                                         :session session))
@@ -4358,7 +4449,7 @@
                                 :direction :output
                                 :if-exists :supersede
                                 :if-does-not-exist :create)
-          (write-string "{\"package_format\":\"intentos.aop.v1\",\"package_id\":\"broken-kit\",\"package_version\":\"1.0.0\",\"requires\":{\"supported_package_format\":\"intentos.aop.v1\",\"supported_manifest_version\":1,\"required_kernel_class\":\"execution-kernel\",\"required_kernel_api\":[\"invoke\",\"inspect\",\"control\"],\"required_desktop_contract\":\"desktop-shell-v0\",\"required_surface_contract\":\"execution-surfaces-v1\"},\"title\":\"Broken Kit\",\"contents\":{\"capability_ids\":[],\"policy_ids\":[],\"workflow_ids\":[],\"sdk_command_ids\":[],\"compatibility_kinds\":[]},\"manifest\":{\"manifest_version\":1,\"kernel_class\":\"execution-kernel\",\"kernel_api\":[\"invoke\",\"inspect\",\"control\"],\"capabilities\":[],\"policies\":[],\"workflows\":[{\"workflow_id\":\"broken\",\"entrypoints\":[\"missing-command\"],\"required_capabilities\":[],\"control_actions\":[]}],\"sdk_commands\":[],\"compatibility_kinds\":[]}}" stream))
+          (write-string "{\"package_format\":\"intentos.aop.v1\",\"package_id\":\"broken-kit\",\"package_version\":\"1.0.0\",\"requires\":{\"supported_package_format\":\"intentos.aop.v1\",\"supported_manifest_version\":1,\"required_runtime_class\":\"execution-kernel\",\"required_runtime_api\":[\"invoke\",\"inspect\",\"control\"],\"required_desktop_contract\":\"desktop-shell-v0\",\"required_surface_contract\":\"execution-surfaces-v1\"},\"title\":\"Broken Kit\",\"contents\":{\"capability_ids\":[],\"policy_ids\":[],\"workflow_ids\":[],\"sdk_command_ids\":[],\"compatibility_kinds\":[]},\"manifest\":{\"manifest_version\":1,\"runtime_class\":\"execution-kernel\",\"runtime_api\":[\"invoke\",\"inspect\",\"control\"],\"capabilities\":[],\"policies\":[],\"workflows\":[{\"workflow_id\":\"broken\",\"entrypoints\":[\"missing-command\"],\"required_capabilities\":[],\"control_actions\":[]}],\"sdk_commands\":[],\"compatibility_kinds\":[]}}" stream))
         (let* ((invalid-response
                  (sbcl-agent::command-platform-validate-package-service invalid-path
                                                                         :session session))
@@ -5862,6 +5953,62 @@
                     "work-item plan query should surface the operator-directed next step")
       (assert-true (> (length (or (getf (sbcl-agent::service-response-data plan-response) :operator-steering-history) '())) 0)
                    "work-item plan query should preserve operator steering history"))
+    (let* ((patch-session (make-test-session :cwd "/tmp/workflow-patch-promotion-service-contract/"))
+           (patch-work-item (sbcl-agent::create-work-item patch-session "Workflow staged workspace goal"))
+           (patch-work-item-id (sbcl-agent::work-item-id patch-work-item)))
+      (sbcl-agent::ensure-environment)
+      (sbcl-agent::approve-policy patch-session :workspace-write)
+      (sbcl-agent::command-kernel-invoke-service
+       patch-session
+       "Stage and verify governed workspace patch."
+       :workspace/patch
+       :payload (list :operations '((:write "tmp/workflow-stage-promotion.txt" "verified"))
+                      :promote-p nil)
+       :context (list :work-item-id patch-work-item-id))
+      (let ((verified-plan (sbcl-agent::service-response-data
+                            (sbcl-agent::query-work-item-plan-service patch-session patch-work-item-id))))
+        (assert-equal :mutating
+                      (getf verified-plan :status)
+                      "verified staged patch work should remain open before promotion")
+        (assert-equal :verified
+                      (getf verified-plan :transaction-phase)
+                      "verified staged patch work should expose the verified transaction boundary")
+        (assert-equal :verified
+                      (getf verified-plan :verification-state)
+                      "verified staged patch work should expose the verification state")
+        (assert-equal :verified
+                      (getf verified-plan :promotion-state)
+                      "verified staged patch work should expose the promotion state")
+        (assert-equal :verify-workspace-stage
+                      (getf (getf verified-plan :next-action) :type)
+                      "verified staged patch work should advertise verification as the next governed action")
+        (assert-equal :verify-workspace-stage
+                      (getf (getf verified-plan :resume-payload) :resume-command)
+                      "verified staged patch work should advertise the verification resume command"))
+      (sbcl-agent::command-work-item-resume-service patch-session patch-work-item-id :note "Verification confirmed")
+      (let ((promotion-plan (sbcl-agent::service-response-data
+                             (sbcl-agent::query-work-item-plan-service patch-session patch-work-item-id))))
+        (assert-equal :promotion-pending
+                      (getf promotion-plan :transaction-phase)
+                      "verification continuation should advance the transaction to promotion-pending")
+        (assert-equal :promote-workspace-stage
+                      (getf (getf promotion-plan :resume-payload) :resume-command)
+                      "verification continuation should prepare the promotion resume command"))
+      (sbcl-agent::command-work-item-resume-service patch-session patch-work-item-id :note "Promote verified workspace")
+      (let ((promoted-plan (sbcl-agent::service-response-data
+                            (sbcl-agent::query-work-item-plan-service patch-session patch-work-item-id))))
+        (assert-equal :mutating
+                      (getf promoted-plan :status)
+                      "promotion continuation should leave the governed workspace mutation in flight while the actor job is queued")
+        (assert-equal :promotion-pending
+                      (getf promoted-plan :transaction-phase)
+                      "promotion continuation should keep the transaction at promotion-pending while the actor job is in flight")
+        (assert-equal :pending
+                      (getf promoted-plan :promotion-state)
+                      "promotion continuation should expose the pending promotion state")
+        (assert-equal :observe-promotion-task
+                      (getf (getf promoted-plan :next-action) :type)
+                      "promotion continuation should expose the queued promotion task as the next observable action")))
     (let* ((provider (make-test-provider))
            (result (progn
                      (sbcl-agent::execute-command

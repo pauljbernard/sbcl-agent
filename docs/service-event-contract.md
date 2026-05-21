@@ -9,7 +9,7 @@ description: Cursor-based event stream contract for presentation-tier polling an
 ---
 ## Purpose
 
-The presentation tier needs a stable way to observe governed runtime changes without depending on shell rendering or internal event-log traversal helpers.
+The presentation tier needs a stable way to observe governed runtime and workflow changes without depending on shell rendering or internal event-log traversal helpers.
 
 This document defines the first service-level event stream contract.
 
@@ -82,6 +82,12 @@ Presentation clients should consume the service event stream rather than:
 - inferring approval, incident, or turn progression from transcript output
 
 The event stream is the public UX-facing observation boundary.
+
+It is also one of the places where the actor, governance, and self-hosted runtime models become visible to clients. A serious client should be able to tell, from public event data:
+
+- whether a change came from actor-owned execution
+- whether approval or validation posture shaped the execution
+- whether recovery, replay, or incident handling changed the normal flow
 
 For `sbcl-agent-desktop`, that matters because the desktop should be able to distinguish:
 

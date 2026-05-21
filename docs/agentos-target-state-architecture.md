@@ -1,4 +1,6 @@
-# IntentOS – Target-State Architecture
+# IntentOS – Historical Target-State Architecture
+
+> Historical note: this page is retained as a program-origin reference. It describes the kernel-oriented target language that drove the architecture program. The current implemented system has since been simplified toward a shared concurrency/execution substrate plus actor-owned governance. Read [Architecture]({{ '/architecture.html' | relative_url }}) and [Actor Runtime, Concurrency, And Governance]({{ '/robust-actor-kernel-architecture.html' | relative_url }}) for the authoritative current model.
 
 ## Core Definition
 

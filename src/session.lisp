@@ -6,6 +6,7 @@
   id
   cwd
   package
+  bound-environment
   threads
   threads-tail
   current-thread-id
@@ -57,6 +58,7 @@
    :id (format nil "session-~D" (get-universal-time))
    :cwd cwd
    :package package
+   :bound-environment nil
    :threads '()
    :threads-tail nil
    :current-thread-id nil
@@ -554,7 +556,7 @@
          (policy-state (and (boundp '*current-environment*)
                             *current-environment*
                             (eq (environment-compatibility-session *current-environment*) session)
-                            (environment-policy-state *current-environment*))))
+                            (environment-policy-state-snapshot *current-environment*))))
     (append (list :id (agent-session-id session)
                   :cwd (or (bound-session-environment-state-summary environment-summary :storage-root)
                            (agent-session-cwd session))
@@ -703,7 +705,8 @@
    :actor-runtime-state (and (fboundp 'serializable-actor-runtime-state)
                              (serializable-actor-runtime-state session))
    :pending-actions (agent-session-pending-actions session)
-   :desktop-tasks (agent-session-desktop-tasks session)
+   :desktop-tasks (mapcar #'serializable-desktop-task-record
+                          (agent-session-desktop-tasks session))
    :tasks (agent-session-tasks session)
    :projects (agent-session-projects session)
    :current-project-id (agent-session-current-project-id session)

@@ -10,15 +10,17 @@ description: Consolidated requirements for IntentOS-oriented refactoring.
 
 # IntentOS Requirements
 
+> Historical note: this page preserves the requirement set from the IntentOS transition program. The current implemented system now satisfies these constraints through the actor runtime, shared concurrency/execution core, execution services, and governance-at-effect-boundary model rather than through a separate kernel service layer.
+
 ## Scope
 
 These requirements define what must remain true as the current `sbcl-agent / sbcl-agent-ux` system sustains and extends the accepted `IntentOS` target architecture.
 
 They are intentionally grouped by architectural concern rather than by implementation file.
 
-## R1. Kernel Requirements
+## R1. Execution Boundary Requirements
 
-The system must provide a minimal authoritative execution-kernel surface:
+The system must provide a minimal authoritative execution surface:
 
 - `invoke`
 - `inspect`
@@ -29,8 +31,8 @@ Requirements:
 - all native governed execution must enter through `invoke`
 - all governed state must be inspectable through `inspect`
 - intervention paths must normalize through `control`
-- no competing top-level execution API may bypass kernel rules
-- the kernel must manage executions as the primary system object rather than treating process-oriented abstractions as the native core
+- no competing top-level execution API may bypass governance or execution-boundary rules
+- the execution substrate must manage executions as the primary system object rather than treating process-oriented abstractions as the native core
 
 ## R2. Execution Handle Requirements
 
@@ -61,7 +63,7 @@ The SBCL image remains the native substrate.
 
 Requirements:
 
-- native kernel logic lives in SBCL
+- native execution and governance logic lives in SBCL
 - runtime identity is explicit
 - source truth, image truth, and workflow truth remain distinct
 - runtime mutation evidence remains linked to the governed work record
@@ -130,9 +132,9 @@ Validation must prove the architecture, not just feature behavior.
 
 Requirements:
 
-- test suites must be traceable to kernel and UX invariants
+- test suites must be traceable to execution/governance and UX invariants
 - validation must cover current-state integrity during transition
-- validation must expand as kernel, shell, and compatibility layers mature
+- validation must expand as execution, shell, and compatibility layers mature
 - validation must prove that proactive behaviors remain governed, attributable, and interruptible
 
 ## Acceptance Discipline

@@ -1,5 +1,7 @@
 # IntentOS Current-vs-Target Gap Matrix
 
+> Historical framing note: this page is retained to show how the old IntentOS gap program was measured and closed. The current implemented system should be understood primarily through the actor-runtime, concurrency/execution-core, governance, and environment-runtime documents rather than through this earlier kernel-centric gap vocabulary.
+
 ## Status
 
 This matrix is an objective assessment of the current `sbcl-agent` / `sbcl-agent-ux` codebase against the accepted IntentOS target architecture.
@@ -56,7 +58,7 @@ Current impact:
 Resolution:
 
 - Linux apps are now governed executions with manifest policy, resource scope, lifecycle, relaunch, and shell-visible display surfaces
-- the current backend remains SBCL-managed host-process orchestration, but that is now an implementation of the compatibility kernel rather than a missing subsystem
+- the current backend remains SBCL-managed host-process orchestration, but that is now an implementation of the compatibility execution layer rather than a missing subsystem
 
 Priority:
 
@@ -80,7 +82,7 @@ Current impact:
 
 Resolution:
 
-- the UX kernel now owns the shell-visible workspace, inspector, governance, object browser, surface, and desktop-host model
+- the UX layer now owns the shell-visible workspace, inspector, governance, object browser, surface, and desktop-host model
 - renderer refinements remain possible, but the target architectural contract is in place
 
 Priority:

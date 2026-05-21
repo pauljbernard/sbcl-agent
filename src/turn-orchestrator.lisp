@@ -1165,7 +1165,7 @@
                             (metadata (service-response-metadata response)))
                        (list :action action
                              :status :completed
-                             :kernel-execution-id (getf metadata :execution-id)
+                             :execution-id (getf metadata :execution-id)
                              :result (service-response-data response)))
                    (error (condition)
                      (let ((incident

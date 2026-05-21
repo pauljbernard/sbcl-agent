@@ -10,13 +10,15 @@ description: Foundational product and architecture constitution for the transiti
 
 # IntentOS Constitution
 
+> Historical note: this page preserves the governing doctrine of the IntentOS transition program. The current implemented system now realizes those constraints through a shared concurrency/execution substrate, actor-owned governance and effect handling, and a self-hosted introspective environment runtime rather than through a standalone kernel tier.
+
 ## Purpose
 
 This constitution defines the non-negotiable rules for evolving the current `sbcl-agent / sbcl-agent-ux` system into `IntentOS`.
 
 It exists to prevent three kinds of drift:
 
-- feature growth without kernel compression
+- feature growth without execution-boundary compression
 - desktop UX growth without a system model
 - compatibility growth that bypasses governance
 
@@ -24,9 +26,9 @@ It exists to prevent three kinds of drift:
 
 IntentOS is not a desktop application that happens to contain an agent runtime.
 
-IntentOS is a governed execution-kernel operating system built out of an image-native agent runtime.
+IntentOS is a governed execution-centric operating environment built out of an image-native agent runtime.
 
-It is microkernel-inspired in discipline, but its kernel object is the execution rather than the process.
+It is microkernel-inspired in discipline, but its primary object is the governed execution rather than the process.
 
 That means:
 
@@ -50,7 +52,7 @@ Every meaningful system action must be representable as a governed execution wit
 
 ### 2. Native authority remains in the SBCL runtime
 
-Kernel logic, governance, execution records, lifecycle state, trace, and policy remain owned by the SBCL image substrate.
+Execution logic, governance, execution records, lifecycle state, trace, and policy remain owned by the SBCL image substrate.
 
 Foreign runtimes may be hosted, but they do not become independent system authorities.
 
@@ -131,7 +133,7 @@ The system must always preserve:
 
 Testing must prove:
 
-- kernel invariants
+- execution and governance invariants
 - execution-handle ownership
 - governance integrity
 - shell/object coherence
@@ -151,7 +153,7 @@ Refactors should move the implementation toward the target model without lying a
 Every future feature, UX surface, capability adapter, and external integration should answer:
 
 1. What execution object does this create or operate on?
-2. What kernel boundary owns it?
+2. What execution or governance boundary owns it?
 3. How is it inspected?
 4. How is it controlled?
 5. How does it preserve governance?

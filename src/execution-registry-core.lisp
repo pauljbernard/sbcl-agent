@@ -1,56 +1,70 @@
 (in-package #:sbcl-agent)
 
-(defparameter +kernel-execution-registry-key+ :kernel-execution-registry)
+(defparameter +execution-registry-key+ :execution-registry)
+(defparameter *execution-registry-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-execution-registry"))
 
-(defun kernel-tool-capability-id (tool-id)
+(defun tool-capability-id (tool-id)
   (format nil "tool/~A"
           (string-downcase (symbol-name tool-id))))
 
-(defun kernel-plist-without-key (plist key)
+(defun plist-without-key (plist key)
   (cond
     ((null plist) '())
     ((eq (first plist) key)
-     (kernel-plist-without-key (cddr plist) key))
+     (plist-without-key (cddr plist) key))
     (t
      (list* (first plist)
             (second plist)
-            (kernel-plist-without-key (cddr plist) key)))))
+            (plist-without-key (cddr plist) key)))))
 
-(defun kernel-plist-put (plist key value)
-  (append (kernel-plist-without-key plist key) (list key value)))
+(defun plist-put (plist key value)
+  (append (plist-without-key plist key) (list key value)))
 
-(defun ensure-kernel-bound-environment (session &optional environment)
+(defun ensure-execution-bound-environment (session &optional environment)
   (let ((active-environment (ensure-environment (or environment
                                                     (session-bound-environment session)))))
     (unless (eq (environment-compatibility-session active-environment) session)
       (bind-session-to-environment session active-environment))
     active-environment))
 
-(defun kernel-execution-registry (&optional environment)
-  (copy-list (or (environment-metadata-value (ensure-environment environment)
-                                             +kernel-execution-registry-key+
-                                             '())
-                 '())))
 
-(defun kernel-find-execution (execution-id &optional environment)
+(defun execution-registry-entries (environment)
+  (or (environment-metadata-value environment
+                                  +execution-registry-key+
+                                  '())
+      '()))
+
+(defun call-with-execution-registry (environment thunk)
+  (sb-thread:with-mutex (*execution-registry-lock*)
+    (funcall thunk)))
+
+(defun execution-registry (&optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-execution-registry
+     active-environment
+     (lambda ()
+       (copy-list (execution-registry-entries active-environment))))))
+
+(defun find-execution-handle (execution-id &optional environment)
   (find execution-id
-        (kernel-execution-registry environment)
+        (execution-registry environment)
         :key (lambda (entry) (getf entry :execution-id))
         :test #'string=))
 
-(defun kernel-find-execution-by-target (key value &optional environment)
+(defun find-execution-handle-by-target (key value &optional environment)
   (find value
-        (kernel-execution-registry environment)
+        (execution-registry environment)
         :key (lambda (entry)
                (getf (getf entry :target) key))
         :test #'equal))
 
-(defun kernel-find-executions-by-target (key value &optional environment)
+(defun find-execution-handles-by-target (key value &optional environment)
   (remove-if-not (lambda (entry)
                    (equal (getf (getf entry :target) key) value))
-                 (kernel-execution-registry environment)))
+                 (execution-registry environment)))
 
-(defun kernel-execution-summary (handle)
+(defun execution-handle-summary (handle)
   (list :execution-id (getf handle :execution-id)
         :capability (getf handle :capability)
         :status (getf handle :status)
@@ -63,21 +77,54 @@
         :last-control-action (getf handle :last-control-action)
         :last-control-at (getf handle :last-control-at)))
 
-(defun kernel-execution-summaries-by-target (key value &optional environment)
-  (mapcar #'kernel-execution-summary
-          (kernel-find-executions-by-target key value environment)))
+(defun execution-handle-summaries-by-target (key value &optional environment)
+  (mapcar #'execution-handle-summary
+          (find-execution-handles-by-target key value environment)))
 
-(defun kernel-enrich-summary-with-executions (summary key value &optional environment)
+(defun enrich-summary-with-executions (summary key value &optional environment)
   (if (null summary)
       nil
       (let ((handles (and value
-                          (kernel-execution-summaries-by-target key value environment))))
+                          (execution-handle-summaries-by-target key value environment))))
         (append summary
                 (list :primary-execution-handle (first handles)
                       :execution-handles (or handles '()))))))
 
-(defun make-kernel-execution-id ()
+(defun make-execution-id ()
   (format nil "exec-~D-~D" (get-universal-time) (random 1000000)))
+
+(defun string-prefix-ci-p (prefix string)
+  (and prefix
+       string
+       (<= (length prefix) (length string))
+       (string-equal prefix string :end2 (length prefix))))
+
+(defun self-modification-pathname-p (path)
+  (let* ((namestring-path (and path (namestring (pathname path))))
+         (normalized (and namestring-path
+                          (substitute #\/ #\\ namestring-path))))
+    (and normalized
+         (or (search "/src/" normalized :test #'char-equal)
+             (search "/tests/" normalized :test #'char-equal)
+             (search "/docs/" normalized :test #'char-equal)
+             (search "/sbcl-agent.asd" normalized :test #'char-equal)
+             (string-prefix-ci-p "src/" normalized)
+             (string-prefix-ci-p "tests/" normalized)
+             (string-prefix-ci-p "docs/" normalized)
+             (string= normalized "sbcl-agent.asd")))))
+
+(defun capability-name-string (capability)
+  (typecase capability
+    (keyword (string-downcase (symbol-name capability)))
+    (symbol (string-downcase (symbol-name capability)))
+    (string capability)
+    (t (princ-to-string capability))))
+
+(defun execution-handle-execution-id (handle)
+  (getf handle :execution-id))
+
+(defun execution-handle-target-value (handle key)
+  (getf (getf handle :target) key))
 
 (defun plist-shaped-p (value)
   (and (listp value)
@@ -87,7 +134,7 @@
                          (keywordp key)
                          (or val (null val))))))
 
-(defun kernel-response-state (response)
+(defun response-execution-state (response)
   (let* ((data (service-response-data response))
          (turn (and (plist-shaped-p data) (getf data :turn)))
          (work-item (and (plist-shaped-p data) (getf data :work-item)))
@@ -110,7 +157,7 @@
       (t
        (getf response :status)))))
 
-(defun kernel-response-target (response)
+(defun response-execution-target (response)
   (let* ((metadata (service-response-metadata response))
          (data (service-response-data response))
          (package (and (plist-shaped-p data)
@@ -164,9 +211,9 @@
                                      (and (plist-shaped-p data)
                                           (getf data :path))))))
 
-(defun kernel-response-trace (response)
+(defun response-execution-trace (response)
   (let* ((metadata (service-response-metadata response))
-         (target (kernel-response-target response)))
+         (target (response-execution-target response)))
     (list :domain (getf response :domain)
           :operation (getf response :operation)
           :event-family (getf metadata :event-family)
@@ -181,7 +228,7 @@
           :incident-id (getf target :incident-id)
           :runtime-id (getf target :runtime-id))))
 
-(defun make-kernel-history-entry (&key event-kind status action reason note result)
+(defun make-execution-history-entry (&key event-kind status action reason note result)
   (list :timestamp (get-universal-time)
         :event-kind event-kind
         :status status
@@ -190,18 +237,18 @@
         :note note
         :result result))
 
-(defun append-kernel-history-entry (handle key entry)
+(defun append-execution-history-entry (handle key entry)
   (let ((updated (copy-list handle)))
     (setf (getf updated key)
           (append (copy-list (or (getf handle key) '()))
                   (list entry)))
     updated))
 
-(defun kernel-record-lifecycle-event (handle status &key result)
-  (let* ((updated (append-kernel-history-entry
+(defun record-execution-lifecycle-event (handle status &key result)
+  (let* ((updated (append-execution-history-entry
                    handle
                    :lifecycle-history
-                   (make-kernel-history-entry :event-kind :lifecycle
+                   (make-execution-history-entry :event-kind :lifecycle
                                               :status status
                                               :result result))))
     (setf (getf updated :status) status
@@ -209,11 +256,11 @@
           (getf updated :last-status-change-at) (getf (car (last (getf updated :lifecycle-history))) :timestamp))
     updated))
 
-(defun kernel-record-control-event (handle action &key status reason note result)
-  (let* ((updated (append-kernel-history-entry
+(defun record-execution-control-event (handle action &key status reason note result)
+  (let* ((updated (append-execution-history-entry
                    handle
                    :control-history
-                   (make-kernel-history-entry :event-kind :control
+                   (make-execution-history-entry :event-kind :control
                                               :status status
                                               :action action
                                               :reason reason
@@ -222,14 +269,14 @@
     (setf (getf updated :last-control-action) action
           (getf updated :last-control-at) (getf (car (last (getf updated :control-history))) :timestamp))
     (if status
-        (kernel-record-lifecycle-event updated status :result result)
+        (record-execution-lifecycle-event updated status :result result)
         updated)))
 
-(defun kernel-record-observed-status (handle status environment &key (result :observation))
+(defun record-execution-observed-status (handle status environment &key (result :observation))
   (if (or (null status)
           (eq status (getf handle :last-observed-status)))
       handle
-      (let ((updated (kernel-record-lifecycle-event handle status :result result)))
+      (let ((updated (record-execution-lifecycle-event handle status :result result)))
         (let* ((target (copy-tree (or (getf updated :target) '())))
                (compatibility-target (and (listp target)
                                           (copy-tree (getf target :compatibility-execution)))))
@@ -238,15 +285,15 @@
                   (getf compatibility-target :last-status-change-at) (getf updated :last-status-change-at)
                   (getf target :compatibility-execution) compatibility-target
                   (getf updated :target) target)))
-        (store-kernel-execution-handle updated environment)
+        (store-execution-handle updated environment)
         updated)))
 
-(defun build-kernel-execution-handle (response &key intention capability authority context constraints)
+(defun build-execution-handle (response &key intention capability authority context constraints)
   (let* ((metadata (service-response-metadata response))
          (binding (getf metadata :binding))
-         (status (kernel-response-state response))
+         (status (response-execution-state response))
          (recorded-at (get-universal-time)))
-    (list :execution-id (make-kernel-execution-id)
+    (list :execution-id (make-execution-id)
           :intention intention
           :capability capability
           :authority authority
@@ -256,8 +303,8 @@
           :status status
           :domain (getf response :domain)
           :operation (getf response :operation)
-          :target (kernel-response-target response)
-          :trace (kernel-response-trace response)
+          :target (response-execution-target response)
+          :trace (response-execution-trace response)
           :recorded-at recorded-at
           :last-observed-status status
           :last-status-change-at recorded-at
@@ -269,20 +316,23 @@
                                          :result :accepted))
           :control-history '())))
 
-(defun store-kernel-execution-handle (handle &optional environment)
-  (let* ((active-environment (ensure-environment environment))
-         (current (kernel-execution-registry active-environment))
-         (updated (cons handle
-                        (remove (getf handle :execution-id)
-                                current
-                                :key (lambda (entry) (getf entry :execution-id))
-                                :test #'string=))))
-    (set-environment-metadata-value active-environment
-                                    +kernel-execution-registry-key+
-                                    updated)
-    handle))
+(defun store-execution-handle (handle &optional environment)
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-execution-registry
+     active-environment
+     (lambda ()
+       (let* ((current (execution-registry-entries active-environment))
+              (updated (cons handle
+                             (remove (getf handle :execution-id)
+                                     current
+                                     :key (lambda (entry) (getf entry :execution-id))
+                                     :test #'string=))))
+         (set-environment-metadata-value active-environment
+                                         +execution-registry-key+
+                                         updated)
+         handle)))))
 
-(defun normalize-kernel-execution-handle-for-load (handle)
+(defun normalize-execution-handle-for-load (handle)
   (let* ((target (copy-tree (or (getf handle :target) '())))
          (compatibility-target (and (listp target)
                                     (copy-tree (getf target :compatibility-execution)))))
@@ -313,29 +363,32 @@
       (setf (getf compatibility-target :detached-runtime-loss-p) t)
       (setf (getf target :compatibility-execution) compatibility-target)
       (setf (getf handle :target) target)
-      (setf handle (kernel-record-lifecycle-event handle :detached :result :reload-normalization)))
+      (setf handle (record-execution-lifecycle-event handle :detached :result :reload-normalization)))
     handle))
 
-(defun normalize-kernel-execution-registry-for-load (environment)
-  (let ((registry (kernel-execution-registry environment)))
-    (set-environment-metadata-value
-     environment
-     +kernel-execution-registry-key+
-     (mapcar #'normalize-kernel-execution-handle-for-load registry))))
+(defun normalize-execution-registry-for-load (environment)
+  (call-with-execution-registry
+   environment
+   (lambda ()
+     (set-environment-metadata-value
+      environment
+      +execution-registry-key+
+      (mapcar #'normalize-execution-handle-for-load
+              (execution-registry-entries environment))))))
 
-(defun kernelize-service-command-response (response &key session environment intention capability authority context constraints)
+(defun register-service-command-response (response &key session environment intention capability authority context constraints)
   (let* ((active-environment (and session
-                                  (ensure-kernel-bound-environment session environment)))
+                                  (ensure-execution-bound-environment session environment)))
          (handle (and active-environment
-                      (build-kernel-execution-handle response
-                                                     :intention intention
-                                                     :capability capability
-                                                     :authority authority
-                                                     :context context
-                                                     :constraints constraints)))
+                      (build-execution-handle response
+                                              :intention intention
+                                              :capability capability
+                                              :authority authority
+                                              :context context
+                                              :constraints constraints)))
          (metadata (copy-list (or (service-response-metadata response) '()))))
     (when handle
-      (store-kernel-execution-handle handle active-environment)
-      (setf metadata (kernel-plist-put metadata :execution-id (getf handle :execution-id)))
+      (store-execution-handle handle active-environment)
+      (setf metadata (plist-put metadata :execution-id (getf handle :execution-id)))
       (setf (getf response :metadata) metadata))
     response))

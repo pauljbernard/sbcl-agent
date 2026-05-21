@@ -20,6 +20,13 @@ For long-horizon planning and governed execution, the runtime now builds one can
 4. what evidence is decisive rather than merely relevant
 5. what uncertainty blocks safe planning or execution
 
+This context model matters because the integrated agent is self-hosted. It is not reasoning about an external target through stale proxies alone. It is reasoning from inside the same governed environment it can inspect and mutate. That raises the bar:
+
+- context has to describe the actual live environment
+- context has to describe current authority, not assumed authority
+- context has to carry workflow and approval posture, not just code facts
+- context has to remain legible enough that an operator can understand why the agent acted
+
 ## Canonical Planning Context Packet
 
 Provider-bound planning requests now flow through a canonical `planning-context-packet` with these sections:
@@ -34,6 +41,8 @@ Provider-bound planning requests now flow through a canonical `planning-context-
 
 This packet is built in the shared request-snapshot layer and then consumed by the provider boundary. It is not an OpenAI-only formatting trick.
 
+It is also not just prompt assembly. It is the point where runtime truth, workflow truth, governance truth, and project truth are integrated into one actionable planning surface.
+
 ## Authority State
 
 The `authority-state` section now carries the stable and live context the agent should treat as authoritative before reaching for supporting narrative:
@@ -44,6 +53,8 @@ The `authority-state` section now carries the stable and live context the agent 
 - thread and turn context
 - environment summary
 - explicit Context Chat project targeting when present
+
+The important architectural point is that `authority-state` is not static policy text. It is assembled from the current introspective environment and current workflow/governance state.
 
 ### Agent Constitution
 
@@ -73,6 +84,13 @@ The environment also now exposes a planner-grade `capability-inventory`, includi
 
 This gives the planner a live view of what the agent can actually do, not just what tools exist in theory.
 
+That distinction is essential in a self-hosted runtime. The interesting failure mode is often not “tool missing” but:
+
+- capability exists in principle
+- environment state is stale, partial, or contradictory
+- authority is insufficient for the requested mutation
+- the workflow posture requires approval or colder validation
+
 ## Project Context
 
 Project context is no longer only inferred from prompt text or retrieved dossier fragments.
@@ -101,6 +119,8 @@ The dossier now derives a `decisive-context-core` that favors:
 - durable intent constraints
 - project constraints
 - prior conversational anchors when they govern interpretation
+
+This helps keep context integration bounded. The agent should not see everything equally. It should see the facts most likely to govern safe execution in this environment right now.
 
 Salience is explicitly weighted for:
 
@@ -146,6 +166,36 @@ For example:
 - implementation requests bias toward planning, mutation, and validation
 - recovery requests bias toward checkpoint-backed continuation and replay
 - high-risk or low-authority contexts escalate into a more conservative planning posture automatically
+
+## Self-Hosted Context Integration
+
+The project’s context model should be understood as self-hosted context integration:
+
+1. the environment exposes runtime, source, workflow, and governance state
+2. retrieval and inspection gather the decisive subset of that state
+3. the planning packet turns it into an explicit execution frame
+4. the integrated agent reasons inside that frame
+5. actor-governed execution returns new evidence, incidents, approvals, or artifacts back into the same environment
+
+That loop is what makes `sbcl-agent` different from a transcript-first agent shell:
+
+- the environment is not just the place where actions happen
+- the environment is also the authoritative source of planning context
+
+## Governance In Context
+
+Governance is part of the planning substrate itself.
+
+The planning packet is expected to expose:
+
+- policy identity
+- approval posture
+- capability readiness
+- contradictory or missing authority
+- validation obligations
+- prior incident or recovery state when relevant
+
+This means the agent should not discover governance only after deciding what it wants to do. Governance shapes what the agent plans in the first place.
 
 ## Context Chat Project Targeting
 

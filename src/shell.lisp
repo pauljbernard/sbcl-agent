@@ -10,22 +10,22 @@
   (format t "  (ask \"prompt\" :enqueue t)        Queue an agent request instead of executing it inline.~%")
   (format t "  (provider/show)                   Show the active provider profile for this environment.~%")
   (format t "  (provider/list)                   List configured provider profiles and the active selection.~%")
-  (format t "  (provider/use \"profile\")         Switch the running shell to a configured provider profile.~%")
-  (format t "  (provider/configure \"profile\" :provider \"name\" :model \"name\" [:fast-model \"name\"] [:api-base \"url\"] [:intents '(:architecture-review :quick-turn)] [:latency-tier :fast|:balanced] [:review-bias :deep|:neutral] [:execution-bias :high|:balanced] [:locality :local|:network]) Save a provider profile without storing secrets.~%")
+  (format t "  (provider/use \"profile\")         Switch the running shell to a configured provider profile through the environment control actor.~%")
+  (format t "  (provider/configure \"profile\" :provider \"name\" :model \"name\" [:fast-model \"name\"] [:api-base \"url\"] [:intents '(:architecture-review :quick-turn)] [:latency-tier :fast|:balanced] [:review-bias :deep|:neutral] [:execution-bias :high|:balanced] [:locality :local|:network]) Save a provider profile through the environment control actor without storing secrets.~%")
   (format t "  (provider/routing [:mode])        Show or set provider routing mode (:auto or :manual).~%")
   (format t "  (provider/route)                  Show the most recent provider routing decision and ranked candidates.~%")
   (format t "  (platform/manifest [:capabilities '(:capability ...)]) Show the developer-platform capability manifest.~%")
-  (format t "  (platform/package :output-path \"file.aop\" [:package-id \"id\"] [:package-version \"0.1.0\"] [:title \"name\"] [:publisher \"name\"] [:release-status \"deprecated\"] [:replacement-package-id \"id\"] [:rollback-strategy \"manual-recovery\"] [:failure-mode \"manual-intervention\"] [:backup-required nil] [:recovery-runbook \"uri\"] [:attested-p nil] [:capabilities '(:capability ...)]) Export a developer package descriptor.~%")
+  (format t "  (platform/package :output-path \"file.aop\" [:package-id \"id\"] [:package-version \"0.1.0\"] [:title \"name\"] [:publisher \"name\"] [:release-status \"deprecated\"] [:replacement-package-id \"id\"] [:rollback-strategy \"manual-recovery\"] [:failure-mode \"manual-intervention\"] [:backup-required nil] [:recovery-runbook \"uri\"] [:attested-p nil] [:capabilities '(:capability ...)] [:enqueue t]) Export a developer package descriptor, or enqueue governed actor execution.~%")
   (format t "  (platform/show-package \"file.aop\") Inspect an exported developer package descriptor.~%")
   (format t "  (platform/validate-package \"file.aop\") Validate an exported developer package descriptor.~%")
-  (format t "  (platform/import-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t]) Validate and import a developer package into the bound environment registry.~%")
+  (format t "  (platform/import-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t] [:enqueue t]) Validate and import a developer package into the bound environment registry, or enqueue governed actor execution.~%")
   (format t "  (platform/list-packages)          List imported developer packages from the bound environment registry.~%")
   (format t "  (platform/show-imported-package \"package-id\") Inspect one imported developer package from the bound environment registry.~%")
-  (format t "  (platform/activate-package \"package-id\") Activate one imported developer package in the bound environment registry.~%")
-  (format t "  (platform/deactivate-package \"package-id\") Deactivate one imported developer package in the bound environment registry.~%")
+  (format t "  (platform/activate-package \"package-id\" [:enqueue t]) Activate one imported developer package in the bound environment registry, or enqueue governed actor execution.~%")
+  (format t "  (platform/deactivate-package \"package-id\" [:enqueue t]) Deactivate one imported developer package in the bound environment registry, or enqueue governed actor execution.~%")
   (format t "  (platform/active-packages)        List active imported developer packages from the bound environment registry.~%")
   (format t "  (platform/profile)                Show the applied active-package platform profile for the bound environment registry.~%")
-  (format t "  (platform/install-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t]) Validate, import, and activate one developer package in the bound environment registry.~%")
+  (format t "  (platform/install-package \"file.aop\" [:allow-downgrade t] [:allow-deprecated t] [:allow-manual-recovery t] [:allow-untrusted t] [:enqueue t]) Validate, import, and activate one developer package in the bound environment registry, or enqueue governed actor execution.~%")
   (format t "  (platform/history [:package-id \"id\"] [:limit N]) Show package lifecycle history from the bound environment registry.~%")
   (format t "  (platform/audit)                  Show package trust, override, update, and lifecycle audit posture for the bound environment registry.~%")
   (format t "  (execution/show \"exec-id\")       Inspect a governed execution handle directly.~%")
@@ -34,7 +34,7 @@
   (format t "  (compatibility/show \"exec-id\")   Inspect one compatibility execution in detail.~%")
   (format t "  (compatibility/apps [:app-id \"linux.vscode\"]) List registered Linux compatibility app manifests.~%")
   (format t "  (compatibility/app-show \"linux.vscode\") Show one registered Linux compatibility app manifest.~%")
-  (format t "  (compatibility/launch \"linux.vscode\" [:arguments '(...)]) Launch a registered Linux compatibility app.~%")
+  (format t "  (compatibility/launch \"linux.vscode\" [:arguments '(...)] [:enqueue t]) Launch a registered Linux compatibility app, or enqueue governed actor execution.~%")
   (format t "  (compatibility/relaunch \"exec-id\") Relaunch a terminal or detached-loss Linux app through its manifest.~%")
   (format t "  (compatibility/windows [:app-id \"linux.vscode\"]) List visible Linux app display surfaces bridged into the shell model.~%")
   (format t "  (workspace/show)                   Show the shell workspace model built from execution surfaces.~%")
@@ -46,6 +46,10 @@
   (format t "  (desktop-task/actor :actor-role :keyword) Show one governed capability actor summary.~%")
   (format t "  (desktop-task/actor-system-panel [:session-id \"session-id\"]) Show the live actor-system hierarchy, workflow edges, metrics, and supervision state.~%")
   (format t "  (desktop-task/supervision-incidents [:session-id \"session-id\"] [:actor-id \"actor/runtime\"] [:mailbox :runtime-inbox]) Show actor supervision incidents.~%")
+  (format t "  (desktop-task/supervision-escalation-inbox [:session-id \"session-id\"] [:actor-id \"actor/runtime\"] [:parent-actor-id \"actor/governance\"] [:latest-only-p t]) Show routed parent/escalation-target supervision mailbox entries.~%")
+  (format t "  (desktop-task/ack-supervision-escalation \"mailbox-entry-id\" [:session-id \"session-id\"] [:actor-message-id \"id\"]) Mark one supervision escalation mailbox entry resolved after parent/operator handling.~%")
+  (format t "  (desktop-task/apply-supervision-escalation \"mailbox-entry-id\" [:session-id \"session-id\"] [:actor-message-id \"id\"] [:action :recommended|:dead-letter|:quarantine|:restart-child|:replace-child|:resume-from-checkpoint|:resume-work-item|:complete-validations|:rollback-work-item|:escalate-to-parent] [:note \"...\"]) Apply one routed supervision escalation through the linked actor-supervision incident.~%")
+  (format t "  (desktop-task/process-supervision-escalation [:session-id \"session-id\"] [:actor-id \"actor/runtime\"] [:parent-actor-id \"actor/actor-system\"] [:action :recommended|:dead-letter|:quarantine|:restart-child|:replace-child|:resume-from-checkpoint|:resume-work-item|:complete-validations|:rollback-work-item|:escalate-to-parent] [:note \"...\"]) Let the supervisor consume and process the next queued escalation entry for a parent target.~%")
   (format t "  (desktop-task/fail-mailbox-entry :mailbox :keyword :mailbox-entry-id \"entry-id\" [:summary \"...\"] [:condition-string \"...\"] [:supervision-action :keyword]) Mark one actor mailbox entry failed and record a supervision incident.~%")
   (format t "  (desktop-task/apply-supervision-action \"incident-id\" [:action :recommended|:dead-letter|:quarantine|:restart-child|:replace-child|:resume-from-checkpoint|:resume-work-item|:complete-validations|:rollback-work-item] [:note \"...\"]) Apply one parent-directed or workflow-derived supervision action to a failed mailbox entry.~%")
   (format t "  (desktop-task/inbox :actor-role :keyword [:status :keyword]) Show one capability actor inbox from governed task records.~%")
@@ -111,14 +115,14 @@
   (format t "  (incident/restarts \"incident-id\")  Show restart options captured for one incident.~%")
   (format t "  (environment/status)               Show where you are, what is blocked, and what needs attention next.~%")
   (format t "  (review/mutation [\"turn-id\"])     Show mutation, evidence, incidents, and closure state in one view.~%")
-  (format t "  (integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\") Bind this environment to an RGP governed runtime session.~%")
+  (format t "  (integration/rgp-bind :request-id \"req\" :agent-session-id \"sess\") Bind this environment to an RGP governed runtime session through the RGP service layer.~%")
   (format t "  (integration/rgp-show)              Show the governed-runtime snapshot RGP will reconcile.~%")
   (format t "  (integration/rgp-workspace)         Show the desktop-facing RGP workspace summary surface.~%")
-  (format t "  (integration/rgp-export \"path\")   Export the governed-runtime snapshot as JSON for RGP ingest.~%")
+  (format t "  (integration/rgp-export \"path\")   Export the governed-runtime snapshot as JSON for RGP ingest through the RGP service layer.~%")
   (format t "  (integration/rgp-artifacts)         Show artifact summaries with lineage fields for RGP import.~%")
   (format t "  (integration/rgp-approvals)         Show blocked approvals and resumable work-items for governed runtime control.~%")
-  (format t "  (integration/rgp-approve \"work-id\" :policy [:reason \"...\"]) Mark a governed runtime checkpoint as awaiting approval.~%")
-  (format t "  (integration/rgp-resume \"work-id\" [:note \"...\"]) Resume a governed runtime work-item after operator action.~%")
+  (format t "  (integration/rgp-approve \"work-id\" :policy [:reason \"...\"]) Mark a governed runtime checkpoint as awaiting approval through the RGP service layer.~%")
+  (format t "  (integration/rgp-resume \"work-id\" [:note \"...\"]) Resume a governed runtime work-item through the RGP service layer after operator action.~%")
   (format t "  (runtime/current-package)           Show the active Lisp package for the current runtime session.~%")
   (format t "  (runtime/list-loaded-systems)       Show ASDF systems currently loaded in the image.~%")
   (format t "  (runtime/describe-symbol \"name\" [:package \"PKG\"]) Inspect one symbol in the live image.~%")
@@ -130,14 +134,14 @@
   (format t "  (runtime/callers \"name\" [:package \"PKG\"]) Find source-level callers for a symbol in the workspace.~%")
   (format t "  (runtime/methods \"name\" [:package \"PKG\"]) List generic-function methods for a symbol in the image.~%")
   (format t "  (runtime/source-image-divergence \"name\" [:package \"PKG\"]) Report source/image presence and pending drift for a symbol.~%")
-  (format t "  (runtime/set-package \"PKG\")       Change the active Lisp package after approval.~%")
-  (format t "  (runtime/eval form|string [:mutating t]) Evaluate in the active runtime package with policy checks.~%")
+  (format t "  (runtime/set-package \"PKG\" [:enqueue t]) Change the active Lisp package after approval, or enqueue governed actor execution.~%")
+  (format t "  (runtime/eval form|string [:mutating t] [:enqueue t]) Evaluate in the active runtime package, or enqueue governed actor execution.~%")
   (format t "  (runtime/history [:tail N])         Show recent structured runtime operations recorded in the environment.~%")
-  (format t "  (runtime/reload-file \"path\")      Load a workspace source file into the live image after approval.~%")
+  (format t "  (runtime/reload-file \"path\" [:enqueue t]) Load a workspace source file into the live image, or enqueue governed actor execution.~%")
   (format t "  (environment/show)                  Print a summary of the current environment state.~%")
   (format t "  (environment/events [:tail N])      Show recent projected environment events.~%")
-  (format t "  (environment/save \"path\")        Persist the current environment and compatibility session.~%")
-  (format t "  (environment/load \"path\")        Load a persisted environment into the current image.~%")
+  (format t "  (environment/save \"path\")        Persist the current environment and compatibility session through the environment control actor.~%")
+  (format t "  (environment/load \"path\")        Load a persisted environment into the current image through the environment control actor.~%")
   (format t "  (execute-actions)                  Execute the currently staged assistant actions.~%")
   (format t "  (plan \"goal\")                    Set the current session plan goal.~%")
   (format t "  (enqueue-task '(tool ...))         Queue a normalized shell form for later execution.~%")
@@ -171,7 +175,7 @@
   (format t "  (tool :fs/read :path \"file\")     Read a workspace file.~%")
   (format t "  (tool :fs/list :path \"dir\")      List a workspace directory.~%")
   (format t "  (tool :proc/run :argv '(...))       Run a local process after approval.~%")
-  (format t "  (patch '((:write \"file\" \"...\"))) Apply a patch after workspace-write approval.~%")
+  (format t "  (patch '((:write \"file\" \"...\")) [:enqueue t]) Apply a governed patch, or enqueue mailbox-first workspace mutation after workspace-write approval.~%")
   (format t "  (session/save \"path\")            Persist the current session as an s-expression.~%")
   (format t "  (session/load \"path\")            Load a persisted session into the current image.~%")
   (format t "  (session/reset)                    Replace the current session with a fresh one.~%")
@@ -201,74 +205,70 @@
     (unless (keywordp tool-id)
       (error "TOOL id must be a keyword, got ~S" tool-id))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    (format nil "Invoke tool ~A." tool-id)
-                                    (kernel-tool-capability-id tool-id)
-                                    :payload (list* :tool-id tool-id tool-args)))))
+     (command-invoke-tool-service session tool-id tool-args))))
 
 (defun execute-approve-command (arguments session)
   (let ((policy (first arguments)))
     (unless (keywordp policy)
       (error "APPROVE requires a keyword policy"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    (format nil "Grant authority for policy ~A." policy)
-                                    "authority/grant"
-                                    :payload (list :policy policy)))))
+     (command-approve-policy-service session policy))))
 
 (defun execute-patch-command (arguments session)
-  (let ((operations (first arguments)))
-    (service-response-data
-     (command-kernel-invoke-service session
-                                    "Apply a governed patch to the workspace."
-                                    :workspace/patch
-                                    :payload operations))))
+  (let ((operations (first arguments))
+        (options (rest arguments)))
+    (when (null arguments)
+      (error "PATCH requires a patch operation list"))
+    (when (oddp (length options))
+      (error "PATCH keyword options must be a property list"))
+    (if (getf options :enqueue)
+        (service-response-data
+         (command-desktop-task-apply-patch-service
+          session
+          operations
+          :metadata (list :source :shell-patch
+                          :enqueue-p t)
+          :register-record-p t
+          :async-p t))
+        (service-response-data
+         (command-desktop-task-apply-patch-service
+          session
+          operations
+          :metadata (list :source :shell-patch
+                          :enqueue-p nil)
+          :register-record-p t
+          :async-p nil)))))
 
 (defun execute-assistant-action-command (arguments session)
   (let ((action (first arguments)))
     (unless (typep action 'assistant-action)
       (error "ASSISTANT-ACTION command requires an assistant-action object"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Execute a staged assistant action."
-                                    "assistant/action"
-                                    :payload (list :action action)))))
+     (command-execute-assistant-action-service session action))))
 
 (defun execute-pending-actions-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Execute all currently staged pending actions."
-                                  "assistant/pending-actions")))
+   (command-execute-pending-actions-service session)))
 
 (defun execute-pending-actions-command-with-context (session &key thread turn operation)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Execute all currently staged pending actions."
-                                  "assistant/pending-actions"
-                                  :context (list :thread thread
-                                                 :thread-id (and thread (thread-id thread))
-                                                 :turn turn
-                                                 :turn-id (and turn (turn-id turn))
-                                                 :operation operation))))
+   (command-execute-pending-actions-service session
+                                            :thread thread
+                                            :turn turn
+                                            :operation operation)))
 
 (defun execute-session-save-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/SAVE requires a string path"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Save session state."
-                                    "session/save"
-                                    :payload (list :path path)))))
+     (command-session-save-service session path))))
 
 (defun execute-session-load-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "SESSION/LOAD requires a string path"))
-    (let* ((response (command-kernel-invoke-service session
-                                                    "Load session state."
-                                                    "session/load"
-                                                    :payload (list :path path)))
+    (let* ((response (command-session-load-service path))
            (payload (service-response-data response))
            (session (getf payload :session))
            (workspace (and session
@@ -295,9 +295,7 @@
 
 (defun execute-desktop-task-manifests-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List discoverable governed desktop task manifests."
-                                  "desktop-task/manifests")))
+   (command-desktop-task-manifest-list-query-service session)))
 
 (defun execute-desktop-task-manifest-command (arguments session)
   (let ((target (or (getf arguments :target)
@@ -309,26 +307,19 @@
     (unless (keywordp operation)
       (error "DESKTOP-TASK/MANIFEST requires a keyword :operation"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one governed desktop task manifest."
-                                    "desktop-task/manifest"
-                                    :payload (list :target target
-                                                   :operation operation)))))
+     (query-desktop-task-manifest-detail-service session target operation))))
 
 (defun execute-desktop-task-records-command (arguments session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List governed desktop task records."
-                                  "desktop-task/records"
-                                  :payload (list :thread-id (getf arguments :thread-id)
-                                                 :status (getf arguments :status)
-                                                 :approval-status (getf arguments :approval-status)))))
+   (command-desktop-task-record-list-query-service
+    session
+    :thread-id (getf arguments :thread-id)
+    :status (getf arguments :status)
+    :approval-status (getf arguments :approval-status))))
 
 (defun execute-desktop-task-actors-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List governed capability actors and mailbox summaries."
-                                  "desktop-task/actors")))
+   (query-desktop-task-actor-list-service session)))
 
 (defun execute-desktop-task-actor-command (arguments session)
   (let ((actor-role (or (getf arguments :actor-role)
@@ -337,10 +328,7 @@
     (unless (keywordp actor-role)
       (error "DESKTOP-TASK/ACTOR requires a keyword :actor-role"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one governed capability actor summary."
-                                    "desktop-task/actor"
-                                    :payload (list :actor-role actor-role)))))
+     (query-desktop-task-actor-detail-service session actor-role))))
 
 (defun execute-desktop-task-inbox-command (arguments session)
   (let ((actor-role (or (getf arguments :actor-role)
@@ -349,11 +337,8 @@
     (unless (keywordp actor-role)
       (error "DESKTOP-TASK/INBOX requires a keyword :actor-role"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one governed capability actor inbox."
-                                    "desktop-task/inbox"
-                                    :payload (list :actor-role actor-role
-                                                   :status (getf arguments :status))))))
+     (query-desktop-task-actor-inbox-service session actor-role
+                                             :status (getf arguments :status)))))
 
 (defun execute-desktop-task-outbox-command (arguments session)
   (let ((actor-role (or (getf arguments :actor-role)
@@ -362,11 +347,8 @@
     (unless (keywordp actor-role)
       (error "DESKTOP-TASK/OUTBOX requires a keyword :actor-role"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one actor outbox."
-                                    "desktop-task/outbox"
-                                    :payload (list :actor-role actor-role
-                                                   :status (getf arguments :status))))))
+     (query-desktop-task-actor-outbox-service session actor-role
+                                              :status (getf arguments :status)))))
 
 (defun execute-desktop-task-message-command (arguments session)
   (let ((actor-message-id (or (first arguments)
@@ -375,10 +357,7 @@
     (unless (stringp actor-message-id)
       (error "DESKTOP-TASK/MESSAGE requires a string actor message id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one actor message detail."
-                                    "desktop-task/message"
-                                    :payload (list :actor-message-id actor-message-id)))))
+     (query-desktop-task-actor-message-detail-service session actor-message-id))))
 
 (defun execute-desktop-task-editor-mailbox-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -392,15 +371,14 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show the editor actor mailbox keyed by pending action ids."
-                                    "desktop-task/editor-mailbox"
-                                    :payload (list :session-id session-id
-                                                   :pending-action-id pending-action-id
-                                                   :status status
-                                                   :approval-status approval-status
-                                                   :scope-id scope-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-editor-mailbox-service
+      session
+      :session-id session-id
+      :pending-action-id pending-action-id
+      :status status
+      :approval-status approval-status
+      :scope-id scope-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-context-chat-mailbox-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -410,20 +388,16 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show the Context Chat actor mailbox keyed by session id."
-                                    "desktop-task/context-chat-mailbox"
-                                    :payload (list :session-id session-id
-                                                   :status status
-                                                   :approval-status approval-status
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-context-chat-mailbox-service
+      session
+      :session-id session-id
+      :status status
+      :approval-status approval-status
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-context-chat-context-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Show the explicit project targeting state for Context Chat."
-                                  "desktop-task/context-chat-context"
-                                  :payload '())))
+   (query-desktop-task-context-chat-context-service session)))
 
 (defun execute-desktop-task-set-context-chat-projects-command (arguments session)
   (let* ((raw-project-ids (or (getf arguments :project-ids)
@@ -437,11 +411,10 @@
                           raw-project-ids))
         (primary-project-id (getf arguments :primary-project-id)))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Set explicit project targeting for Context Chat."
-                                    "desktop-task/set-context-chat-projects"
-                                    :payload (list :project-ids project-ids
-                                                   :primary-project-id primary-project-id)))))
+     (command-desktop-task-set-context-chat-projects-service
+      session
+      project-ids
+      :primary-project-id primary-project-id))))
 
 (defun execute-desktop-task-editor-pending-mutations-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -455,15 +428,14 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show the editor actor pending mutation mailbox."
-                                    "desktop-task/editor-pending-mutations"
-                                    :payload (list :session-id session-id
-                                                   :pending-action-id pending-action-id
-                                                   :status status
-                                                   :approval-status approval-status
-                                                   :scope-id scope-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-editor-mailbox-service
+      session
+      :session-id session-id
+      :pending-action-id pending-action-id
+      :status status
+      :approval-status approval-status
+      :scope-id scope-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-context-chat-approval-inbox-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -471,11 +443,10 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show governance-issued approval requests addressed to Context Chat."
-                                    "desktop-task/context-chat-approval-inbox"
-                                    :payload (list :session-id session-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-context-chat-approval-inbox-service
+      session
+      :session-id session-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-ack-context-chat-approval-command (arguments session)
   (let ((approval-id (or (first arguments)
@@ -489,13 +460,12 @@
     (unless (stringp approval-id)
       (error "DESKTOP-TASK/ACK-CONTEXT-CHAT-APPROVAL requires a string approval id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Acknowledge one Context Chat approval inbox message."
-                                    "desktop-task/ack-context-chat-approval"
-                                    :payload (list :approval-id approval-id
-                                                   :session-id session-id
-                                                   :actor-message-id actor-message-id
-                                                   :mailbox-entry-id mailbox-entry-id)))))
+     (command-desktop-task-ack-context-chat-approval-service
+      session
+      approval-id
+      :session-id session-id
+      :actor-message-id actor-message-id
+      :mailbox-entry-id mailbox-entry-id))))
 
 (defun execute-desktop-task-editor-authorizations-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -507,13 +477,12 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show governance-authorized pending editor mutations."
-                                    "desktop-task/editor-authorizations"
-                                    :payload (list :session-id session-id
-                                                   :pending-action-id pending-action-id
-                                                   :scope-id scope-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-editor-authorization-mailbox-service
+      session
+      :session-id session-id
+      :pending-action-id pending-action-id
+      :scope-id scope-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-consume-editor-authorization-command (arguments session)
   (let ((pending-action-id (or (first arguments)
@@ -528,13 +497,12 @@
     (unless (stringp pending-action-id)
       (error "DESKTOP-TASK/CONSUME-EDITOR-AUTHORIZATION requires a pending-action-id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Dequeue one editor authorization mailbox message."
-                                    "desktop-task/consume-editor-authorization"
-                                    :payload (list :session-id session-id
-                                                   :pending-action-id pending-action-id
-                                                   :scope-id scope-id
-                                                   :mailbox-entry-id mailbox-entry-id)))))
+     (command-desktop-task-consume-editor-authorization-service
+      session
+      pending-action-id
+      :session-id session-id
+      :scope-id scope-id
+      :mailbox-entry-id mailbox-entry-id))))
 
 (defun execute-desktop-task-apply-editor-authorization-command (arguments session)
   (let ((pending-action-id (or (first arguments)
@@ -547,12 +515,11 @@
     (unless pending-action-id
       (error "desktop-task/apply-editor-authorization requires a pending-action-id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Apply one governance-authorized pending editor mutation."
-                                    "desktop-task/apply-editor-authorization"
-                                    :payload (list :session-id session-id
-                                                   :pending-action-id pending-action-id
-                                                   :scope-id scope-id)))))
+     (command-desktop-task-apply-editor-authorization-service
+      session
+      pending-action-id
+      :session-id session-id
+      :scope-id scope-id))))
 
 (defun execute-desktop-task-actor-trace-command (arguments session)
   (let ((actor-message-id (or (getf arguments :actor-message-id)
@@ -561,29 +528,20 @@
                         (getf arguments :role)))
         (phase (getf arguments :phase)))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show actor transport trace events."
-                                    "desktop-task/actor-trace"
-                                    :payload (append (when actor-message-id
-                                                       (list :actor-message-id actor-message-id))
-                                                     (when actor-role
-                                                       (list :actor-role actor-role))
-                                                     (when phase
-                                                       (list :phase phase))
-                                                     (when (getf arguments :latest-only-p)
-                                                       (list :latest-only-p t))
-                                                     (when (getf arguments :dead-letters-only-p)
-                                                       (list :dead-letters-only-p t)))))))
+     (command-desktop-task-actor-trace-service
+      session
+      :actor-message-id actor-message-id
+      :actor-role actor-role
+      :phase phase
+      :latest-only-p (getf arguments :latest-only-p)
+      :dead-letters-only-p (getf arguments :dead-letters-only-p)))))
 
 (defun execute-desktop-task-dlq-command (arguments session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Show dead-lettered actor messages."
-                                  "desktop-task/dlq"
-                                  :payload (when (or (getf arguments :actor-role)
-                                                     (getf arguments :role))
-                                             (list :actor-role (or (getf arguments :actor-role)
-                                                                   (getf arguments :role)))))))
+   (command-desktop-task-dead-letter-queue-service
+    session
+    :actor-role (or (getf arguments :actor-role)
+                    (getf arguments :role)))))
 
 (defun execute-desktop-task-replies-command (arguments session &key latest-only-p)
   (let ((actor-role (or (getf arguments :actor-role)
@@ -594,14 +552,8 @@
                  "DESKTOP-TASK/LATEST-REPLY requires a keyword :actor-role"
                  "DESKTOP-TASK/REPLIES requires a keyword :actor-role")))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    (if latest-only-p
-                                        "Show the latest completed/failed actor reply."
-                                        "Show completed/failed actor replies.")
-                                    (if latest-only-p
-                                        "desktop-task/latest-reply"
-                                        "desktop-task/replies")
-                                    :payload (list :actor-role actor-role)))))
+     (query-desktop-task-actor-replies-service session actor-role
+                                               :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-approve-message-command (arguments session provider)
   (let ((actor-message-id (or (first arguments)
@@ -612,11 +564,8 @@
     (unless provider
       (error "DESKTOP-TASK/APPROVE-MESSAGE requires a provider"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Approve and resume one awaiting-approval actor message."
-                                    "desktop-task/approve-message"
-                                    :provider provider
-                                    :payload (list :actor-message-id actor-message-id)))))
+     (command-desktop-task-approve-actor-message-service
+      session provider actor-message-id))))
 
 (defun execute-desktop-task-approve-approval-command (arguments session provider)
   (let ((approval-id (or (first arguments)
@@ -626,18 +575,12 @@
     (unless (stringp approval-id)
       (error "DESKTOP-TASK/APPROVE-APPROVAL requires a string approval id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Approve and resume one awaiting governance approval by approval id."
-                                    "desktop-task/approve-approval"
-                                    :provider provider
-                                    :payload (list :approval-id approval-id
-                                                   :session-id session-id)))))
+     (command-desktop-task-approve-approval-service
+      session provider approval-id :session-id session-id))))
 
 (defun execute-desktop-task-pending-approval-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Show the latest awaiting-approval actor-message context."
-                                  "desktop-task/pending-approval")))
+   (command-desktop-task-pending-approval-query-service session)))
 
 (defun execute-desktop-task-governance-state-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -648,13 +591,12 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show explicit governance actor state keyed by session, approval, or actor-message id."
-                                    "desktop-task/governance-state"
-                                    :payload (list :session-id session-id
-                                                   :approval-id approval-id
-                                                   :actor-message-id actor-message-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-governance-state-service
+      session
+      :session-id session-id
+      :approval-id approval-id
+      :actor-message-id actor-message-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-governance-inbox-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -663,12 +605,11 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show the governance actor inbox keyed by session and approval status."
-                                    "desktop-task/governance-inbox"
-                                    :payload (list :session-id session-id
-                                                   :approval-status approval-status
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-governance-inbox-service
+      session
+      :session-id session-id
+      :approval-status approval-status
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-governance-decisions-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -679,13 +620,12 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show governance-issued decision messages retained in the governance outbox."
-                                    "desktop-task/governance-decisions"
-                                    :payload (list :session-id session-id
-                                                   :approval-id approval-id
-                                                   :pending-action-id pending-action-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-governance-decision-outbox-service
+      session
+      :session-id session-id
+      :approval-id approval-id
+      :pending-action-id pending-action-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-runtime-outbox-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -693,11 +633,10 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show runtime-issued reply messages retained in the runtime outbox."
-                                    "desktop-task/runtime-outbox"
-                                    :payload (list :session-id session-id
-                                                   :latest-only-p latest-only-p)))))
+     (query-desktop-task-runtime-outbox-service
+      session
+      :session-id session-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-runtime-state-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -707,12 +646,11 @@
         (symbol-name (or (getf arguments :symbol-name)
                          (getf arguments :symbol))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show runtime actor-owned definition continuity state."
-                                    "desktop-task/runtime-state"
-                                    :payload (list :session-id session-id
-                                                   :package-name package-name
-                                                   :symbol-name symbol-name)))))
+     (command-desktop-task-runtime-state-service
+      session
+      :session-id session-id
+      :package-name package-name
+      :symbol-name symbol-name))))
 
 (defun execute-desktop-task-actor-flow-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
@@ -727,36 +665,90 @@
         (latest-only-p (not (null (or (getf arguments :latest-only-p)
                                       (getf arguments :latest-only))))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one combined actor-state packet spanning chat, governance, and editor mailboxes."
-                                    "desktop-task/actor-flow"
-                                    :payload (list :session-id session-id
-                                                   :approval-id approval-id
-                                                   :pending-action-id pending-action-id
-                                                   :actor-message-id actor-message-id
-                                                   :scope-id scope-id
-                                                   :latest-only-p latest-only-p)))))
+     (command-desktop-task-actor-flow-query-service
+      session
+      :session-id session-id
+      :approval-id approval-id
+      :pending-action-id pending-action-id
+      :actor-message-id actor-message-id
+      :scope-id scope-id
+      :latest-only-p latest-only-p))))
 
 (defun execute-desktop-task-actor-system-panel-command (arguments session)
   (let ((session-id (or (getf arguments :session-id)
                         (getf arguments :chat-session-id))))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show the live actor-system hierarchy, workflow edges, metrics, and supervision state."
-                                    "desktop-task/actor-system-panel"
-                                    :payload (list :session-id session-id)))))
+     (command-desktop-task-actor-system-panel-service session
+                                                      :session-id session-id))))
 
 (defun execute-desktop-task-supervision-incidents-command (arguments session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Show actor supervision incidents."
-                                  "desktop-task/supervision-incidents"
-                                  :payload (list :actor-id (getf arguments :actor-id)
-                                                 :parent-actor-id (getf arguments :parent-actor-id)
-                                                 :mailbox (getf arguments :mailbox)
-                                                 :mailbox-entry-id (getf arguments :mailbox-entry-id)
-                                                 :session-id (or (getf arguments :session-id)
-                                                                 (getf arguments :chat-session-id))))))
+   (command-desktop-task-supervision-incidents-service
+    session
+    :actor-id (getf arguments :actor-id)
+    :parent-actor-id (getf arguments :parent-actor-id)
+    :mailbox (getf arguments :mailbox)
+    :mailbox-entry-id (getf arguments :mailbox-entry-id)
+    :session-id (or (getf arguments :session-id)
+                    (getf arguments :chat-session-id))
+    :latest-only-p (getf arguments :latest-only-p))))
+
+(defun execute-desktop-task-supervision-escalation-inbox-command (arguments session)
+  (service-response-data
+   (command-desktop-task-supervision-escalation-inbox-service
+    session
+    :actor-id (getf arguments :actor-id)
+    :parent-actor-id (getf arguments :parent-actor-id)
+    :mailbox-entry-id (or (getf arguments :mailbox-entry-id)
+                          (getf arguments :entry-id))
+    :session-id (or (getf arguments :session-id)
+                    (getf arguments :chat-session-id))
+    :latest-only-p (getf arguments :latest-only-p))))
+
+(defun execute-desktop-task-ack-supervision-escalation-command (arguments session)
+  (let ((mailbox-entry-id (or (first arguments)
+                              (getf arguments :mailbox-entry-id)
+                              (getf arguments :entry-id))))
+    (unless (stringp mailbox-entry-id)
+      (error "DESKTOP-TASK/ACK-SUPERVISION-ESCALATION requires a string mailbox-entry-id"))
+    (service-response-data
+     (command-desktop-task-ack-supervision-escalation-admin-service
+      session
+      mailbox-entry-id
+      :session-id (or (getf arguments :session-id)
+                      (getf arguments :chat-session-id))
+      :actor-message-id (or (getf arguments :actor-message-id)
+                            (getf arguments :message-id))))))
+
+(defun execute-desktop-task-apply-supervision-escalation-command (arguments session)
+  (let ((mailbox-entry-id (or (first arguments)
+                              (getf arguments :mailbox-entry-id)
+                              (getf arguments :entry-id))))
+    (unless (stringp mailbox-entry-id)
+      (error "DESKTOP-TASK/APPLY-SUPERVISION-ESCALATION requires a string mailbox-entry-id"))
+    (service-response-data
+     (command-desktop-task-apply-supervision-escalation-admin-service
+      session
+      mailbox-entry-id
+      :session-id (or (getf arguments :session-id)
+                      (getf arguments :chat-session-id))
+      :actor-message-id (or (getf arguments :actor-message-id)
+                            (getf arguments :message-id))
+      :action (or (getf arguments :action)
+                  :recommended)
+      :note (getf arguments :note)))))
+
+(defun execute-desktop-task-process-supervision-escalation-command (arguments session)
+  (service-response-data
+   (command-desktop-task-process-supervision-escalation-admin-service
+    session
+    :session-id (or (getf arguments :session-id)
+                    (getf arguments :chat-session-id))
+    :actor-id (getf arguments :actor-id)
+    :parent-actor-id (getf arguments :parent-actor-id)
+    :action (or (getf arguments :action)
+                :recommended)
+    :note (getf arguments :note))))
 
 (defun execute-desktop-task-fail-mailbox-entry-command (arguments session)
   (let ((mailbox (or (getf arguments :mailbox)
@@ -768,17 +760,16 @@
     (unless (stringp mailbox-entry-id)
       (error "DESKTOP-TASK/FAIL-MAILBOX-ENTRY requires a string :mailbox-entry-id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Mark one actor mailbox entry failed and record a supervision incident."
-                                    "desktop-task/fail-mailbox-entry"
-                                    :payload (list :mailbox mailbox
-                                                   :mailbox-entry-id mailbox-entry-id
-                                                   :actor-message-id (getf arguments :actor-message-id)
-                                                   :approval-id (getf arguments :approval-id)
-                                                   :pending-action-id (getf arguments :pending-action-id)
-                                                   :summary (getf arguments :summary)
-                                                   :condition-string (getf arguments :condition-string)
-                                                   :supervision-action (getf arguments :supervision-action))))))
+     (command-desktop-task-fail-mailbox-entry-service
+      session
+      mailbox
+      mailbox-entry-id
+      :actor-message-id (getf arguments :actor-message-id)
+      :approval-id (getf arguments :approval-id)
+      :pending-action-id (getf arguments :pending-action-id)
+      :summary (getf arguments :summary)
+      :condition-string (getf arguments :condition-string)
+      :supervision-action (getf arguments :supervision-action)))))
 
 (defun execute-desktop-task-apply-supervision-action-command (arguments session)
   (let ((incident-id (or (first arguments)
@@ -786,13 +777,11 @@
     (unless (stringp incident-id)
       (error "DESKTOP-TASK/APPLY-SUPERVISION-ACTION requires a string incident id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Apply one parent-directed supervision action to a failed mailbox entry."
-                                    "desktop-task/apply-supervision-action"
-                                    :payload (list :incident-id incident-id
-                                                   :action (or (getf arguments :action)
-                                                               :dead-letter)
-                                                   :note (getf arguments :note))))))
+     (command-desktop-task-apply-supervision-action-service
+      session
+      incident-id
+      :action (or (getf arguments :action) :dead-letter)
+      :note (getf arguments :note)))))
 
 (defun execute-desktop-task-show-command (arguments session)
   (let ((record-id (or (first arguments)
@@ -800,16 +789,11 @@
     (unless (stringp record-id)
       (error "DESKTOP-TASK/SHOW requires a string record id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one governed desktop task record."
-                                    "desktop-task/record"
-                                    :payload (list :record-id record-id)))))
+     (query-desktop-task-record-detail-service session record-id))))
 
 (defun execute-desktop-task-mcp-servers-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List MCP server configurations attached to the governed desktop task registry."
-                                  "desktop-task/mcp-servers")))
+   (command-desktop-task-mcp-server-list-query-service session)))
 
 (defun execute-desktop-task-mcp-server-command (arguments session)
   (let ((server-id (or (first arguments)
@@ -817,34 +801,29 @@
     (unless (stringp server-id)
       (error "DESKTOP-TASK/MCP-SERVER requires a string server id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Show one MCP server configuration."
-                                    "desktop-task/mcp-server"
-                                    :payload (list :server-id server-id)))))
+     (command-desktop-task-mcp-server-detail-query-service session server-id))))
 
 (defun execute-desktop-task-configure-mcp-server-command (arguments session)
   (let ((name (getf arguments :name)))
     (unless (and (stringp name) (> (length (string-trim " " name)) 0))
       (error "DESKTOP-TASK/CONFIGURE-MCP-SERVER requires :name"))
     (service-response-data
-     (command-kernel-invoke-service
+     (command-desktop-task-configure-mcp-server-service
       session
-      "Create or update one MCP server configuration."
-      "desktop-task/configure-mcp-server"
-      :payload (list :server-id (getf arguments :server-id)
-                     :name name
-                     :transport (getf arguments :transport)
-                     :command (getf arguments :command)
-                     :arguments (getf arguments :arguments)
-                     :environment-variables (getf arguments :environment-variables)
-                     :working-directory (getf arguments :working-directory)
-                     :endpoint (getf arguments :endpoint)
-                     :capabilities (getf arguments :capabilities)
-                     :retry-policy (getf arguments :retry-policy)
-                     :health-status (getf arguments :health-status)
-                     :enabled-p (getf arguments :enabled-p)
-                     :discoverable-p (getf arguments :discoverable-p)
-                     :metadata (getf arguments :metadata))))))
+      :server-id (getf arguments :server-id)
+      :name name
+      :transport (getf arguments :transport)
+      :command (getf arguments :command)
+      :arguments (getf arguments :arguments)
+      :environment-variables (getf arguments :environment-variables)
+      :working-directory (getf arguments :working-directory)
+      :endpoint (getf arguments :endpoint)
+      :capabilities (getf arguments :capabilities)
+      :retry-policy (getf arguments :retry-policy)
+      :health-status (getf arguments :health-status)
+      :enabled-p (getf arguments :enabled-p)
+      :discoverable-p (getf arguments :discoverable-p)
+      :metadata (getf arguments :metadata)))))
 
 (defun execute-desktop-task-remove-mcp-server-command (arguments session)
   (let ((server-id (or (first arguments)
@@ -852,10 +831,7 @@
     (unless (stringp server-id)
       (error "DESKTOP-TASK/REMOVE-MCP-SERVER requires a string server id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Remove one MCP server configuration."
-                                    "desktop-task/remove-mcp-server"
-                                    :payload (list :server-id server-id)))))
+     (command-desktop-task-remove-mcp-server-service session server-id))))
 
 (defun execute-desktop-panel-command (arguments session)
   (let ((panel-id (or (first arguments)
@@ -1224,12 +1200,13 @@
                                        (provider-from-profile selected-profile))
                                   provider))
            (result (service-response-data
-                    (command-kernel-invoke-service session
-                                                   prompt
-                                                   :conversation/ask
-                                                   :provider selected-provider
-                                                   :options options
-                                                   :authority :repl-bridge)))
+                    (command-conversation-execution-service
+                     session
+                     selected-provider
+                     prompt
+                     options
+                     :source :ask
+                     :operator-mode :repl-bridge)))
            (route-summary (if route
                               (record-environment-provider-route route bound-environment)
                               (list :routing-mode :provider-default
@@ -1256,12 +1233,13 @@
                                        (provider-from-profile selected-profile))
                                   provider))
            (result (service-response-data
-                    (command-kernel-invoke-service session
-                                                   prompt
-                                                   :conversation/say
-                                                   :provider selected-provider
-                                                   :options options
-                                                   :authority :conversation)))
+                    (command-conversation-execution-service
+                     session
+                     selected-provider
+                     prompt
+                     options
+                     :source :say
+                     :operator-mode :conversation)))
            (route-summary (if route
                               (record-environment-provider-route route bound-environment)
                               (list :routing-mode :provider-default
@@ -1293,34 +1271,28 @@
     (unless (stringp (getf options :model))
       (error "PROVIDER/CONFIGURE requires a string :model"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Configure environment provider profile."
-                                    "environment/provider-configure"
-                                    :payload (list :profile-name profile-name
-                                                   :options options)
-                                    :context (list :environment environment)))))
+     (command-environment-provider-configure-service profile-name
+                                                     options
+                                                     (or environment
+                                                         (service-active-environment :session session))))))
 
 (defun execute-provider-use-command (arguments session &optional environment)
   (let ((profile-name (first arguments)))
     (unless (stringp profile-name)
       (error "PROVIDER/USE requires a string profile name"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Activate environment provider profile."
-                                    "environment/provider-use"
-                                    :payload (list :profile-name profile-name)
-                                    :context (list :environment environment)))))
+     (command-environment-provider-use-service profile-name
+                                               (or environment
+                                                   (service-active-environment :session session))))))
 
 (defun execute-provider-routing-command (arguments session &optional environment)
   (let ((mode (first arguments)))
     (when (> (length arguments) 1)
       (error "PROVIDER/ROUTING accepts at most one mode argument"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Update provider routing mode."
-                                    "environment/provider-routing"
-                                    :payload (list :mode mode)
-                                    :context (list :environment environment)))))
+     (command-environment-provider-routing-service mode
+                                                   (or environment
+                                                       (service-active-environment :session session))))))
 
 (defun execute-provider-route-command (&optional environment)
   (service-response-data
@@ -1333,10 +1305,12 @@
 
 (defun execute-platform-package-command (arguments session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "export platform package"
-                                  "platform/package"
-                                  :payload arguments)))
+   (command-desktop-task-platform-command-service
+    session
+    :package
+    (remove-plist-key arguments :enqueue)
+    :capability :platform-package
+    :async-p (getf arguments :enqueue))))
 
 (defun execute-platform-show-package-command (arguments session)
   (let ((path (first arguments)))
@@ -1358,14 +1332,16 @@
     (unless (or (stringp path) (pathnamep path))
       (error "PLATFORM/IMPORT-PACKAGE requires a string path"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "import platform package"
-                                    "platform/import-package"
-                                    :payload (list :path path
-                                                   :allow-downgrade (getf options :allow-downgrade)
-                                                   :allow-deprecated (getf options :allow-deprecated)
-                                                   :allow-manual-recovery (getf options :allow-manual-recovery)
-                                                   :allow-untrusted (getf options :allow-untrusted))))))
+     (command-desktop-task-platform-command-service
+     session
+      :import-package
+      (list :path path
+            :allow-downgrade (getf options :allow-downgrade)
+            :allow-deprecated (getf options :allow-deprecated)
+            :allow-manual-recovery (getf options :allow-manual-recovery)
+            :allow-untrusted (getf options :allow-untrusted))
+      :capability :platform-import-package
+      :async-p (getf options :enqueue)))))
 
 (defun execute-platform-list-packages-command (session)
   (service-response-data
@@ -1379,24 +1355,30 @@
      (query-platform-imported-package-service package-id :session session))))
 
 (defun execute-platform-activate-package-command (arguments session)
-  (let ((package-id (first arguments)))
+  (let ((package-id (first arguments))
+        (options (rest arguments)))
     (unless (stringp package-id)
       (error "PLATFORM/ACTIVATE-PACKAGE requires a string package id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "activate platform package"
-                                    "platform/activate-package"
-                                    :payload (list :package-id package-id)))))
+     (command-desktop-task-platform-command-service
+      session
+      :activate-package
+      (list :package-id package-id)
+      :capability :platform-activate-package
+      :async-p (getf options :enqueue)))))
 
 (defun execute-platform-deactivate-package-command (arguments session)
-  (let ((package-id (first arguments)))
+  (let ((package-id (first arguments))
+        (options (rest arguments)))
     (unless (stringp package-id)
       (error "PLATFORM/DEACTIVATE-PACKAGE requires a string package id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "deactivate platform package"
-                                    "platform/deactivate-package"
-                                    :payload (list :package-id package-id)))))
+     (command-desktop-task-platform-command-service
+      session
+      :deactivate-package
+      (list :package-id package-id)
+      :capability :platform-deactivate-package
+      :async-p (getf options :enqueue)))))
 
 (defun execute-platform-active-packages-command (session)
   (service-response-data
@@ -1412,14 +1394,16 @@
     (unless (or (stringp path) (pathnamep path))
       (error "PLATFORM/INSTALL-PACKAGE requires a string path"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "install platform package"
-                                    "platform/install-package"
-                                    :payload (list :path path
-                                                   :allow-downgrade (getf options :allow-downgrade)
-                                                   :allow-deprecated (getf options :allow-deprecated)
-                                                   :allow-manual-recovery (getf options :allow-manual-recovery)
-                                                   :allow-untrusted (getf options :allow-untrusted))))))
+     (command-desktop-task-platform-command-service
+     session
+      :install-package
+      (list :path path
+            :allow-downgrade (getf options :allow-downgrade)
+            :allow-deprecated (getf options :allow-deprecated)
+            :allow-manual-recovery (getf options :allow-manual-recovery)
+            :allow-untrusted (getf options :allow-untrusted))
+      :capability :platform-install-package
+      :async-p (getf options :enqueue)))))
 
 (defun execute-platform-simulate-package-command (arguments session)
   (let ((path (first arguments)))
@@ -1449,17 +1433,19 @@
     (unless (keywordp harness-id)
       (error "PLATFORM/RUN-HARNESS requires a keyword harness id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "run platform harness"
-                                    "platform/run-harness"
-                                    :payload (list :harness-id harness-id)))))
+     (command-desktop-task-platform-command-service
+     session
+      :run-harness
+      (list :harness-id harness-id)
+      :capability :platform-run-harness
+      :async-p (getf arguments :enqueue)))))
 
 (defun execute-execution-show-command (arguments session)
   (let ((execution-id (first arguments)))
     (unless (stringp execution-id)
       (error "EXECUTION/SHOW requires a string execution id"))
     (service-response-data
-     (query-kernel-inspect-service session execution-id))))
+     (query-execution-detail-service session execution-id))))
 
 (defun execute-execution-control-command (arguments session provider)
   (let ((execution-id (first arguments))
@@ -1471,12 +1457,12 @@
     (unless (keywordp action)
       (error "EXECUTION/CONTROL requires a keyword :action"))
     (service-response-data
-     (command-kernel-control-service session
-                                     execution-id
-                                     action
-                                     :reason reason
-                                     :note note
-                                     :provider provider))))
+     (command-execution-control-service session
+                                        execution-id
+                                        action
+                                        :reason reason
+                                        :note note
+                                        :provider provider))))
 
 (defun execute-compatibility-list-command (arguments session)
   (service-response-data
@@ -1511,28 +1497,40 @@
         (options (rest arguments)))
     (unless (stringp app-id)
       (error "COMPATIBILITY/LAUNCH requires a string app id"))
-    (let* ((response (command-kernel-invoke-service session
-                                                    (format nil "Launch Linux compatibility app ~A." app-id)
-                                                    app-id
-                                                    :payload (list :arguments (unwrap-task-form (getf options :arguments)))))
+    (let* ((definition (or (find-compatibility-app app-id
+                                                   :session session
+                                                   :environment (session-bound-environment session))
+                           (error "Unknown compatibility app ~S" app-id)))
+           (policy-id (compatibility-app-definition-policy-id definition))
+           (response (command-desktop-task-compatibility-launch-service
+                      session
+                      app-id
+                      (unwrap-task-form (getf options :arguments))
+                      :capability policy-id
+                      :metadata (list :source :shell-compatibility-launch
+                                      :enqueue-p (not (null (getf options :enqueue)))
+                                      :app-id app-id)
+                      :register-record-p t
+                      :async-p (getf options :enqueue)))
            (result (service-response-data response))
-           (execution-id (getf (service-response-metadata response) :execution-id))
+           (execution-id (or (getf result :execution-id)
+                             (getf (service-response-metadata response) :execution-id)))
            (execution (and execution-id
-                           (kernel-find-execution execution-id
+                           (find-execution-handle execution-id
                                                   (session-bound-environment session)))))
       (append result
               (list :execution-id execution-id
                     :execution (and execution
-                                    (kernel-execution-summary execution)))))))
+                                    (execution-handle-summary execution)))))))
 
 (defun execute-compatibility-relaunch-command (arguments session)
   (let ((execution-id (first arguments)))
     (unless (stringp execution-id)
       (error "COMPATIBILITY/RELAUNCH requires a string execution id"))
     (service-response-data
-     (command-kernel-control-service session
-                                     execution-id
-                                     :relaunch))))
+     (command-execution-control-service session
+                                        execution-id
+                                        :relaunch))))
 
 (defun execute-compatibility-windows-command (arguments session)
   (service-response-data
@@ -1545,10 +1543,7 @@
     (when (and title (not (stringp title)))
       (error "THREAD/NEW :TITLE must be a string"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Create conversation thread."
-                                    "conversation/create-thread"
-                                    :payload (list :title title)))))
+     (command-conversation-create-thread-service session :title title))))
 
 (defun execute-thread-list-command (session)
   (service-response-data
@@ -1559,10 +1554,7 @@
     (unless (stringp thread-id)
       (error "THREAD/USE requires a string thread id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Switch active conversation thread."
-                                    "conversation/use-thread"
-                                    :payload (list :thread-id thread-id)))))
+     (command-conversation-use-thread-service session thread-id))))
 
 (defun execute-thread-show-command (arguments session)
   (let ((thread-id (first arguments)))
@@ -1589,10 +1581,10 @@
 
 (defun resolve-shell-execution-handle (session execution-or-id)
   (when (execution-id-string-p execution-or-id)
-    (let* ((environment (ensure-kernel-bound-environment session))
-           (handle (kernel-find-execution execution-or-id environment)))
+    (let* ((environment (ensure-execution-bound-environment session))
+           (handle (find-execution-handle execution-or-id environment)))
       (unless handle
-        (error "Unknown kernel execution ~A" execution-or-id))
+        (error "Unknown execution ~A" execution-or-id))
       handle)))
 
 (defun resolve-shell-work-item-id (session work-item-or-execution-id command-name)
@@ -1612,10 +1604,10 @@
       (handle
        (getf handle :execution-id))
       ((stringp work-item-or-execution-id)
-       (let* ((environment (ensure-kernel-bound-environment session))
-              (matching-handles (kernel-find-executions-by-target :work-item-id
-                                                                 work-item-or-execution-id
-                                                                 environment))
+       (let* ((environment (ensure-execution-bound-environment session))
+              (matching-handles (find-execution-handles-by-target :work-item-id
+                                                                  work-item-or-execution-id
+                                                                  environment))
               (first-handle (first matching-handles)))
          (and first-handle
               (getf first-handle :execution-id))))
@@ -1686,7 +1678,7 @@
               command-name
               incident-or-execution-id)))))
 
-(defun shell-kernel-control-inspection (session response)
+(defun shell-execution-control-inspection (session response)
   (let* ((data (service-response-data response))
          (post-state (and (listp data) (getf data :post-state)))
          (target (and (listp post-state) (getf post-state :target)))
@@ -1729,13 +1721,8 @@
 (defun execute-environment-status-command (session &optional environment)
   (service-response-data
    (query-environment-status-service
-    (or environment
-        (and (boundp '*current-environment*)
-             *current-environment*
-             (eq (environment-compatibility-session *current-environment*) session)
-             *current-environment*)
-        (bind-session-to-environment session (ensure-environment))
-        (ensure-environment)))))
+    (service-active-environment :session session
+                                :environment environment))))
 
 (defun execute-review-mutation-command (arguments session)
   (let ((turn-id (first arguments)))
@@ -1748,10 +1735,7 @@
   (when (oddp (length arguments))
     (error "INTEGRATION/RGP-BIND arguments must be a property list"))
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Bind governed runtime integration posture."
-                                  "rgp/bind"
-                                  :payload arguments)))
+   (apply #'command-rgp-bind-service session arguments)))
 
 (defun execute-integration-rgp-show-command (session)
   (service-response-data
@@ -1766,10 +1750,7 @@
     (unless (stringp path)
       (error "INTEGRATION/RGP-EXPORT requires a string path"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Export governed runtime snapshot."
-                                    "rgp/export"
-                                    :payload (list :path path)))))
+     (command-rgp-export-service session path))))
 
 (defun execute-integration-rgp-artifacts-command (session)
   (service-response-data
@@ -1790,13 +1771,10 @@
     (unless (keywordp policy)
       (error "INTEGRATION/RGP-APPROVE requires a keyword policy"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Approve governed runtime checkpoint."
-                                    "rgp/approve"
-                                    :payload (list :work-item-id work-item-id
-                                                   :policy policy
-                                                   :reason reason)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-rgp-approve-service session
+                                  work-item-id
+                                  policy
+                                  :reason reason))))
 
 (defun execute-integration-rgp-resume-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -1806,12 +1784,9 @@
     (unless (stringp work-item-id)
       (error "INTEGRATION/RGP-RESUME requires a string work-item id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Resume governed runtime work."
-                                    "rgp/resume"
-                                    :payload (list :work-item-id work-item-id
-                                                   :note note)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-rgp-resume-service session
+                                 work-item-id
+                                 :note note))))
 
 (defun execute-runtime-current-package-command (session)
   (getf (service-response-data (query-runtime-summary-service session)) :package-details))
@@ -1912,14 +1887,18 @@
      (apply #'query-runtime-source-image-divergence-service session symbol-name options))))
 
 (defun execute-runtime-set-package-command (arguments session)
-  (let ((package-name (first arguments)))
+  (let ((package-name (first arguments))
+        (options (rest arguments)))
     (unless (stringp package-name)
       (error "RUNTIME/SET-PACKAGE requires a string package name"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    (format nil "Switch the active runtime package to ~A." package-name)
-                                    :runtime/set-package
-                                    :payload (list :package package-name)))))
+     (command-desktop-task-runtime-set-package-service
+      session
+      package-name
+      :metadata (list :source :shell-runtime-set-package
+                      :enqueue-p (not (null (getf options :enqueue))))
+      :register-record-p t
+      :async-p (getf options :enqueue)))))
 
 (defun execute-runtime-eval-command (arguments session)
   (let ((form-or-source (first arguments))
@@ -1928,12 +1907,23 @@
       (error "RUNTIME/EVAL requires a form or source string"))
     (when (oddp (length options))
       (error "RUNTIME/EVAL keyword options must be a property list"))
-    (service-response-data
-     (command-kernel-invoke-service session
-                                    (princ-to-string form-or-source)
-                                    :runtime/eval
-                                    :payload (append (list :form form-or-source)
-                                                     options)))))
+    (let ((enqueue-p (getf options :enqueue)))
+      (if enqueue-p
+        (service-response-data
+         (command-desktop-task-runtime-eval-service
+          session
+          form-or-source
+            :package (getf options :package)
+            :metadata (list :source :shell-runtime-eval
+                            :enqueue-p t)
+          :register-record-p t
+          :async-p t))
+          (service-response-data
+           (command-runtime-eval-service session
+                                         form-or-source
+                                         :package (getf options :package)
+                                         :mutating (getf options :mutating)
+                                         :recovery-launch (getf options :recovery-launch)))))))
 
 (defun execute-runtime-history-command (arguments session)
   (let ((options arguments))
@@ -1943,14 +1933,23 @@
      (apply #'query-runtime-history-service session options))))
 
 (defun execute-runtime-reload-file-command (arguments session)
-  (let ((path (first arguments)))
+  (let ((path (first arguments))
+        (options (rest arguments)))
     (unless (stringp path)
       (error "RUNTIME/RELOAD-FILE requires a string path"))
-    (service-response-data
-     (command-kernel-invoke-service session
-                                    (format nil "Reload source file ~A into the runtime." path)
-                                    :runtime/reload-file
-                                    :payload (list :path path)))))
+    (when (oddp (length options))
+      (error "RUNTIME/RELOAD-FILE keyword options must be a property list"))
+    (if (getf options :enqueue)
+        (service-response-data
+         (command-desktop-task-runtime-reload-file-service
+          session
+          path
+          :metadata (list :source :shell-runtime-reload-file
+                          :enqueue-p t)
+          :register-record-p t
+          :async-p t))
+        (service-response-data
+         (command-runtime-reload-file-service session path)))))
 
 (defun execute-environment-show-command (&optional environment)
   (service-response-data
@@ -1966,20 +1965,14 @@
     (unless (stringp path)
       (error "ENVIRONMENT/SAVE requires a string path"))
     (service-response-data
-     (command-kernel-invoke-service (environment-session (ensure-environment environment))
-                                    "Save environment state."
-                                    "environment/save"
-                                    :payload (list :path path)
-                                    :environment environment))))
+     (command-environment-save-service path environment))))
 
 (defun execute-environment-load-command (arguments session)
   (let ((path (first arguments)))
     (unless (stringp path)
       (error "ENVIRONMENT/LOAD requires a string path"))
-    (let* ((response (command-kernel-invoke-service session
-                                                    "Load environment state."
-                                                    "environment/load"
-                                                    :payload (list :path path)))
+    (let* ((*current-session* session)
+           (response (command-environment-load-service path))
            (payload (service-response-data response))
            (session (getf payload :session))
            (workspace (and session
@@ -2002,16 +1995,16 @@
          (turn (resume-turn-command-target session turn-id))
          (environment (session-bound-environment session))
          (handle (and environment
-                      (kernel-find-execution-by-target :turn-id
+                      (find-execution-handle-by-target :turn-id
                                                        (turn-id turn)
                                                        environment))))
     (if handle
         (let* ((payload (service-response-data
-                         (command-kernel-control-service session
-                                                         (getf handle :execution-id)
-                                                         :resume
-                                                         :provider provider
-                                                         :environment environment)))
+                         (command-execution-control-service session
+                                                            (getf handle :execution-id)
+                                                            :resume
+                                                            :provider provider
+                                                            :environment environment)))
                (resume-envelope (getf payload :result))
                (resume-result (and (listp resume-envelope)
                                    (getf resume-envelope :result))))
@@ -2033,11 +2026,12 @@
   (let* ((raw-form (first arguments))
          (form (unwrap-task-form raw-form))
          (priority (or (getf (rest arguments) :priority) 0))
-         (response (command-kernel-invoke-service session
-                                                 "Enqueue task."
-                                                 "task/enqueue"
-                                                 :payload (list :form form
-                                                                :priority priority))))
+         (response (command-task-enqueue-service session
+                                                 form
+                                                 (make-command :kind :task
+                                                               :arguments arguments
+                                                               :form raw-form)
+                                                 priority)))
     (service-response-data response)))
 
 (defun execute-describe-task-command (arguments session)
@@ -2059,34 +2053,22 @@
     (unless (stringp task-id)
       (error "CANCEL-TASK requires a string task id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Cancel task."
-                                    "task/cancel"
-                                    :payload (list :task-id task-id)))))
+     (command-task-cancel-service session task-id))))
 
 (defun execute-run-next-task-command (provider session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Run next task."
-                                  "task/run-next"
-                                  :provider provider)))
+   (command-task-run-next-service session provider)))
 
 (defun execute-start-worker-command (provider session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Start worker."
-                                  "worker/start"
-                                  :provider provider)))
+   (command-worker-start-service session provider)))
 
 (defun execute-stop-worker-command (arguments session)
   (let ((worker-id (first arguments)))
     (unless (stringp worker-id)
       (error "STOP-WORKER requires a string worker id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Stop worker."
-                                    "worker/stop"
-                                    :payload (list :worker-id worker-id)))))
+     (command-worker-stop-service session worker-id))))
 
 (defun execute-describe-worker-command (arguments session)
   (let ((worker-id (first arguments)))
@@ -2132,21 +2114,15 @@
 
 (defun execute-list-plans-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List durable plans."
-                                  "planning/plans")))
+   (query-plan-list-service session)))
 
 (defun execute-list-orchestrations-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List compact orchestration posture."
-                                  "planning/orchestrations")))
+   (command-orchestration-list-query-service session)))
 
 (defun execute-list-orchestration-inbox-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "List actionable orchestration inbox entries."
-                                  "planning/orchestration-inbox")))
+   (command-orchestration-inbox-query-service session)))
 
 (defun execute-describe-orchestration-focus-command (arguments session)
   (let ((plan-id (getf arguments :plan-id))
@@ -2165,14 +2141,11 @@
     (when (and work-item-id (not (stringp work-item-id)))
       (error "DESCRIBE-ORCHESTRATION-FOCUS requires a string :work-item-id when provided"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Resolve orchestration from plan, workflow, or work-item context."
-                                    "planning/orchestration-focus"
-                                    :payload (append (and plan-id (list :plan-id plan-id))
-                                                     (and workflow-record-id
-                                                          (list :workflow-record-id workflow-record-id))
-                                                     (and work-item-id
-                                                          (list :work-item-id work-item-id)))))))
+     (command-orchestration-focus-query-service
+      session
+      :plan-id plan-id
+      :workflow-record-id workflow-record-id
+      :work-item-id work-item-id))))
 
 (defun execute-describe-plan-command (arguments session)
   (let ((plan-id (and (first arguments)
@@ -2182,17 +2155,11 @@
     (when (and plan-id (not (stringp plan-id)))
       (error "DESCRIBE-PLAN requires a string plan id when provided"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Describe a durable plan."
-                                    "planning/plan"
-                                    :payload (and plan-id
-                                                  (list :plan-id plan-id))))))
+     (query-plan-service session plan-id))))
 
 (defun execute-describe-active-plan-command (session)
   (service-response-data
-   (command-kernel-invoke-service session
-                                  "Describe the active durable plan."
-                                  "planning/active-plan")))
+   (command-active-plan-query-service session)))
 
 (defun execute-describe-plan-workflow-command (arguments session)
   (let ((plan-id (and (first arguments)
@@ -2202,11 +2169,7 @@
     (when (and plan-id (not (stringp plan-id)))
       (error "DESCRIBE-PLAN-WORKFLOW requires a string plan id when provided"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Describe the workflow linked to a plan."
-                                    "planning/linked-workflow"
-                                    :payload (and plan-id
-                                                  (list :plan-id plan-id))))))
+     (command-plan-linked-workflow-query-service session plan-id))))
 
 (defun execute-describe-orchestration-snapshot-command (arguments session)
   (let ((plan-id (and (first arguments)
@@ -2216,11 +2179,7 @@
     (when (and plan-id (not (stringp plan-id)))
       (error "DESCRIBE-ORCHESTRATION-SNAPSHOT requires a string plan id when provided"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Describe joined plan/workflow orchestration state."
-                                    "planning/orchestration-snapshot"
-                                    :payload (and plan-id
-                                                  (list :plan-id plan-id))))))
+     (command-orchestration-snapshot-query-service session plan-id))))
 
 (defun execute-describe-plan-verification-command (arguments session)
   (let ((plan-id (and (first arguments)
@@ -2230,11 +2189,7 @@
     (when (and plan-id (not (stringp plan-id)))
       (error "DESCRIBE-PLAN-VERIFICATION requires a string plan id when provided"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Describe plan verification and reconciliation state."
-                                    "planning/verification"
-                                    :payload (and plan-id
-                                                  (list :plan-id plan-id))))))
+     (command-plan-verification-query-service session plan-id))))
 (defun execute-request-work-item-approval-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
                                                   (first arguments)
@@ -2246,12 +2201,8 @@
     (unless (keywordp policy)
       (error "REQUEST-WORK-ITEM-APPROVAL requires a keyword policy"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Request governed work approval."
-                                    "workflow/request-approval"
-                                    :payload (list :work-item-id work-item-id
-                                                   :policy policy
-                                                   :reason reason)))))
+     (command-request-work-item-approval-service session work-item-id policy
+                                                 :reason reason))))
 
 (defun execute-quarantine-work-item-command (arguments session)
   (let* ((work-item-or-execution-id (first arguments))
@@ -2265,8 +2216,8 @@
     (unless (stringp reason)
       (error "QUARANTINE-WORK-ITEM requires a string reason"))
     (if execution-id
-        (shell-kernel-control-inspection session
-                                         (command-kernel-control-service session execution-id :quarantine :reason reason))
+        (shell-execution-control-inspection session
+                                         (command-execution-control-service session execution-id :quarantine :reason reason))
         (service-response-data
          (command-work-item-quarantine-service session work-item-id reason)))))
 
@@ -2280,8 +2231,8 @@
     (unless (stringp work-item-id)
       (error "RESUME-WORK-ITEM requires a string work-item id"))
     (if execution-id
-        (shell-kernel-control-inspection session
-                                         (command-kernel-control-service session execution-id :resume :note note))
+        (shell-execution-control-inspection session
+                                         (command-execution-control-service session execution-id :resume :note note))
         (service-response-data
          (command-work-item-resume-service session work-item-id :note note)))))
 
@@ -2299,14 +2250,10 @@
     (unless (keywordp next-step)
       (error "STEER-WORK-ITEM-PLAN requires a keyword :next-step"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Steer governed work plan."
-                                    "workflow/steer-plan"
-                                    :payload (list :work-item-id work-item-id
-                                                   :phase phase
-                                                   :next-step next-step
-                                                   :note note)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-work-item-steer-service session work-item-id
+                                      :phase phase
+                                      :next-step next-step
+                                      :note note))))
 
 (defun execute-why-waiting-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -2336,13 +2283,10 @@
     (unless (stringp validator-task-id)
       (error "REPLAY-VALIDATOR-TASK requires a string validator task id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Record replay validator task result."
-                                    "workflow/replay-validator-task"
-                                    :payload (list :work-item-id work-item-id
-                                                   :validator-task-id validator-task-id
-                                                   :status status)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-replay-validator-task-service session
+                                            work-item-id
+                                            validator-task-id
+                                            :status status))))
 
 (defun execute-replay-validator-set-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -2356,14 +2300,11 @@
     (unless (stringp replay-id)
       (error "REPLAY-VALIDATOR-SET requires a string replay id"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Record replay validator set results."
-                                    "workflow/replay-validator-set"
-                                    :payload (list :work-item-id work-item-id
-                                                   :replay-id replay-id
-                                                   :status status
-                                                   :statuses statuses)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-replay-validator-set-service session
+                                           work-item-id
+                                           replay-id
+                                           :status status
+                                           :statuses statuses))))
 
 (defun execute-reconcile-image-only-source-command (arguments session)
   (let ((work-item-id (resolve-shell-work-item-id session
@@ -2375,12 +2316,9 @@
     (unless (stringp summary)
       (error "RECONCILE-IMAGE-ONLY-SOURCE requires a string summary"))
     (service-response-data
-     (command-kernel-invoke-service session
-                                    "Reconcile image-only governed work to source."
-                                    "workflow/reconcile-image-only-source"
-                                    :payload (list :work-item-id work-item-id
-                                                   :summary summary)
-                                    :context (list :work-item-id work-item-id)))))
+     (command-reconcile-image-only-source-service session
+                                                  work-item-id
+                                                  summary))))
 
 
 (defun execute-command (command provider &optional session)
@@ -2750,6 +2688,26 @@
       (:desktop-task-supervision-incidents
        (values (execute-desktop-task-supervision-incidents-command (command-arguments command) active-session)
                :desktop-task-supervision-incidents
+               active-session
+               provider))
+      (:desktop-task-supervision-escalation-inbox
+       (values (execute-desktop-task-supervision-escalation-inbox-command (command-arguments command) active-session)
+               :desktop-task-supervision-escalation-inbox
+               active-session
+               provider))
+      (:desktop-task-ack-supervision-escalation
+       (values (execute-desktop-task-ack-supervision-escalation-command (command-arguments command) active-session)
+               :desktop-task-ack-supervision-escalation
+               active-session
+               provider))
+      (:desktop-task-apply-supervision-escalation
+       (values (execute-desktop-task-apply-supervision-escalation-command (command-arguments command) active-session)
+               :desktop-task-apply-supervision-escalation
+               active-session
+               provider))
+      (:desktop-task-process-supervision-escalation
+       (values (execute-desktop-task-process-supervision-escalation-command (command-arguments command) active-session)
+               :desktop-task-process-supervision-escalation
                active-session
                provider))
       (:desktop-task-fail-mailbox-entry
@@ -3255,6 +3213,22 @@
      (when (getf result :post-state)
        (format t "execution-post-state> ~S~%" (getf result :post-state)))
      (finish-output))
+    (:runtime-eval
+     (if (getf result :queued-p)
+         (format t "runtime-task> queued=~A job=~A record=~S~%"
+                 t
+                 (or (getf result :actor-execution-job-id) :none)
+                 (or (getf result :task-record) '()))
+         (format t "runtime-eval> ~S~%" result))
+     (finish-output))
+    (:runtime-reload-file
+     (if (getf result :queued-p)
+         (format t "runtime-task> queued=~A job=~A record=~S~%"
+                 t
+                 (or (getf result :actor-execution-job-id) :none)
+                 (or (getf result :task-record) '()))
+         (format t "runtime-reload-file> ~S~%" result))
+     (finish-output))
     (:compatibility-list
      (format t "compatibility> count=~D filters=~S~%"
              (or (getf result :count) 0)
@@ -3755,25 +3729,27 @@
              (or (getf result :approval-id) :none)
              (or (getf result :pending-action-id) :none)
              (or (getf result :actor-message-id) :none))
-     (format t "  chat-mailbox=~D approval-inbox=~D governance-inbox=~D governance-decisions=~D runtime-inbox=~D runtime-outbox=~D runtime-definitions=~D editor-pending=~D editor-authorizations=~D~%"
+     (format t "  chat-mailbox=~D approval-inbox=~D governance-inbox=~D governance-decisions=~D runtime-inbox=~D runtime-outbox=~D supervision-escalations=~D runtime-definitions=~D editor-pending=~D editor-authorizations=~D~%"
              (or (getf (getf result :context-chat-mailbox) :message-count) 0)
              (or (getf (getf result :context-chat-approval-inbox) :request-count) 0)
              (or (getf (getf result :governance-inbox) :request-count) 0)
              (or (getf (getf result :governance-decisions) :decision-count) 0)
              (or (getf (getf result :runtime-inbox) :message-count) 0)
              (or (getf (getf result :runtime-outbox) :reply-count) 0)
+             (or (getf (getf result :supervision-escalation-inbox) :message-count) 0)
              (or (getf (getf result :runtime-state) :definition-count) 0)
              (or (getf (getf result :editor-pending-mutations) :mutation-count) 0)
              (or (getf (getf result :editor-authorizations) :authorization-count) 0))
      (finish-output))
     (:desktop-task-actor-system-panel
-     (format t "desktop-task-actor-system-panel> root=~A session=~A actors=~D hierarchy-edges=~D workflow-edges=~D supervision-incidents=~D~%"
+     (format t "desktop-task-actor-system-panel> root=~A session=~A actors=~D hierarchy-edges=~D workflow-edges=~D supervision-incidents=~D supervision-escalations=~D~%"
              (or (getf result :root-actor-id) :none)
              (or (getf result :session-id) :none)
              (or (getf result :actor-count) 0)
              (or (getf result :hierarchy-edge-count) 0)
              (or (getf result :workflow-edge-count) 0)
-             (or (getf (getf result :supervision-incidents) :incident-count) 0))
+             (or (getf (getf result :supervision-incidents) :incident-count) 0)
+             (or (getf (getf result :supervision-escalation-inbox) :message-count) 0))
      (dolist (actor (or (getf result :actors) '()))
        (format t "actor-system-panel-actor> id=~A role=~A parent=~A allocation=~A inbox-depth=~A outbox-depth=~A open-incidents=~A~%"
                (or (getf actor :id) :none)
@@ -3799,6 +3775,42 @@
                (or (getf incident :recommended-supervision-action) :none)
                (or (getf incident :workflow-state-class) :none)
                (not (null (getf incident :open-p)))))
+     (finish-output))
+    (:desktop-task-supervision-escalation-inbox
+     (format t "desktop-task-supervision-escalation-inbox> session=~A parent=~A message-count=~D~%"
+             (or (getf result :session-id) :none)
+             (or (getf result :parent-actor-id) :none)
+             (or (getf result :message-count) 0))
+     (dolist (entry (or (getf result :messages) '()))
+       (format t "supervision-escalation> entry=~A actor=~A parent=~A failed-entry=~A request=~A target=~A operation=~A delivery=~A~%"
+               (or (getf entry :mailbox-entry-id) :none)
+               (or (getf entry :actor-id) :none)
+               (or (getf entry :escalation-target) :none)
+               (or (getf entry :failed-mailbox-entry-id) :none)
+               (or (getf entry :request-id) :none)
+               (or (getf entry :target) :none)
+               (or (getf entry :operation) :none)
+               (or (getf entry :delivery-status) :unknown)))
+     (finish-output))
+    (:desktop-task-ack-supervision-escalation
+     (format t "desktop-task-ack-supervision-escalation> entry=~A session=~A delivery=~A~%"
+             (or (getf result :mailbox-entry-id) :none)
+             (or (getf result :session-id) :none)
+             (or (getf result :delivery-status) :unknown))
+     (finish-output))
+    (:desktop-task-apply-supervision-escalation
+     (format t "desktop-task-apply-supervision-escalation> failed-entry=~A action=~A incident=~A escalation-entry=~A~%"
+             (or (getf result :failed-mailbox-entry-id) :none)
+             (or (getf result :action) :none)
+             (or (getf (getf result :incident) :incident-id) :none)
+             (or (getf (getf result :mailbox-entry) :mailbox-entry-id) :none))
+     (finish-output))
+    (:desktop-task-process-supervision-escalation
+     (format t "desktop-task-process-supervision-escalation> selected-entry=~A parent=~A action=~A incident=~A~%"
+             (or (getf result :selected-mailbox-entry-id) :none)
+             (or (getf result :selected-parent-actor-id) :none)
+             (or (getf result :action) :none)
+             (or (getf (getf result :incident) :incident-id) :none))
      (finish-output))
     (:desktop-task-fail-mailbox-entry
      (format t "desktop-task-fail-mailbox-entry> mailbox=~A mailbox-entry=~A incident=~A action=~A delivery=~A~%"
@@ -5085,7 +5097,12 @@
     (:tool
      (format t "tool> ~S~%" result))
     (:patch
-     (format t "patch> ~S~%" result))
+     (if (getf result :queued-p)
+         (format t "patch-task> queued=~A job=~A record=~S~%"
+                 t
+                 (or (getf result :actor-execution-job-id) :none)
+                 (or (getf result :task-record) '()))
+         (format t "patch> ~S~%" result)))
     (:session-save
      (format t "session> ~S~%" result))
     (:session-load

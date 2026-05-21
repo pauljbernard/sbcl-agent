@@ -1,5 +1,14 @@
 (in-package #:sbcl-agent)
 
+(defparameter *environment-event-log-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-event-log"))
+(defparameter *environment-session-projection-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-session-projection"))
+(defparameter *environment-policy-state-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-policy-state"))
+(defparameter *environment-agent-state-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-agent-state"))
+
 (defun environment-event-metadata (environment event)
   (append (event-metadata event)
           (list :environment-id (environment-id environment)
@@ -39,12 +48,89 @@
             (project-session-event-to-environment environment event))
           (agent-session-events session)))
 
+(defun call-with-environment-event-log (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*environment-event-log-lock*)
+    (funcall thunk)))
+
+(defun call-with-environment-session-projection (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*environment-session-projection-lock*)
+    (funcall thunk)))
+
+(defun call-with-environment-policy-state (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*environment-policy-state-lock*)
+    (funcall thunk)))
+
+(defun call-with-environment-agent-state (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*environment-agent-state-lock*)
+    (funcall thunk)))
+
+(defun environment-event-log-snapshot (environment)
+  (call-with-environment-event-log
+   environment
+   (lambda ()
+     (copy-list (or (environment-event-log environment) '())))))
+
+(defun replace-environment-event-log (environment events)
+  (call-with-environment-event-log
+   environment
+   (lambda ()
+     (setf (environment-event-log environment) events))))
+
+(defun environment-policy-state-snapshot (environment)
+  (call-with-environment-policy-state
+   environment
+   (lambda ()
+     (copy-tree (or (environment-policy-state environment) '())))))
+
+(defun replace-environment-policy-state (environment policy-state)
+  (call-with-environment-policy-state
+   environment
+   (lambda ()
+     (setf (environment-policy-state environment)
+           (copy-tree policy-state)))))
+
+(defun environment-agent-state-snapshot (environment)
+  (call-with-environment-agent-state
+   environment
+   (lambda ()
+     (let ((agent-state (environment-agent-state environment)))
+       (when agent-state
+         (make-environment-agent-state
+          :agents (copy-list (or (environment-agent-state-agents agent-state) '()))
+          :subscriptions (copy-list (or (environment-agent-state-subscriptions agent-state) '()))
+          :memory (copy-list (or (environment-agent-state-memory agent-state) '()))
+          :plan (environment-agent-state-plan agent-state)
+          :plans (copy-list (or (environment-agent-state-plans agent-state) '()))
+          :active-plan-id (environment-agent-state-active-plan-id agent-state)
+          :plan-summaries (copy-tree (or (environment-agent-state-plan-summaries agent-state) '()))
+          :actor-mailboxes (copy-tree (or (environment-agent-state-actor-mailboxes agent-state) '()))
+          :actor-runtime (copy-tree (or (environment-agent-state-actor-runtime agent-state) '()))
+          :pending-actions (copy-tree (or (environment-agent-state-pending-actions agent-state) '()))
+          :desktop-tasks (copy-list (or (environment-agent-state-desktop-tasks agent-state) '()))
+          :incidents (copy-list (or (environment-agent-state-incidents agent-state) '()))
+          :tasks (copy-list (or (environment-agent-state-tasks agent-state) '()))
+          :workers (copy-list (or (environment-agent-state-workers agent-state) '()))
+          :summaries (copy-tree (or (environment-agent-state-summaries agent-state) '()))))))))
+
+(defun replace-environment-agent-state (environment agent-state)
+  (call-with-environment-agent-state
+   environment
+   (lambda ()
+     (setf (environment-agent-state environment) agent-state))))
+
 (defun append-environment-session-event (environment session event)
   (declare (ignore session))
   (let ((projected-event (project-session-event-to-environment environment event)))
-    (setf (environment-event-log environment)
-          (append (environment-event-log environment)
-                  (list projected-event)))
+    (call-with-environment-event-log
+     environment
+     (lambda ()
+       (setf (environment-event-log environment)
+             (append (environment-event-log environment)
+                     (list projected-event)))))
     projected-event))
 
 (defun environment-incident-summary-from-session (session)
@@ -70,10 +156,11 @@
 
 (defun sync-environment-root-bindings-from-session (environment session)
   (setf (environment-compatibility-session environment) session
-        (environment-storage-root environment) (agent-session-cwd session)
-        (environment-policy-state environment)
-        (list :approved-policies (session-approved-policies session)
-              :capability-grants (session-capability-grants-summary session)))
+        (environment-storage-root environment) (agent-session-cwd session))
+  (replace-environment-policy-state
+   environment
+   (list :approved-policies (session-approved-policies session)
+         :capability-grants (session-capability-grants-summary session)))
   (unless (environment-metadata-value environment :agent-constitution)
     (set-environment-agent-constitution environment (default-agent-constitution)))
   (update-environment-root-summaries-from-session environment session))
@@ -92,220 +179,236 @@
          (plan-summaries (session-plan-summaries session)))
     (setf (environment-workflow-state environment)
           (make-environment-workflow-state-from-session session))
-    (setf (environment-agent-state environment)
-          (make-environment-agent-state
-           :agents (environment-agent-registry environment)
-           :subscriptions '()
-           :memory (environment-memory environment)
-           :plan (session-active-plan session)
-           :plans plans
-           :active-plan-id active-plan-id
-           :plan-summaries plan-summaries
-           :actor-mailboxes (agent-session-actor-mailboxes session)
-           :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
-                               (serializable-actor-runtime-state session))
-           :pending-actions (agent-session-pending-actions session)
-           :desktop-tasks (mapcar #'serializable-desktop-task-record
-                                  (agent-session-desktop-tasks session))
-           :incidents (agent-session-incidents session)
-           :tasks (agent-session-tasks session)
-           :workers (serializable-worker-states session)
-           :summaries (list :agent-count (length (environment-agent-registry environment))
-                            :subscription-count 0
-                            :has-plan-p (not (null active-plan-id))
-                            :active-plan-id active-plan-id
-                            :plan-count (length plans)
-                            :plan-summaries plan-summaries
-                            :pending-action-count (length (agent-session-pending-actions session))
-                            :desktop-task-count (length (agent-session-desktop-tasks session))
-                            :incident-count (length (agent-session-incidents session))
-                            :open-incident-count (length (remove-if-not (lambda (incident)
-                                                                          (eq (incident-status incident) :open))
-                                                                        (agent-session-incidents session)))
-                            :incident-summary (environment-incident-summary-from-session session)
-                            :task-count (length (agent-session-tasks session))
-                            :worker-count (length (agent-session-workers session))
-                            :active-worker-count (active-worker-count session)
-                            :actor-runtime-history-count
-                            (length (or (and (fboundp 'serializable-actor-runtime-state)
-                                             (getf (serializable-actor-runtime-state session)
-                                                   :recent-executions))
-                                        '()))
-                            :actor-runtime-submitted-job-count
-                            (or (and (fboundp 'serializable-actor-runtime-state)
-                                     (getf (serializable-actor-runtime-state session)
-                                           :submitted-job-count))
-                                0)
-                            :actor-runtime-completed-job-count
-                            (or (and (fboundp 'serializable-actor-runtime-state)
-                                     (getf (serializable-actor-runtime-state session)
-                                           :completed-job-count))
-                                0)
-                            :actor-runtime-failed-job-count
-                            (or (and (fboundp 'serializable-actor-runtime-state)
-                                     (getf (serializable-actor-runtime-state session)
-                                           :failed-job-count))
-                                0)
-                            :memory-entry-count (length (environment-memory environment))))))
+    (replace-environment-agent-state
+     environment
+     (make-environment-agent-state
+      :agents (environment-agent-registry environment)
+      :subscriptions '()
+      :memory (environment-memory environment)
+      :plan (session-active-plan session)
+      :plans plans
+      :active-plan-id active-plan-id
+      :plan-summaries plan-summaries
+      :actor-mailboxes (agent-session-actor-mailboxes session)
+      :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
+                          (serializable-actor-runtime-state session))
+      :pending-actions (agent-session-pending-actions session)
+      :desktop-tasks (mapcar #'serializable-desktop-task-record
+                             (agent-session-desktop-tasks session))
+      :incidents (agent-session-incidents session)
+      :tasks (agent-session-tasks session)
+      :workers (serializable-worker-states session)
+      :summaries (list :agent-count (length (environment-agent-registry environment))
+                       :subscription-count 0
+                       :has-plan-p (not (null active-plan-id))
+                       :active-plan-id active-plan-id
+                       :plan-count (length plans)
+                       :plan-summaries plan-summaries
+                       :pending-action-count (length (agent-session-pending-actions session))
+                       :desktop-task-count (length (agent-session-desktop-tasks session))
+                       :incident-count (length (agent-session-incidents session))
+                       :open-incident-count (length (remove-if-not (lambda (incident)
+                                                                     (eq (incident-status incident) :open))
+                                                                   (agent-session-incidents session)))
+                       :incident-summary (environment-incident-summary-from-session session)
+                       :task-count (length (agent-session-tasks session))
+                       :worker-count (length (agent-session-workers session))
+                       :active-worker-count (active-worker-count session)
+                       :actor-runtime-history-count
+                       (length (or (and (fboundp 'serializable-actor-runtime-state)
+                                        (getf (serializable-actor-runtime-state session)
+                                              :recent-executions))
+                                   '()))
+                       :actor-runtime-submitted-job-count
+                       (or (and (fboundp 'serializable-actor-runtime-state)
+                                (getf (serializable-actor-runtime-state session)
+                                      :submitted-job-count))
+                           0)
+                       :actor-runtime-completed-job-count
+                       (or (and (fboundp 'serializable-actor-runtime-state)
+                                (getf (serializable-actor-runtime-state session)
+                                      :completed-job-count))
+                           0)
+                       :actor-runtime-failed-job-count
+                       (or (and (fboundp 'serializable-actor-runtime-state)
+                                (getf (serializable-actor-runtime-state session)
+                                      :failed-job-count))
+                           0)
+                       :memory-entry-count (length (environment-memory environment))))))
   environment)
 
 (defun sync-environment-from-session (environment session)
-  (ensure-default-thread session)
-  (sync-environment-root-bindings-from-session environment session)
-  (setf (environment-thread-set environment)
-        (mapcar #'thread-record-summary (agent-session-threads session))
-        (environment-active-thread-id environment)
-        (agent-session-current-thread-id session)
-        (environment-work-item-graph environment)
-        (mapcar #'work-item-summary (agent-session-work-items session))
-        (environment-event-log environment)
-        (environment-event-log-from-session environment session))
-  (sync-environment-domains-from-session environment session)
-  (refresh-environment-artifact-index environment)
-  environment)
+  (call-with-environment-session-projection
+   environment
+   (lambda ()
+     (ensure-default-thread session)
+     (sync-environment-root-bindings-from-session environment session)
+     (setf (environment-thread-set environment)
+           (mapcar #'thread-record-summary (agent-session-threads session))
+           (environment-active-thread-id environment)
+           (agent-session-current-thread-id session)
+           (environment-work-item-graph environment)
+           (mapcar #'work-item-summary (agent-session-work-items session)))
+     (replace-environment-event-log environment
+                                    (environment-event-log-from-session environment session))
+     (sync-environment-domains-from-session environment session)
+     (refresh-environment-artifact-index environment)
+     environment)))
 
 (defun ensure-environment-agent-state (environment session)
-  (or (environment-agent-state environment)
-      (let* ((plans (session-plan-set session))
-             (active-plan-id (session-active-plan-id session))
-             (plan-summaries (session-plan-summaries session))
-             (agent-state
-              (make-environment-agent-state
-               :agents (environment-agent-registry environment)
-               :subscriptions '()
-               :memory (environment-memory environment)
-               :plan (session-active-plan session)
-               :plans plans
-               :active-plan-id active-plan-id
-               :plan-summaries plan-summaries
-               :actor-mailboxes (agent-session-actor-mailboxes session)
-               :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
-                                   (serializable-actor-runtime-state session))
-               :pending-actions (agent-session-pending-actions session)
-               :desktop-tasks (agent-session-desktop-tasks session)
-               :incidents (agent-session-incidents session)
-               :tasks (agent-session-tasks session)
-               :workers (serializable-worker-states session)
-               :summaries (list :agent-count (length (environment-agent-registry environment))
-                                :subscription-count 0
-                                :has-plan-p (not (null active-plan-id))
-                                :active-plan-id active-plan-id
-                                :plan-count (length plans)
-                                :plan-summaries plan-summaries
-                                :pending-action-count (length (agent-session-pending-actions session))
-                                :desktop-task-count (length (agent-session-desktop-tasks session))
-                                :incident-count (length (agent-session-incidents session))
-                                :open-incident-count (length (remove-if-not (lambda (incident)
-                                                                              (eq (incident-status incident) :open))
-                                                                            (agent-session-incidents session)))
-                                :incident-summary (environment-incident-summary-from-session session)
-                                :task-count (length (agent-session-tasks session))
-                                :worker-count (length (agent-session-workers session))
-                                :active-worker-count (active-worker-count session)
-                                :actor-runtime-history-count
-                                (length (or (and (fboundp 'serializable-actor-runtime-state)
-                                                 (getf (serializable-actor-runtime-state session)
-                                                       :recent-executions))
-                                            '()))
-                                :actor-runtime-submitted-job-count
-                                (or (and (fboundp 'serializable-actor-runtime-state)
-                                         (getf (serializable-actor-runtime-state session)
-                                               :submitted-job-count))
-                                    0)
-                                :actor-runtime-completed-job-count
-                                (or (and (fboundp 'serializable-actor-runtime-state)
-                                         (getf (serializable-actor-runtime-state session)
-                                               :completed-job-count))
-                                    0)
-                                :actor-runtime-failed-job-count
-                                (or (and (fboundp 'serializable-actor-runtime-state)
-                                         (getf (serializable-actor-runtime-state session)
-                                               :failed-job-count))
-                                    0)
-                                :memory-entry-count (length (environment-memory environment))))))
-        (setf (environment-agent-state environment) agent-state)
-        agent-state)))
+  (call-with-environment-agent-state
+   environment
+   (lambda ()
+     (or (environment-agent-state environment)
+         (let* ((plans (session-plan-set session))
+                (active-plan-id (session-active-plan-id session))
+                (plan-summaries (session-plan-summaries session))
+                (agent-state
+                 (make-environment-agent-state
+                  :agents (environment-agent-registry environment)
+                  :subscriptions '()
+                  :memory (environment-memory environment)
+                  :plan (session-active-plan session)
+                  :plans plans
+                  :active-plan-id active-plan-id
+                  :plan-summaries plan-summaries
+                  :actor-mailboxes (agent-session-actor-mailboxes session)
+                  :actor-runtime (and (fboundp 'serializable-actor-runtime-state)
+                                      (serializable-actor-runtime-state session))
+                  :pending-actions (agent-session-pending-actions session)
+                  :desktop-tasks (agent-session-desktop-tasks session)
+                  :incidents (agent-session-incidents session)
+                  :tasks (agent-session-tasks session)
+                  :workers (serializable-worker-states session)
+                  :summaries (list :agent-count (length (environment-agent-registry environment))
+                                   :subscription-count 0
+                                   :has-plan-p (not (null active-plan-id))
+                                   :active-plan-id active-plan-id
+                                   :plan-count (length plans)
+                                   :plan-summaries plan-summaries
+                                   :pending-action-count (length (agent-session-pending-actions session))
+                                   :desktop-task-count (length (agent-session-desktop-tasks session))
+                                   :incident-count (length (agent-session-incidents session))
+                                   :open-incident-count (length (remove-if-not (lambda (incident)
+                                                                                 (eq (incident-status incident) :open))
+                                                                               (agent-session-incidents session)))
+                                   :incident-summary (environment-incident-summary-from-session session)
+                                   :task-count (length (agent-session-tasks session))
+                                   :worker-count (length (agent-session-workers session))
+                                   :active-worker-count (active-worker-count session)
+                                   :actor-runtime-history-count
+                                   (length (or (and (fboundp 'serializable-actor-runtime-state)
+                                                    (getf (serializable-actor-runtime-state session)
+                                                          :recent-executions))
+                                               '()))
+                                   :actor-runtime-submitted-job-count
+                                   (or (and (fboundp 'serializable-actor-runtime-state)
+                                            (getf (serializable-actor-runtime-state session)
+                                                  :submitted-job-count))
+                                       0)
+                                   :actor-runtime-completed-job-count
+                                   (or (and (fboundp 'serializable-actor-runtime-state)
+                                            (getf (serializable-actor-runtime-state session)
+                                                  :completed-job-count))
+                                       0)
+                                   :actor-runtime-failed-job-count
+                                   (or (and (fboundp 'serializable-actor-runtime-state)
+                                            (getf (serializable-actor-runtime-state session)
+                                                  :failed-job-count))
+                                       0)
+                                   :memory-entry-count (length (environment-memory environment))))))
+           (setf (environment-agent-state environment) agent-state)
+           agent-state)))))
 
 (defun refresh-environment-agent-domain (environment session)
-  (let* ((agent-state (ensure-environment-agent-state environment session))
-         (plans (session-plan-set session))
-         (active-plan-id (session-active-plan-id session))
-         (plan-summaries (session-plan-summaries session)))
-    (setf (environment-agent-state-agents agent-state)
-          (environment-agent-registry environment)
-          (environment-agent-state-memory agent-state)
-          (environment-memory environment)
-          (environment-agent-state-plan agent-state)
-          (session-active-plan session)
-          (environment-agent-state-plans agent-state)
-          plans
-          (environment-agent-state-active-plan-id agent-state)
-          active-plan-id
-          (environment-agent-state-plan-summaries agent-state)
-          plan-summaries
-          (environment-agent-state-actor-mailboxes agent-state)
-          (agent-session-actor-mailboxes session)
-          (environment-agent-state-actor-runtime agent-state)
-          (and (fboundp 'serializable-actor-runtime-state)
-               (serializable-actor-runtime-state session))
-          (environment-agent-state-pending-actions agent-state)
-          (agent-session-pending-actions session)
-          (environment-agent-state-desktop-tasks agent-state)
-          (mapcar #'serializable-desktop-task-record
-                  (agent-session-desktop-tasks session))
-          (environment-agent-state-tasks agent-state)
-          (agent-session-tasks session)
-          (environment-agent-state-workers agent-state)
-          (serializable-worker-states session)
-          (environment-agent-state-summaries agent-state)
-          (list :agent-count (length (environment-agent-registry environment))
-                :subscription-count (length (environment-agent-state-subscriptions agent-state))
-                :has-plan-p (not (null active-plan-id))
-                :active-plan-id active-plan-id
-                :plan-count (length plans)
-                :plan-summaries plan-summaries
-                :pending-action-count (length (environment-agent-state-pending-actions agent-state))
-                :desktop-task-count (length (environment-agent-state-desktop-tasks agent-state))
-                :incident-count (length (environment-agent-state-incidents agent-state))
-                :open-incident-count (length (remove-if-not (lambda (incident)
-                                                              (eq (incident-status incident) :open))
-                                                            (environment-agent-state-incidents agent-state)))
-                :incident-summary (session-incident-summary session)
-                :task-count (length (environment-agent-state-tasks agent-state))
-                :worker-count (length (environment-agent-state-workers agent-state))
-                :active-worker-count (active-worker-count session)
-                :actor-runtime-history-count
-                (length (or (and (environment-agent-state-actor-runtime agent-state)
-                                 (getf (environment-agent-state-actor-runtime agent-state)
-                                       :recent-executions))
-                            '()))
-                :actor-runtime-submitted-job-count
-                (or (and (environment-agent-state-actor-runtime agent-state)
-                         (getf (environment-agent-state-actor-runtime agent-state)
-                               :submitted-job-count))
-                    0)
-                :actor-runtime-completed-job-count
-                (or (and (environment-agent-state-actor-runtime agent-state)
-                         (getf (environment-agent-state-actor-runtime agent-state)
-                               :completed-job-count))
-                    0)
-                :actor-runtime-failed-job-count
-                (or (and (environment-agent-state-actor-runtime agent-state)
-                         (getf (environment-agent-state-actor-runtime agent-state)
-                               :failed-job-count))
-                    0)
-                :memory-entry-count (length (environment-memory environment))))
-    environment))
+  (call-with-environment-agent-state
+   environment
+   (lambda ()
+     (let* ((agent-state (or (environment-agent-state environment)
+                             (ensure-environment-agent-state environment session)))
+            (plans (session-plan-set session))
+            (active-plan-id (session-active-plan-id session))
+            (plan-summaries (session-plan-summaries session)))
+       (setf (environment-agent-state-agents agent-state)
+             (environment-agent-registry environment)
+             (environment-agent-state-memory agent-state)
+             (environment-memory environment)
+             (environment-agent-state-plan agent-state)
+             (session-active-plan session)
+             (environment-agent-state-plans agent-state)
+             plans
+             (environment-agent-state-active-plan-id agent-state)
+             active-plan-id
+             (environment-agent-state-plan-summaries agent-state)
+             plan-summaries
+             (environment-agent-state-actor-mailboxes agent-state)
+             (agent-session-actor-mailboxes session)
+             (environment-agent-state-actor-runtime agent-state)
+             (and (fboundp 'serializable-actor-runtime-state)
+                  (serializable-actor-runtime-state session))
+             (environment-agent-state-pending-actions agent-state)
+             (agent-session-pending-actions session)
+             (environment-agent-state-desktop-tasks agent-state)
+             (mapcar #'serializable-desktop-task-record
+                     (agent-session-desktop-tasks session))
+             (environment-agent-state-tasks agent-state)
+             (agent-session-tasks session)
+             (environment-agent-state-workers agent-state)
+             (serializable-worker-states session)
+             (environment-agent-state-summaries agent-state)
+             (list :agent-count (length (environment-agent-registry environment))
+                   :subscription-count (length (environment-agent-state-subscriptions agent-state))
+                   :has-plan-p (not (null active-plan-id))
+                   :active-plan-id active-plan-id
+                   :plan-count (length plans)
+                   :plan-summaries plan-summaries
+                   :pending-action-count (length (environment-agent-state-pending-actions agent-state))
+                   :desktop-task-count (length (environment-agent-state-desktop-tasks agent-state))
+                   :incident-count (length (environment-agent-state-incidents agent-state))
+                   :open-incident-count (length (remove-if-not (lambda (incident)
+                                                                 (eq (incident-status incident) :open))
+                                                               (environment-agent-state-incidents agent-state)))
+                   :incident-summary (session-incident-summary session)
+                   :task-count (length (environment-agent-state-tasks agent-state))
+                   :worker-count (length (environment-agent-state-workers agent-state))
+                   :active-worker-count (active-worker-count session)
+                   :actor-runtime-history-count
+                   (length (or (and (environment-agent-state-actor-runtime agent-state)
+                                    (getf (environment-agent-state-actor-runtime agent-state)
+                                          :recent-executions))
+                               '()))
+                   :actor-runtime-submitted-job-count
+                   (or (and (environment-agent-state-actor-runtime agent-state)
+                            (getf (environment-agent-state-actor-runtime agent-state)
+                                  :submitted-job-count))
+                       0)
+                   :actor-runtime-completed-job-count
+                   (or (and (environment-agent-state-actor-runtime agent-state)
+                            (getf (environment-agent-state-actor-runtime agent-state)
+                                  :completed-job-count))
+                       0)
+                   :actor-runtime-failed-job-count
+                   (or (and (environment-agent-state-actor-runtime agent-state)
+                            (getf (environment-agent-state-actor-runtime agent-state)
+                                  :failed-job-count))
+                       0)
+                   :memory-entry-count (length (environment-memory environment))))
+       environment))))
 
 (defun environment-append-incident (environment session incident)
-  (let* ((agent-state (ensure-environment-agent-state environment session))
-         (incidents (environment-agent-state-incidents agent-state)))
-    (unless (find (incident-id incident) incidents
-                  :key #'incident-id
-                  :test #'string=)
-      (setf (environment-agent-state-incidents agent-state)
-            (append incidents (list incident))))
-    (refresh-environment-agent-domain environment session)))
+  (call-with-environment-agent-state
+   environment
+   (lambda ()
+     (let* ((agent-state (or (environment-agent-state environment)
+                             (ensure-environment-agent-state environment session)))
+            (incidents (environment-agent-state-incidents agent-state)))
+       (unless (find (incident-id incident) incidents
+                     :key #'incident-id
+                     :test #'string=)
+         (setf (environment-agent-state-incidents agent-state)
+               (append incidents (list incident))))))
+   )
+  (refresh-environment-agent-domain environment session))
 
 (defun make-default-environment (&key (storage-root (namestring (getcwd)))
                                       session)
@@ -353,9 +456,10 @@
 
 (defun refresh-environment-root-state-from-session (environment session)
   (setf (environment-compatibility-session environment) session
-        (environment-storage-root environment) (agent-session-cwd session)
-        (environment-policy-state environment)
-        (list :approved-policies (session-approved-policies session)
-              :capability-grants (session-capability-grants-summary session)))
+        (environment-storage-root environment) (agent-session-cwd session))
+  (replace-environment-policy-state
+   environment
+   (list :approved-policies (session-approved-policies session)
+         :capability-grants (session-capability-grants-summary session)))
   (update-environment-root-summaries-from-session environment session)
   environment)

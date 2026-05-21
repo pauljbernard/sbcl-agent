@@ -2,35 +2,35 @@
 layout: default
 title: Kernel and Services Iteration Plan
 hero_title: Kernel and Services Iteration Plan
-hero_text: A historical two-track execution plan for consolidating the environment kernel and extracting the service boundary now used by shell and desktop clients.
+hero_text: A historical two-track execution plan for consolidating the environment runtime and extracting the service boundary now used by shell and desktop clients.
 eyebrow: Execution
 permalink: /roadmap/kernel-and-services-iteration-plan.html
 description: Iterative execution plan for kernel consolidation and public service interface extraction in sbcl-agent.
 ---
 ## Purpose
 
-This plan revises the current roadmap into two coordinated tracks:
+This plan is now historical program context. It revises the earlier roadmap into two coordinated tracks:
 
-- kernel consolidation
+- environment/runtime consolidation
 - public service interface extraction
 
 The goal is not just architectural cleanliness. The goal is to make the governed runtime easier to maintain while creating the stable boundary now used by the shell and `sbcl-agent-ux`.
 
 ## Target Architecture
 
-The target architecture has three layers:
+The target architecture described here has three layers:
 
-1. environment kernel
+1. environment runtime
 2. public service interface layer
 3. presentation adapters
 
-The environment kernel owns durable truth and invariants.
+The environment runtime owns durable truth and invariants.
 
 The service layer exposes secure, stable, governed interfaces over that kernel.
 
 The shell and desktop-host surfaces become clients of the same service contracts.
 
-## Track A. Kernel Consolidation
+## Track A. Environment / Runtime Consolidation
 
 Focus:
 

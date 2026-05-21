@@ -2,10 +2,52 @@
 
 (defparameter +service-contract-version+ 1)
 
+(defun keyword-plist-p (value)
+  (and (listp value)
+       (loop for tail on value by #'cddr
+             always (and (consp tail)
+                         (keywordp (first tail))))))
+
+(defun ensure-service-session-environment (session)
+  (or (and session
+           (agent-session-bound-environment session))
+      (and session
+           (bind-session-to-environment
+            session
+            (make-default-environment :session session
+                                      :storage-root (agent-session-cwd session))))))
+
+(defun service-active-environment (&key session environment (ensure-p t) (bind-session-p t))
+  (let* ((resolved (or environment
+                       (and session
+                            (ensure-service-session-environment session))
+                       (and (boundp '*current-environment*) *current-environment*)
+                       (and ensure-p (ensure-environment)))))
+    (when (and resolved
+               ensure-p)
+      (setf resolved (ensure-environment resolved)))
+    (when (and resolved
+               session
+               bind-session-p
+               (fboundp 'bind-session-to-environment)
+               (not (eq (environment-compatibility-session resolved) session)))
+      (bind-session-to-environment session resolved))
+    resolved))
+
+(defun service-authority-source (&key session environment)
+  (let ((active-environment (service-active-environment :session session
+                                                        :environment environment
+                                                        :ensure-p nil
+                                                        :bind-session-p nil)))
+    (if active-environment
+        :environment
+        :session-compatibility)))
+
 (defun service-bound-environment-id (&key session environment)
-  (let ((active-environment (or environment
-                                (and session (session-bound-environment session))
-                                (and (boundp '*current-environment*) *current-environment*))))
+  (let ((active-environment (service-active-environment :session session
+                                                        :environment environment
+                                                        :ensure-p nil
+                                                        :bind-session-p nil)))
     (and active-environment
          (environment-id active-environment))))
 
@@ -13,8 +55,10 @@
                                 policy-id thread-id turn-id work-item-id workflow-record-id
                                 incident-id runtime-id event-family visibility)
   (let ((session-id (and session (agent-session-id session)))
-        (environment-id (service-bound-environment-id :session session :environment environment)))
+        (environment-id (service-bound-environment-id :session session :environment environment))
+        (authority-source (service-authority-source :session session :environment environment)))
     (list :authority authority
+          :authority-source authority-source
           :binding (list :session-id session-id
                          :environment-id environment-id)
           :read-model read-model

@@ -11,9 +11,41 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun actorize-runtime-command-response (response
+                                         &key actor-execution-job-id
+                                           governance-authority
+                                           policy-id
+                                           approval-required-p
+                                           approval-granted-p)
+  (if (listp response)
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (when actor-execution-job-id
+          (setf (getf metadata :actor-execution-job-id) actor-execution-job-id))
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
+              (getf response :metadata) metadata)
+        (when (keyword-plist-p data)
+          (let ((updated-data (copy-list data)))
+            (when actor-execution-job-id
+              (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id))
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
                   (getf response :data) updated-data)))
         response)
       response))
@@ -28,6 +60,46 @@
    :metadata (append (list :session-id (agent-session-id session)
                            :actor-slice :runtime-query-v1)
                      metadata)))
+
+(defun make-runtime-command-request (session action capability &key payload metadata)
+  (make-governed-desktop-task-request
+   :requester :runtime
+   :target :runtime
+   :operation action
+   :capability capability
+   :payload payload
+   :metadata (append (list :session-id (agent-session-id session)
+                           :actor-slice :runtime-command-v1)
+                     metadata)))
+
+(defun runtime-command-approval-required-p (policy-id)
+  (let ((policy (and policy-id
+                     (ignore-errors (ensure-capability-policy policy-id)))))
+    (and policy
+         (not (eq (capability-policy-default-grant-mode policy) :implicit)))))
+
+(defun enforce-runtime-actor-governance (session capability actor-execution-context
+                                         &key policy-id approval-required-p)
+  (declare (ignore capability))
+  (when approval-required-p
+    (unless policy-id
+      (error "Runtime actor governance requires a policy id for approval-sensitive execution."))
+    (append-session-event
+     session
+     :runtime-actor-governance-enforcement
+     (list :policy-id policy-id
+           :approval-required-p t
+           :actor-execution (actor-execution-context-summary actor-execution-context))
+     :family :assistant
+     :agent-id (and actor-execution-context
+                    (actor-execution-context-actor-id actor-execution-context))
+     :thread-id (and actor-execution-context
+                     (actor-execution-context-thread-id actor-execution-context))
+     :turn-id (and actor-execution-context
+                   (actor-execution-context-turn-id actor-execution-context))
+     :work-item-id (and actor-execution-context
+                        (actor-execution-context-work-item-id actor-execution-context)))
+    (ensure-policy-approved session policy-id)))
 
 (defun call-with-runtime-actor (session request thunk capability action &key metadata)
   (let ((actor-address (make-runtime-query-actor-address session)))
@@ -46,6 +118,41 @@
                :operation action
                :request-id (desktop-task-request-id request)
                :metadata metadata))))
+
+(defun call-with-runtime-command-actor (session request thunk capability action
+                                        &key metadata policy-id approval-required-p)
+  (let* ((actor-address (make-runtime-query-actor-address session))
+         (actor-context (make-actor-execution-context
+                         :actor-id (actor-address-id actor-address)
+                         :capability capability
+                         :authority :governed-runtime
+                         :policy-id policy-id
+                         :target :runtime
+                         :operation action
+                         :request-id (desktop-task-request-id request)
+                         :approval-required-p approval-required-p
+                         :metadata metadata))
+         (approval-granted-p (and approval-required-p
+                                  policy-id
+                                  (ignore-errors (policy-approved-p session policy-id)))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (when (fboundp 'update-current-actor-execution-context)
+         (update-current-actor-execution-context actor-context :replace-p t))
+       (enforce-runtime-actor-governance
+        session capability actor-context
+        :policy-id policy-id
+        :approval-required-p approval-required-p)
+       (actorize-runtime-command-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)
+        :governance-authority :actor-runtime
+        :policy-id policy-id
+        :approval-required-p approval-required-p
+        :approval-granted-p approval-granted-p))
+     :context actor-context)))
 
 (defun runtime-service-summary-data (session)
   (let* ((environment (session-bound-environment session))
@@ -89,7 +196,7 @@
         :kind (runtime-package-symbol-kind symbol)
         :visibility visibility))
 
-(defun runtime-package-browser-data (session package-name)
+(defun runtime-package-browser-data (session package-name &key (include-symbols t))
   (declare (ignore session))
   (let* ((resolved-package (or (find-package package-name)
                                (error "Unknown package ~S" package-name)))
@@ -97,28 +204,41 @@
                                                       :test #'string=)
                                    #'string<))
          (externals '())
-         (internals '()))
+         (internals '())
+         (external-count 0)
+         (internal-count 0))
     (do-external-symbols (symbol resolved-package)
-      (push (runtime-package-symbol-summary symbol :external) externals))
+      (incf external-count)
+      (when include-symbols
+        (push (runtime-package-symbol-summary symbol :external) externals)))
     (do-symbols (symbol resolved-package)
       (multiple-value-bind (_symbol found-status)
           (find-symbol (symbol-name symbol) resolved-package)
         (declare (ignore _symbol))
         (when (eq found-status :internal)
-          (push (runtime-package-symbol-summary symbol :internal) internals))))
+          (incf internal-count)
+          (when include-symbols
+            (push (runtime-package-symbol-summary symbol :internal) internals)))))
     (list :package (package-name resolved-package)
           :available-packages available-packages
           :nicknames (sort (copy-list (package-nicknames resolved-package)) #'string<)
           :use-list (sort (mapcar #'package-name (package-use-list resolved-package)) #'string<)
-          :external-symbols (sort externals #'string< :key (lambda (entry) (getf entry :symbol)))
-          :internal-symbols (sort internals #'string< :key (lambda (entry) (getf entry :symbol)))
+          :external-symbol-count external-count
+          :internal-symbol-count internal-count
+          :external-symbols (if include-symbols
+                                (sort externals #'string< :key (lambda (entry) (getf entry :symbol)))
+                                '())
+          :internal-symbols (if include-symbols
+                                (sort internals #'string< :key (lambda (entry) (getf entry :symbol)))
+                                '())
           :summary (format nil "~A exposes live namespace structure for exported and internal symbols."
                            (package-name resolved-package)))))
 
-(defun runtime-package-browser-query-service (session package-name)
+(defun runtime-package-browser-query-service (session package-name &key (include-symbols t))
   (make-service-query-response :runtime
                                :package-browser
-                               (runtime-package-browser-data session package-name)
+                               (runtime-package-browser-data session package-name
+                                                             :include-symbols include-symbols)
                                :metadata (make-service-metadata :authority :environment
                                                                 :read-model :package-browser-v1
                                                                 :session session
@@ -131,6 +251,50 @@
         (and same-package-p
              (string< (getf left :symbol) (getf right :symbol))))))
 
+(defun runtime-package-symbol-entries (package)
+  (let ((package-name (package-name package))
+        (entries '()))
+    (labels ((push-entry (symbol visibility-kind)
+               (push (list :package-name package-name
+                           :symbol (symbol-name symbol)
+                           :kind (runtime-package-symbol-kind symbol)
+                           :visibility visibility-kind)
+                     entries)))
+      (do-symbols (symbol package)
+        (multiple-value-bind (_symbol found-status)
+            (find-symbol (symbol-name symbol) package)
+          (declare (ignore _symbol))
+          (when (member found-status '(:external :internal :inherited))
+            (push-entry symbol found-status)))))
+    (sort entries #'runtime-package-browser-entry<)))
+
+(defparameter *runtime-symbol-index-cache* nil)
+(defparameter *runtime-symbol-index-cache-lock*
+  (sb-thread:make-mutex :name "runtime-symbol-index-cache"))
+
+(defun runtime-package-name-signature ()
+  (sort (remove-duplicates (mapcar #'package-name (list-all-packages))
+                           :test #'string=)
+        #'string<))
+
+(defun runtime-build-symbol-index ()
+  (let ((available-packages (runtime-package-name-signature))
+        (entries '()))
+    (dolist (package (sort (copy-list (list-all-packages)) #'string< :key #'package-name))
+      (setf entries (nconc entries (copy-list (runtime-package-symbol-entries package)))))
+    (list :package-signature available-packages
+          :available-packages available-packages
+          :entries (sort entries #'runtime-package-browser-entry<))))
+
+(defun runtime-cached-symbol-index ()
+  (let ((package-signature (runtime-package-name-signature)))
+    (sb-thread:with-mutex (*runtime-symbol-index-cache-lock*)
+      (unless (and *runtime-symbol-index-cache*
+                   (equal (getf *runtime-symbol-index-cache* :package-signature)
+                          package-signature))
+        (setf *runtime-symbol-index-cache* (runtime-build-symbol-index)))
+      *runtime-symbol-index-cache*)))
+
 (defun runtime-symbol-page-query-data (session &key package-scope kinds visibility search offset limit)
   (declare (ignore session))
   (let* ((resolved-package-scope
@@ -139,50 +303,43 @@
                       (not (string= package-scope "All Packages")))
              (or (find-package package-scope)
                  (error "Unknown package ~S" package-scope))))
-         (available-packages (sort (remove-duplicates (mapcar #'package-name (list-all-packages))
-                                                      :test #'string=)
-                                   #'string<))
-         (packages (if resolved-package-scope
-                       (list resolved-package-scope)
-                       (sort (copy-list (list-all-packages)) #'string< :key #'package-name)))
+         (available-packages (runtime-package-name-signature))
+         (resolved-package-name (and resolved-package-scope
+                                     (package-name resolved-package-scope)))
          (allowed-kinds (or kinds '()))
          (search-term (when (and search (> (length search) 0))
                         (string-downcase search)))
          (offset-value (max 0 (or offset 0)))
          (limit-value (max 1 (min 200 (or limit 32))))
-         (entries '()))
-    (dolist (package packages)
-      (let ((package-name (package-name package)))
-        (labels ((maybe-push-entry (symbol visibility-kind)
-                   (let* ((symbol-kind (runtime-package-symbol-kind symbol))
-                          (symbol-name (symbol-name symbol))
-                          (matches-kind (or (null allowed-kinds)
-                                            (member symbol-kind allowed-kinds)))
-                          (matches-visibility
-                            (or (null visibility)
-                                (eq visibility :all)
-                                (eq visibility visibility-kind)))
-                          (matches-search
-                            (or (null search-term)
-                                (search search-term (string-downcase symbol-name))
-                                (search search-term (string-downcase package-name)))))
-                     (when (and matches-kind matches-visibility matches-search)
-                       (push (list :package-name package-name
-                                   :symbol symbol-name
-                                   :kind symbol-kind
-                                   :visibility visibility-kind)
-                             entries)))))
-          (do-external-symbols (symbol package)
-            (maybe-push-entry symbol :external))
-          (do-symbols (symbol package)
-            (multiple-value-bind (_symbol found-status)
-                (find-symbol (symbol-name symbol) package)
-              (declare (ignore _symbol))
-              (when (eq found-status :internal)
-                (maybe-push-entry symbol :internal)))))))
-    (let* ((sorted-entries (sort entries #'runtime-package-browser-entry<))
-           (total-count (length sorted-entries))
-           (paged-entries (subseq sorted-entries
+         (candidate-entries (if resolved-package-scope
+                                (runtime-package-symbol-entries resolved-package-scope)
+                                (getf (runtime-cached-symbol-index) :entries)))
+         (filtered-entries
+           (remove-if-not
+            (lambda (entry)
+              (let* ((entry-package-name (getf entry :package-name))
+                     (symbol-kind (getf entry :kind))
+                     (symbol-name (getf entry :symbol))
+                     (entry-visibility (getf entry :visibility))
+                     (matches-package (or (null resolved-package-name)
+                                          (string= resolved-package-name entry-package-name)))
+                     (matches-kind (or (null allowed-kinds)
+                                       (member symbol-kind allowed-kinds)))
+                     (matches-visibility
+                       (or (null visibility)
+                           (eq visibility :all)
+                           (eq visibility entry-visibility)))
+                     (matches-search
+                       (or (null search-term)
+                           (search search-term (string-downcase symbol-name))
+                           (search search-term (string-downcase entry-package-name)))))
+                (and matches-package
+                     matches-kind
+                     matches-visibility
+                     matches-search)))
+            candidate-entries)))
+    (let* ((total-count (length filtered-entries))
+           (paged-entries (subseq filtered-entries
                                   (min offset-value total-count)
                                   (min total-count (+ offset-value limit-value)))))
       (list :package-scope (and resolved-package-scope (package-name resolved-package-scope))
@@ -472,29 +629,25 @@
                                :summary
                                :runtime/summary)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read the current runtime summary."
-                                    "runtime/summary"
-                                    :authority :environment))
+     (query-runtime-summary-service session))
    :runtime/summary
    :summary))
 
-(defun command-runtime-package-browser-query-service (session &key package-name)
+(defun command-runtime-package-browser-query-service (session &key package-name (include-symbols t))
   (call-with-runtime-actor
    session
    (make-runtime-query-request session
                                :package-browser
                                :runtime/package-browser
-                               :payload (list :package-name package-name))
+                               :payload (list :package-name package-name
+                                              :include-symbols include-symbols))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read runtime package browser."
-                                    "runtime/package-browser"
-                                    :authority :environment
-                                    :payload (list :package-name package-name)))
+     (runtime-package-browser-query-service session package-name
+                                            :include-symbols include-symbols))
    :runtime/package-browser
    :package-browser
-   :metadata (list :package-name package-name)))
+   :metadata (list :package-name package-name
+                   :include-symbols include-symbols)))
 
 (defun command-runtime-symbol-page-query-service (session &key package-scope kinds visibility search offset limit)
   (call-with-runtime-actor
@@ -509,16 +662,13 @@
                                               :offset offset
                                               :limit limit))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read runtime symbol page."
-                                    "runtime/symbol-page"
-                                    :authority :environment
-                                    :payload (list :package-scope package-scope
-                                                   :kinds kinds
-                                                   :visibility visibility
-                                                   :search search
-                                                   :offset offset
-                                                   :limit limit)))
+     (query-runtime-symbol-page-service session
+                                        :package-scope package-scope
+                                        :kinds kinds
+                                        :visibility visibility
+                                        :search search
+                                        :offset offset
+                                        :limit limit))
    :runtime/symbol-page
    :symbol-page
    :metadata (list :package-scope package-scope
@@ -537,13 +687,9 @@
                                               :package package
                                               :mode mode))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Inspect runtime symbol ~A." symbol-name)
-                                    "runtime/inspect-symbol"
-                                    :authority :environment
-                                    :payload (list :symbol-name symbol-name
-                                                   :package package
-                                                   :mode mode)))
+     (query-runtime-inspect-symbol-service session symbol-name
+                                           :package package
+                                           :mode mode))
    :runtime/inspect-symbol
    :inspect-symbol
    :metadata (list :symbol-name symbol-name
@@ -559,12 +705,7 @@
                                :payload (list :symbol-name symbol-name
                                               :package package))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read runtime entity detail for ~A." symbol-name)
-                                    "runtime/entity-detail"
-                                    :authority :environment
-                                    :payload (list :symbol-name symbol-name
-                                                   :package package)))
+     (query-runtime-entity-detail-service session symbol-name :package package))
    :runtime/entity-detail
    :entity-detail
    :metadata (list :symbol-name symbol-name
@@ -687,51 +828,101 @@
                                                                 :runtime-id (default-runtime-id))))
 
 (defun command-runtime-set-package-service (session package-name)
-  (kernelize-service-command-response
-   (make-service-command-response :runtime
-                                  :set-package
-                                  (tool-runtime-set-package session :package package-name)
-                                  :metadata (make-service-metadata :authority :environment
-                                                                   :command-model :runtime-command-v1
-                                                                   :session session
-                                                                   :runtime-id (default-runtime-id)
-                                                                   :policy-id :runtime-package-switch))
-   :session session
-   :intention (format nil "Set the active runtime package to ~A." package-name)
-   :capability :runtime/set-package
-   :authority :runtime))
+  (let* ((policy-id :runtime-package-switch)
+         (request (make-runtime-command-request session
+                                                :set-package
+                                                :runtime/set-package
+                                                :payload (list :package package-name)))
+         (approval-required-p (runtime-command-approval-required-p policy-id)))
+    (register-service-command-response
+     (call-with-runtime-command-actor
+      session
+      request
+      (lambda ()
+        (make-service-command-response :runtime
+                                       :set-package
+                                       (tool-runtime-set-package session :package package-name)
+                                       :metadata (make-service-metadata :authority :environment
+                                                                        :command-model :runtime-command-v2
+                                                                        :session session
+                                                                        :runtime-id (default-runtime-id)
+                                                                        :policy-id policy-id)))
+      :runtime/set-package
+      :set-package
+      :metadata (list :package package-name)
+      :policy-id policy-id
+      :approval-required-p approval-required-p)
+     :session session
+     :intention (format nil "Set the active runtime package to ~A." package-name)
+     :capability :runtime/set-package
+     :authority :runtime)))
 
 (defun command-runtime-eval-service (session form-or-source &key package mutating recovery-launch)
-  (kernelize-service-command-response
-   (make-service-command-response :runtime
-                                  :eval
-                                  (tool-runtime-eval session
-                                                     :form form-or-source
-                                                     :package package
-                                                     :mutating mutating
-                                                     :recovery-launch recovery-launch)
-                                  :metadata (make-service-metadata :authority :environment
-                                                                   :command-model :runtime-command-v1
-                                                                   :session session
-                                                                   :runtime-id (default-runtime-id)
-                                                                   :policy-id (runtime-eval-policy-id mutating)))
-   :session session
-   :intention (format nil "Evaluate ~A in the live runtime.~@[ Package: ~A.~]" form-or-source package)
-   :capability :runtime/eval
-   :authority (if mutating :governed-runtime :runtime)
-   :constraints (list :mutating mutating :package package)))
+  (let* ((policy-id (runtime-eval-policy-id mutating))
+         (request (make-runtime-command-request session
+                                                :eval
+                                                :runtime/eval
+                                                :payload (list :form form-or-source
+                                                               :package package
+                                                               :mutating (and mutating t)
+                                                               :recovery-launch (and recovery-launch t))))
+         (approval-required-p (runtime-command-approval-required-p policy-id)))
+    (register-service-command-response
+     (call-with-runtime-command-actor
+      session
+      request
+      (lambda ()
+        (make-service-command-response :runtime
+                                       :eval
+                                       (tool-runtime-eval session
+                                                          :form form-or-source
+                                                          :package package
+                                                          :mutating mutating
+                                                          :recovery-launch recovery-launch)
+                                       :metadata (make-service-metadata :authority :environment
+                                                                        :command-model :runtime-command-v2
+                                                                        :session session
+                                                                        :runtime-id (default-runtime-id)
+                                                                        :policy-id policy-id)))
+      :runtime/eval
+      :eval
+      :metadata (list :package package
+                      :mutating (and mutating t)
+                      :recovery-launch (and recovery-launch t))
+      :policy-id policy-id
+      :approval-required-p approval-required-p)
+     :session session
+     :intention (format nil "Evaluate ~A in the live runtime.~@[ Package: ~A.~]" form-or-source package)
+     :capability :runtime/eval
+     :authority (if mutating :governed-runtime :runtime)
+     :constraints (list :mutating mutating :package package))))
 
 (defun command-runtime-reload-file-service (session path)
-  (kernelize-service-command-response
-   (make-service-command-response :runtime
-                                  :reload-file
-                                  (tool-runtime-reload-file session :path path)
-                                  :metadata (make-service-metadata :authority :environment
-                                                                   :command-model :runtime-command-v1
-                                                                   :session session
-                                                                   :runtime-id (default-runtime-id)
-                                                                   :policy-id :runtime-reload))
-   :session session
-   :intention (format nil "Reload ~A into the live runtime." path)
-   :capability :runtime/reload-file
-   :authority :governed-runtime))
+  (let* ((policy-id :runtime-reload)
+         (request (make-runtime-command-request session
+                                                :reload-file
+                                                :runtime/reload-file
+                                                :payload (list :path path)))
+         (approval-required-p (runtime-command-approval-required-p policy-id)))
+    (register-service-command-response
+     (call-with-runtime-command-actor
+      session
+      request
+      (lambda ()
+        (make-service-command-response :runtime
+                                       :reload-file
+                                       (tool-runtime-reload-file session :path path)
+                                       :metadata (make-service-metadata :authority :environment
+                                                                        :command-model :runtime-command-v2
+                                                                        :session session
+                                                                        :runtime-id (default-runtime-id)
+                                                                        :policy-id policy-id)))
+      :runtime/reload-file
+      :reload-file
+      :metadata (list :path path)
+      :policy-id policy-id
+      :approval-required-p approval-required-p)
+     :session session
+     :intention (format nil "Reload ~A into the live runtime." path)
+     :capability :runtime/reload-file
+     :authority :governed-runtime)))

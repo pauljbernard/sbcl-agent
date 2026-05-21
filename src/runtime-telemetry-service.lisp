@@ -46,7 +46,7 @@
   (let ((environment (session-bound-environment session)))
     (and environment
          (find control-token
-               (kernel-execution-registry environment)
+               (execution-registry environment)
                :key (lambda (handle)
                       (getf (getf (getf handle :target) :compatibility-execution)
                             :control-token))
@@ -237,9 +237,6 @@
                                :telemetry
                                :runtime/telemetry)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read current runtime telemetry."
-                                    "runtime/telemetry"
-                                    :authority :environment))
+     (query-runtime-telemetry-service session))
    :runtime/telemetry
    :telemetry))

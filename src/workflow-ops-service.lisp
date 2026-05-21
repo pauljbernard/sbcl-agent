@@ -36,24 +36,94 @@
                        (list :plan-id plan-id))
                      metadata)))
 
+(defun actorize-workflow-command-response (response
+                                           &key actor-execution-job-id
+                                             governance-authority
+                                             policy-id
+                                             approval-required-p
+                                             approval-granted-p)
+  (if (listp response)
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (when actor-execution-job-id
+          (setf (getf metadata :actor-execution-job-id) actor-execution-job-id))
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
+              (getf response :metadata) metadata)
+        (when (keyword-plist-p data)
+          (let ((updated-data (copy-list data)))
+            (when actor-execution-job-id
+              (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id))
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun workflow-command-policy-id (capability)
+  (let ((normalized (capability-name-string capability)))
+    (cond
+      ((member normalized
+               '("workflow/quarantine"
+                 "workflow/resume"
+                 "workflow/rollback"
+                 "workflow/complete-validations"
+                 "workflow/steer-plan"
+                 "workflow/replay-validator-task"
+                 "workflow/replay-validator-set"
+                 "workflow/reconcile-image-only-source")
+               :test #'string=)
+       :workflow-governed-write)
+      (t nil))))
+
+(defun workflow-command-approval-required-p (policy-id)
+  (let ((policy (and policy-id
+                     (ignore-errors (ensure-capability-policy policy-id)))))
+    (and policy
+         (not (eq (capability-policy-default-grant-mode policy) :implicit)))))
+
 (defun call-with-workflow-actor (session work-item request thunk capability action)
-  (let ((actor-address (make-workflow-control-actor-address session)))
+  (let* ((actor-address (make-workflow-control-actor-address session))
+         (policy-id (workflow-command-policy-id capability))
+         (approval-required-p (workflow-command-approval-required-p policy-id))
+         (actor-context (make-actor-execution-context
+                         :actor-id (actor-address-id actor-address)
+                         :capability capability
+                         :authority :governed-runtime
+                         :policy-id policy-id
+                         :target :workflow
+                         :operation action
+                         :request-id (desktop-task-request-id request)
+                         :work-item-id (work-item-id work-item)
+                         :workflow-record-id (work-item-workflow-record-ref work-item)
+                         :approval-required-p approval-required-p))
+         (approval-granted-p (and approval-required-p
+                                  policy-id
+                                  (ignore-errors (policy-approved-p session policy-id)))))
     (call-with-actor-worker-for-request
      session
      request
      (lambda ()
-       (actorize-desktop-task-command-response
+       (when (fboundp 'update-current-actor-execution-context)
+         (update-current-actor-execution-context actor-context :replace-p t))
+       (when (and approval-required-p policy-id)
+         (ensure-policy-approved session policy-id))
+       (actorize-workflow-command-response
         (funcall thunk)
-        :actor-execution-job-id (current-actor-execution-job-id)))
-     :context (make-actor-execution-context
-               :actor-id (actor-address-id actor-address)
-               :capability capability
-               :authority :operator
-               :target :workflow
-               :operation action
-               :request-id (desktop-task-request-id request)
-               :work-item-id (work-item-id work-item)
-               :workflow-record-id (work-item-workflow-record-ref work-item)))))
+        :actor-execution-job-id (current-actor-execution-job-id)
+        :governance-authority :actor-runtime
+        :policy-id policy-id
+        :approval-required-p approval-required-p
+        :approval-granted-p approval-granted-p))
+     :context actor-context)))
 
 (defun actorize-workflow-query-response (response &key actor-execution-job-id)
   (if (and actor-execution-job-id
@@ -62,8 +132,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -96,12 +165,12 @@
     (unless work-item
       (error "Unknown work-item ~A" work-item-id))
     (quarantine-work-item session work-item reason :evidence (work-item-summary work-item))
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response :workflow
                                     :quarantine-work-item
                                     (enriched-work-item-service-detail session work-item)
                                     :metadata (make-service-metadata :authority :environment
-                                                                     :command-model :workflow-command-v1
+                                                                     :command-model :workflow-command-v2
                                                                      :session session
                                                                      :work-item-id work-item-id))
      :session session
@@ -135,13 +204,21 @@
       (recover-work-item-control-state session
                                        work-item
                                        :recovery-origin :resume-work-item))
-    (resume-work-item session work-item :note note)
-    (kernelize-service-command-response
+    (let ((resume-command (getf (or (work-item-resume-payload work-item) '())
+                               :resume-command)))
+      (cond
+        ((eq resume-command :verify-workspace-stage)
+         (verify-work-item-staged-workspace session work-item :note note))
+        ((member resume-command '(:promote-workspace-stage :complete-workspace-promotion) :test #'eq)
+         (promote-work-item-staged-workspace session work-item :note note))
+        (t
+         (resume-work-item session work-item :note note))))
+    (register-service-command-response
      (make-service-command-response :workflow
                                     :resume-work-item
                                     (enriched-work-item-service-detail session work-item)
                                     :metadata (make-service-metadata :authority :environment
-                                                                     :command-model :workflow-command-v1
+                                                                     :command-model :workflow-command-v2
                                                                      :session session
                                                                      :work-item-id work-item-id))
      :session session
@@ -176,12 +253,12 @@
                                        work-item
                                        :recovery-origin :rollback-work-item))
     (rollback-work-item session work-item :reason reason :note note)
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response :workflow
                                     :rollback-work-item
                                     (enriched-work-item-service-detail session work-item)
                                     :metadata (make-service-metadata :authority :environment
-                                                                     :command-model :workflow-command-v1
+                                                                     :command-model :workflow-command-v2
                                                                      :session session
                                                                      :work-item-id work-item-id))
      :session session
@@ -234,12 +311,12 @@
                                    work-item
                                    (validator-task-record-id cold-validator)
                                    :status status)
-    (kernelize-service-command-response
+    (register-service-command-response
      (make-service-command-response :workflow
                                     :complete-validations
                                     (enriched-work-item-service-detail session work-item)
                                     :metadata (make-service-metadata :authority :environment
-                                                                     :command-model :workflow-command-v1
+                                                                     :command-model :workflow-command-v2
                                                                      :session session
                                                                      :work-item-id work-item-id))
      :session session
@@ -279,7 +356,7 @@
                                    :steer-work-item
                                    (enriched-work-item-service-detail session work-item)
                                    :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :workflow-command-v1
+                                                                    :command-model :workflow-command-v2
                                                                     :session session
                                                                     :work-item-id work-item-id))))
 
@@ -346,11 +423,7 @@
                                 :work-item-id work-item-id
                                 :metadata (list :work-item-id work-item-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read wait state for work item ~A." work-item-id)
-                                    "workflow/work-item-wait"
-                                    :authority :operator
-                                    :payload (list :work-item-id work-item-id)))
+     (query-work-item-wait-service session work-item-id))
    :workflow/work-item-wait
    :work-item-wait-query
    :work-item-id work-item-id
@@ -373,40 +446,85 @@
                                                                 :session session)))
 
 (defun command-replay-validator-task-service (session work-item-id validator-task-id &key status)
-  (let ((work-item (find-work-item session work-item-id)))
-    (unless work-item
-      (error "Unknown work-item ~A" work-item-id))
-    (execute-validator-task-record session work-item validator-task-id :status status)
-    (make-service-command-response :workflow
-                                   :replay-validator-task
-                                   (enriched-work-item-service-detail session work-item)
-                                   :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :workflow-command-v1
-                                                                    :session session
-                                                                    :work-item-id work-item-id))))
+  (let* ((work-item (or (find-work-item session work-item-id)
+                        (error "Unknown work-item ~A" work-item-id)))
+         (request (make-workflow-control-request session
+                                                 work-item
+                                                 :replay-validator-task
+                                                 :workflow/replay-validator-task
+                                                 :payload (list :validator-task-id validator-task-id
+                                                                :status status)
+                                                 :metadata (append (list :validator-task-id validator-task-id)
+                                                                   (when status
+                                                                     (list :status status))))))
+    (call-with-workflow-actor
+     session
+     work-item
+     request
+     (lambda ()
+       (execute-validator-task-record session work-item validator-task-id :status status)
+       (make-service-command-response :workflow
+                                      :replay-validator-task
+                                      (enriched-work-item-service-detail session work-item)
+                                      :metadata (make-service-metadata :authority :environment
+                                                                       :command-model :workflow-command-v2
+                                                                       :session session
+                                                                       :work-item-id work-item-id)))
+     :workflow/replay-validator-task
+     :replay-validator-task)))
 
 (defun command-replay-validator-set-service (session work-item-id replay-id &key status statuses)
-  (let ((work-item (find-work-item session work-item-id)))
-    (unless work-item
-      (error "Unknown work-item ~A" work-item-id))
-    (execute-validator-replay-set session work-item replay-id :status status :statuses statuses)
-    (make-service-command-response :workflow
-                                   :replay-validator-set
-                                   (enriched-work-item-service-detail session work-item)
-                                   :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :workflow-command-v1
-                                                                    :session session
-                                                                    :work-item-id work-item-id))))
+  (let* ((work-item (or (find-work-item session work-item-id)
+                        (error "Unknown work-item ~A" work-item-id)))
+         (request (make-workflow-control-request session
+                                                 work-item
+                                                 :replay-validator-set
+                                                 :workflow/replay-validator-set
+                                                 :payload (list :replay-id replay-id
+                                                                :status status
+                                                                :statuses statuses)
+                                                 :metadata (append (list :replay-id replay-id)
+                                                                   (when status
+                                                                     (list :status status))
+                                                                   (when statuses
+                                                                     (list :statuses statuses))))))
+    (call-with-workflow-actor
+     session
+     work-item
+     request
+     (lambda ()
+       (execute-validator-replay-set session work-item replay-id :status status :statuses statuses)
+       (make-service-command-response :workflow
+                                      :replay-validator-set
+                                      (enriched-work-item-service-detail session work-item)
+                                      :metadata (make-service-metadata :authority :environment
+                                                                       :command-model :workflow-command-v2
+                                                                       :session session
+                                                                       :work-item-id work-item-id)))
+     :workflow/replay-validator-set
+     :replay-validator-set)))
 
 (defun command-reconcile-image-only-source-service (session work-item-id summary)
-  (let ((work-item (find-work-item session work-item-id)))
-    (unless work-item
-      (error "Unknown work-item ~A" work-item-id))
-    (reconcile-image-only-work-item-to-source session work-item summary)
-    (make-service-command-response :workflow
-                                   :reconcile-image-only-source
-                                   (enriched-work-item-service-detail session work-item)
-                                   :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :workflow-command-v1
-                                                                    :session session
-                                                                    :work-item-id work-item-id))))
+  (let* ((work-item (or (find-work-item session work-item-id)
+                        (error "Unknown work-item ~A" work-item-id)))
+         (request (make-workflow-control-request session
+                                                 work-item
+                                                 :reconcile-image-only-source
+                                                 :workflow/reconcile-image-only-source
+                                                 :payload (list :summary summary)
+                                                 :metadata (list :summary summary))))
+    (call-with-workflow-actor
+     session
+     work-item
+     request
+     (lambda ()
+       (reconcile-image-only-work-item-to-source session work-item summary)
+       (make-service-command-response :workflow
+                                      :reconcile-image-only-source
+                                      (enriched-work-item-service-detail session work-item)
+                                      :metadata (make-service-metadata :authority :environment
+                                                                       :command-model :workflow-command-v2
+                                                                       :session session
+                                                                       :work-item-id work-item-id)))
+     :workflow/reconcile-image-only-source
+     :reconcile-image-only-source)))

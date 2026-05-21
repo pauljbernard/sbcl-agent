@@ -1,4 +1,4 @@
-(in-package #:sbcl-agent)
+(in-package #:sbcl-agent.system.registry)
 
 (defstruct capability-definition
   id
@@ -251,6 +251,17 @@
     :approval-required-p t
     :policy-id :workspace-write
     :input-schema '(:patch string)
+    :output-schema '(:status keyword)
+    :metadata '(:category :workspace))
+   (make-capability-definition
+    :id "workspace/promote-patch"
+    :source-kind :kernel
+    :provider-id :kernel
+    :actor-role :editor
+    :mutation-class :workspace-mutation
+    :approval-required-p t
+    :policy-id :workspace-write
+    :input-schema '(:verified-patch list :workspace-id string :staging-root string)
     :output-schema '(:status keyword)
     :metadata '(:category :workspace))
    (make-capability-definition
@@ -1043,10 +1054,10 @@
                    :isolation-profile (getf tool-summary :isolation-profile))))
 
 (defun tool-capability-registry-definitions ()
-  (mapcar #'tool-capability-definition (list-tools)))
+  (mapcar #'tool-capability-definition (sbcl-agent::list-tools)))
 
 (defun desktop-task-manifest-mutation-class (manifest)
-  (let ((target (desktop-task-manifest-target manifest)))
+  (let ((target (sbcl-agent::desktop-task-manifest-target manifest)))
     (cond
       ((eq target :editor) :workspace-mutation)
       ((eq target :runtime) :runtime-mutation)
@@ -1057,16 +1068,16 @@
 (defun desktop-task-capability-definition (manifest)
   (make-capability-definition
    :id (normalize-capability-id
-        (or (desktop-task-manifest-capability manifest)
+        (or (sbcl-agent::desktop-task-manifest-capability manifest)
             (format nil "~(~A~)/~(~A~)"
-                    (desktop-task-manifest-target manifest)
-                    (desktop-task-manifest-operation manifest))))
+                    (sbcl-agent::desktop-task-manifest-target manifest)
+                    (sbcl-agent::desktop-task-manifest-operation manifest))))
    :source-kind :desktop-task
-   :provider-id (desktop-task-manifest-id manifest)
-   :actor-role (normalize-actor-role (desktop-task-manifest-target manifest) :capability-server)
+   :provider-id (sbcl-agent::desktop-task-manifest-id manifest)
+   :actor-role (sbcl-agent::normalize-actor-role (sbcl-agent::desktop-task-manifest-target manifest) :capability-server)
    :mutation-class (desktop-task-manifest-mutation-class manifest)
-   :approval-required-p (not (null (desktop-task-manifest-approval-policy manifest)))
-   :policy-id (let ((approval-policy (desktop-task-manifest-approval-policy manifest)))
+   :approval-required-p (not (null (sbcl-agent::desktop-task-manifest-approval-policy manifest)))
+   :policy-id (let ((approval-policy (sbcl-agent::desktop-task-manifest-approval-policy manifest)))
                 (cond
                   ((listp approval-policy)
                    (or (getf approval-policy :policy)
@@ -1076,37 +1087,37 @@
                        (stringp approval-policy))
                    approval-policy)
                   (t nil)))
-   :input-schema (copy-tree (desktop-task-manifest-request-schema manifest))
-   :output-schema (copy-tree (desktop-task-manifest-result-schema manifest))
-   :backend-kind (desktop-task-manifest-backend-kind manifest)
-   :backend-ref (desktop-task-manifest-backend-ref manifest)
-   :execution-mode (desktop-task-manifest-execution-mode manifest)
-   :retry-policy (copy-tree (desktop-task-manifest-retry-policy manifest))
-   :metadata (list :manifest-id (desktop-task-manifest-id manifest)
-                   :description (desktop-task-manifest-description manifest)
-                   :discoverable-p (desktop-task-manifest-discoverable-p manifest)
-                   :tags (copy-list (or (desktop-task-manifest-tags manifest) '()))
-                   :manifest-metadata (copy-tree (or (desktop-task-manifest-metadata manifest) '())))))
+   :input-schema (copy-tree (sbcl-agent::desktop-task-manifest-request-schema manifest))
+   :output-schema (copy-tree (sbcl-agent::desktop-task-manifest-result-schema manifest))
+   :backend-kind (sbcl-agent::desktop-task-manifest-backend-kind manifest)
+   :backend-ref (sbcl-agent::desktop-task-manifest-backend-ref manifest)
+   :execution-mode (sbcl-agent::desktop-task-manifest-execution-mode manifest)
+   :retry-policy (copy-tree (sbcl-agent::desktop-task-manifest-retry-policy manifest))
+   :metadata (list :manifest-id (sbcl-agent::desktop-task-manifest-id manifest)
+                   :description (sbcl-agent::desktop-task-manifest-description manifest)
+                   :discoverable-p (sbcl-agent::desktop-task-manifest-discoverable-p manifest)
+                   :tags (copy-list (or (sbcl-agent::desktop-task-manifest-tags manifest) '()))
+                   :manifest-metadata (copy-tree (or (sbcl-agent::desktop-task-manifest-metadata manifest) '())))))
 
 (defun desktop-task-capability-registry-definitions ()
   (mapcar #'desktop-task-capability-definition
-          (list-registered-desktop-task-manifests :discoverable-only-p nil)))
+          (sbcl-agent::list-registered-desktop-task-manifests :discoverable-only-p nil)))
 
 (defun actor-capability-registry-definitions (session)
   (loop for definition in (actor-registry-definitions session)
         append
-        (loop for capability in (actor-definition-capabilities definition)
+        (loop for capability in (sbcl-agent::actor-definition-capabilities definition)
               collect
               (make-capability-definition
                :id (normalize-capability-id capability)
                :source-kind :actor
-               :provider-id (actor-definition-id definition)
-               :actor-role (actor-definition-role definition)
+               :provider-id (sbcl-agent::actor-definition-id definition)
+               :actor-role (sbcl-agent::actor-definition-role definition)
                :mutation-class :execution
                :approval-required-p nil
-               :scope (list :actor-id (actor-definition-id definition))
-               :metadata (list :display-name (actor-definition-display-name definition)
-                               :actor-metadata (copy-tree (or (actor-definition-metadata definition) '())))))))
+               :scope (list :actor-id (sbcl-agent::actor-definition-id definition))
+               :metadata (list :display-name (sbcl-agent::actor-definition-display-name definition)
+                               :actor-metadata (copy-tree (or (sbcl-agent::actor-definition-metadata definition) '())))))))
 
 (defun capability-registry-definitions (&optional session)
   (append (kernel-capability-registry-definitions)
@@ -1123,7 +1134,7 @@
        (or (null source-kind)
            (eq source-kind (capability-definition-source-kind definition)))
        (or (null actor-role)
-           (eq (normalize-actor-role actor-role :unknown)
+           (eq (sbcl-agent::normalize-actor-role actor-role :unknown)
                (capability-definition-actor-role definition)))
        (or (null mutation-class)
            (eq mutation-class (capability-definition-mutation-class definition)))
@@ -1133,25 +1144,30 @@
        (or (null backend-kind)
            (eq backend-kind (capability-definition-backend-kind definition)))))
 
-(defun capability-registry-query (&optional session &key id source-kind actor-role mutation-class approval-required-p backend-kind)
-  (remove-if-not
-   (lambda (definition)
-     (capability-definition-matches-p
-      definition
-      :id id
-      :source-kind source-kind
-      :actor-role actor-role
-      :mutation-class mutation-class
-      :approval-required-p approval-required-p
-      :backend-kind backend-kind))
-   (capability-registry-definitions session)))
+(defun capability-registry-session-and-options (arguments)
+  (if (and arguments
+           (not (keywordp (first arguments))))
+      (values (first arguments) (rest arguments))
+      (values nil arguments)))
 
-(defun capability-registry-find (&optional session &key id source-kind actor-role mutation-class approval-required-p backend-kind)
-  (first
-   (capability-registry-query session
-                              :id id
-                              :source-kind source-kind
-                              :actor-role actor-role
-                              :mutation-class mutation-class
-                              :approval-required-p approval-required-p
-                              :backend-kind backend-kind)))
+(defun capability-registry-query (&rest arguments)
+  (multiple-value-bind (session options)
+      (capability-registry-session-and-options arguments)
+    (destructuring-bind (&key id source-kind actor-role mutation-class
+                              approval-required-p backend-kind
+                              &allow-other-keys)
+        options
+      (remove-if-not
+       (lambda (definition)
+         (capability-definition-matches-p
+          definition
+          :id id
+          :source-kind source-kind
+          :actor-role actor-role
+          :mutation-class mutation-class
+          :approval-required-p approval-required-p
+          :backend-kind backend-kind))
+       (capability-registry-definitions session)))))
+
+(defun capability-registry-find (&rest arguments)
+  (first (apply #'capability-registry-query arguments)))

@@ -1,4 +1,4 @@
-(in-package #:sbcl-agent)
+(in-package #:sbcl-agent.system.trace)
 
 (defparameter +environment-trace-links-key+ :trace-links)
 
@@ -39,38 +39,38 @@
     (t nil)))
 
 (defun ensure-session-trace-links-slots (session)
-  (let ((environment (ignore-errors (session-bound-environment session))))
+  (let ((environment (ignore-errors (sbcl-agent::session-bound-environment session))))
     (when (and environment
-               (null (agent-session-trace-links session))
-               (listp (getf (environment-metadata environment) +environment-trace-links-key+)))
-      (setf (agent-session-trace-links session)
+               (null (sbcl-agent::agent-session-trace-links session))
+               (listp (getf (sbcl-agent::environment-metadata environment) +environment-trace-links-key+)))
+      (setf (sbcl-agent::agent-session-trace-links session)
             (remove nil
                     (mapcar #'canonicalize-trace-link-record
-                            (getf (environment-metadata environment) +environment-trace-links-key+))))))
-  (when (listp (agent-session-trace-links session))
-    (setf (agent-session-trace-links session)
+                            (getf (sbcl-agent::environment-metadata environment) +environment-trace-links-key+))))))
+  (when (listp (sbcl-agent::agent-session-trace-links session))
+    (setf (sbcl-agent::agent-session-trace-links session)
           (remove nil
                   (mapcar #'canonicalize-trace-link-record
-                          (agent-session-trace-links session)))))
-  (unless (listp (agent-session-trace-links session))
-    (setf (agent-session-trace-links session) '()))
-  (unless (or (null (agent-session-trace-links-tail session))
-              (consp (agent-session-trace-links-tail session)))
-    (setf (agent-session-trace-links-tail session) nil))
+                          (sbcl-agent::agent-session-trace-links session)))))
+  (unless (listp (sbcl-agent::agent-session-trace-links session))
+    (setf (sbcl-agent::agent-session-trace-links session) '()))
+  (unless (or (null (sbcl-agent::agent-session-trace-links-tail session))
+              (consp (sbcl-agent::agent-session-trace-links-tail session)))
+    (setf (sbcl-agent::agent-session-trace-links-tail session) nil))
   session)
 
 (defun sync-trace-links-to-environment (session)
   (ensure-session-trace-links-slots session)
-  (let ((environment (ignore-errors (session-bound-environment session))))
+  (let ((environment (ignore-errors (sbcl-agent::session-bound-environment session))))
     (when environment
-      (setf (getf (environment-metadata environment) +environment-trace-links-key+)
+      (setf (getf (sbcl-agent::environment-metadata environment) +environment-trace-links-key+)
             (mapcar #'trace-link-summary
-                    (agent-session-trace-links session)))))
+                    (sbcl-agent::agent-session-trace-links session)))))
   session)
 
 (defun list-trace-links (session)
   (ensure-session-trace-links-slots session)
-  (copy-list (or (agent-session-trace-links session) '())))
+  (copy-list (or (sbcl-agent::agent-session-trace-links session) '())))
 
 (defun trace-link-summary (link)
   (let ((record (canonicalize-trace-link-record link)))
@@ -193,13 +193,14 @@
     (when existing
       (setf (trace-link-created-at updated) (trace-link-created-at existing)))
     (setf (trace-link-updated-at updated) (get-universal-time)
-          (agent-session-trace-links session)
+          (sbcl-agent::agent-session-trace-links session)
           (cons updated
                 (remove (or existing-id (trace-link-id link))
-                        (agent-session-trace-links session)
+                        (sbcl-agent::agent-session-trace-links session)
                         :key #'trace-link-id
                         :test #'string=))
-          (agent-session-trace-links-tail session) (last (agent-session-trace-links session)))
+          (sbcl-agent::agent-session-trace-links-tail session)
+          (last (sbcl-agent::agent-session-trace-links session)))
     (sync-trace-links-to-environment session)
     updated))
 

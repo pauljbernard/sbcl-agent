@@ -922,7 +922,7 @@
                                (work-item-workflow-record session work-item)))
          (recovery-summary (turn-recovery-summary session turn operation-records))
          (action-assessment-summary (turn-action-assessment-summary operations))
-         (execution-handles (kernel-execution-summaries-by-target :turn-id
+         (execution-handles (execution-handle-summaries-by-target :turn-id
                                                                   (turn-id turn))))
     (append (turn-record-summary turn)
             (list :primary-execution-handle (first execution-handles)
@@ -996,12 +996,12 @@
          (workflow-record (and work-item
                                (work-item-workflow-record session work-item)))
          (work-item-summary (and work-item
-                                 (kernel-enrich-summary-with-executions
+                                 (enrich-summary-with-executions
                                   (work-item-summary work-item)
                                   :work-item-id
                                   (work-item-id work-item))))
          (workflow-record-summary (and workflow-record
-                                       (kernel-enrich-summary-with-executions
+                                       (enrich-summary-with-executions
                                         (workflow-record-summary workflow-record)
                                         :workflow-record-id
                                         (workflow-record-id workflow-record))))

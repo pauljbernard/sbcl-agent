@@ -77,7 +77,7 @@
 
 (defun current-environment-runtime-history ()
   (let ((environment (ensure-environment)))
-    (or (environment-runtime-history environment) '())))
+    (environment-runtime-history-snapshot environment)))
 
 (defun append-runtime-history-entry (session kind payload)
   (let* ((environment (ensure-environment))

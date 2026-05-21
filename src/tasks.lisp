@@ -21,11 +21,36 @@
   work-item-id
   progress-events)
 
+(declaim (notinline task-id
+                    task-kind
+                    task-command
+                    task-payload
+                    task-orchestration-group-id
+                    task-ownership-scope
+                    task-merge-policy
+                    task-shared-context
+                    task-status
+                    task-priority
+                    task-created-at
+                    task-started-at
+                    task-completed-at
+                    task-result
+                    task-error
+                    task-session-id
+                    task-worker-id
+                    task-work-item-id
+                    task-progress-events))
+
 (defstruct worker-state
   id
   thread
   running-p
   session-id)
+
+(declaim (notinline worker-state-id
+                    worker-state-thread
+                    worker-state-running-p
+                    worker-state-session-id))
 
 (defparameter *worker-sleep-seconds* 0.1)
 (defparameter *task-progress-callback* nil)
@@ -48,7 +73,7 @@
 
 (defun environment-task-records (environment &optional session)
   (let* ((agent-state (and environment
-                           (environment-agent-state environment)))
+                           (environment-agent-state-snapshot environment)))
          (existing (and agent-state
                         (environment-agent-state-tasks agent-state))))
     (or existing
@@ -62,7 +87,7 @@
 
 (defun environment-worker-records (environment &optional session)
   (let* ((agent-state (and environment
-                           (environment-agent-state environment)))
+                           (environment-agent-state-snapshot environment)))
          (existing (and agent-state
                         (environment-agent-state-workers agent-state))))
     (or existing
@@ -425,7 +450,9 @@
     (setf (worker-state-thread worker)
           (sb-thread:make-thread
            (lambda ()
-             (worker-loop session provider worker))
+             (let ((*current-session* session)
+                   (*current-environment* (session-bound-environment session)))
+               (worker-loop session provider worker)))
            :name worker-id))
     (multiple-value-bind (workers tail)
         (append-linked-item (agent-session-workers session)

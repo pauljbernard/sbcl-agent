@@ -1,4 +1,4 @@
-(in-package #:sbcl-agent)
+(in-package #:sbcl-agent.system.policy)
 
 (defstruct capability-policy
   id
@@ -96,6 +96,24 @@
                             :risk-level :high)
 (register-capability-policy :project-governance-write
                             "Mutate governed project artifacts such as constitutions, requirements, journeys, architecture decisions, and quality gates."
+                            :risk-level :high)
+(register-capability-policy :platform-package
+                            "Export a governed developer platform package descriptor."
+                            :risk-level :high)
+(register-capability-policy :platform-import-package
+                            "Import a governed developer platform package into the active environment registry."
+                            :risk-level :high)
+(register-capability-policy :platform-activate-package
+                            "Activate an imported developer platform package in the active environment."
+                            :risk-level :high)
+(register-capability-policy :platform-deactivate-package
+                            "Deactivate an imported developer platform package in the active environment."
+                            :risk-level :high)
+(register-capability-policy :platform-install-package
+                            "Install a governed developer platform package by importing and activating it in the active environment."
+                            :risk-level :high)
+(register-capability-policy :platform-run-harness
+                            "Run a governed developer platform harness that may exercise platform workflows and evaluations."
                             :risk-level :high)
 (register-capability-policy :alignment-reconciliation-execute
                             "Materialize a reconciliation decision into governed corrective work that may change runtime, intent, or both."

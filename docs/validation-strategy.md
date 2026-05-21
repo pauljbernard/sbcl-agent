@@ -18,7 +18,7 @@ This strategy defines how the project should validate and sustain the now-implem
 
 Validation must prove five things:
 
-1. kernel invariants are real
+1. execution and governance invariants are real
 2. execution handles are the true system abstraction
 3. governance remains non-bypassable
 4. the shell reflects real system objects
@@ -38,7 +38,7 @@ Examples:
 - environment persistence
 - desktop posture rendering
 
-### 2. Kernel Invariant Validation
+### 2. Execution Invariant Validation
 
 Prove:
 
@@ -92,6 +92,39 @@ For each major phase, maintain:
 - regression tests
 - full-suite status
 
+## Current Validation Entry Points
+
+The current repository should be validated through a layered set of entrypoints rather than one monolithic suite:
+
+- baseline runtime health:
+  - `./bin/sbcl-agent doctor`
+- broader backend regression:
+  - `./bin/run-tests`
+  - `./bin/run-coverage`
+- dedicated concurrency validation:
+  - `./bin/run-concurrency-regression`
+  - `./bin/run-concurrency-performance`
+- dedicated actor-system validation:
+  - `./bin/run-actor-system-regression`
+  - `./bin/run-actor-system-performance`
+
+These commands now represent the most honest validation shape of the implemented architecture: broad smoke and service coverage for the whole runtime, then focused regression and performance coverage for the concurrency substrate and the actor runtime itself.
+
+## Current Baseline Snapshot
+
+Latest local validation snapshot recorded during this documentation rebaseline on `2026-05-20`:
+
+- `doctor`: passed
+- concurrency regression: passed
+- actor-system regression: passed
+- actor-system performance: passed
+- concurrency performance: failed one enforced default budget
+  - `MIXED-LOAD-ACTOR-DISPATCH-LATENCY`
+  - observed average: `1.04 ms`
+  - configured default budget: `1.00 ms`
+
+That is the correct current posture to document: the dedicated validation program is real and broad, but it is not uniformly green.
+
 ## Review Standard
 
 A change is not validated merely because the UI looks correct or a single command works.
@@ -108,7 +141,7 @@ It is validated when:
 The next validation work should track:
 
 1. current-state behavioral integrity and full-suite stability
-2. kernel invariant sustainment
+2. execution and governance invariant sustainment
 3. backend-realism and compatibility containment
 4. shell / desktop / UX contract coherence
 5. platform and QA evidence governance

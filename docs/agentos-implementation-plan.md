@@ -1,4 +1,6 @@
-# IntentOS – Implementation Plan
+# IntentOS – Historical Implementation Plan
+
+> Historical note: this document is preserved as the executed architecture program. For the current implemented model, prefer [Architecture]({{ '/architecture.html' | relative_url }}) and [Actor Runtime, Concurrency, And Governance]({{ '/robust-actor-kernel-architecture.html' | relative_url }}).
 
 ## Phase 0 — Kernel Invariants
 

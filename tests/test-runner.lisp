@@ -1,5 +1,8 @@
 (in-package #:sbcl-agent/tests)
 
+(defparameter *test-report-stem* "latest-report")
+(defparameter *run-test-case-full-gc-p* t)
+
 (defun run-test-case (name thunk)
   (funcall thunk)
   (format t "PASS ~A~%" name))
@@ -108,8 +111,16 @@
               #'actor-thread-pool-prepares-resolution-inside-actor-test)
         (list "kernel-desktop-task-invoke-authoritative-ingress-test"
               #'kernel-desktop-task-invoke-authoritative-ingress-test)
-        (list "actor-desktop-task-execution-uses-kernelized-command-services-test"
-              #'actor-desktop-task-execution-uses-kernelized-command-services-test)
+        (list "kernel-concurrency-policy-test"
+              #'kernel-concurrency-policy-test)
+        (list "kernel-public-api-concurrency-test"
+              #'kernel-public-api-concurrency-test)
+        (list "concurrency-core-keyed-serialization-test"
+              #'concurrency-core-keyed-serialization-test)
+        (list "runtime-command-services-are-actor-governed-test"
+              #'runtime-command-services-are-actor-governed-test)
+        (list "actor-desktop-task-execution-uses-registered-command-services-test"
+              #'actor-desktop-task-execution-uses-registered-command-services-test)
         (list "desktop-task-actor-wrapper-services-test"
               #'desktop-task-actor-wrapper-services-test)
         (list "approval-continuation-preserves-authority-lineage-test"
@@ -448,6 +459,7 @@
    (list "post-mutation-retrieval-dossier-service-contract-test" #'post-mutation-retrieval-dossier-service-contract-test)
    (list "service-envelope-helper-test" #'service-envelope-helper-test)
    (list "environment-service-contract-test" #'environment-service-contract-test)
+   (list "trust-boundary-service-contract-test" #'trust-boundary-service-contract-test)
    (list "environment-desktop-preferences-service-contract-test" #'environment-desktop-preferences-service-contract-test)
    (list "environment-image-service-contract-test" #'environment-image-service-contract-test)
    (list "environment-provider-service-contract-test" #'environment-provider-service-contract-test)
@@ -685,6 +697,18 @@
                :label "Internal Evaluations"
                :entrypoint "./bin/run-evals"
                :kind :evaluation)
+         (list :id :actor-system-regressions
+               :label "Actor System Regressions"
+               :entrypoint "./bin/run-actor-system-regression"
+               :kind :focused-suite)
+         (list :id :actor-system-performance-benchmarks
+               :label "Actor System Performance Benchmarks"
+               :entrypoint "./bin/run-actor-system-performance"
+               :kind :performance)
+         (list :id :concurrency-performance-benchmarks
+               :label "Concurrency Performance Benchmarks"
+               :entrypoint "./bin/run-concurrency-performance"
+               :kind :performance)
          (list :id :performance-benchmarks
                :label "Performance Benchmarks"
                :entrypoint "./bin/run-performance"
@@ -732,7 +756,9 @@
     (unwind-protect
          (handler-case
              (progn
-               (funcall thunk)
+               (let ((sbcl-agent::*current-session* nil)
+                     (sbcl-agent::*current-environment* nil))
+                 (funcall thunk))
                (let ((duration (/ (- (get-internal-real-time) started)
                                   internal-time-units-per-second)))
                  (format t "PASS [~(~A~)] ~A~%" category name)
@@ -750,7 +776,8 @@
                      :duration-seconds duration
                      :error (princ-to-string condition)))))
       (ignore-errors
-        (sb-ext:gc :full t)))))
+        (when *run-test-case-full-gc-p*
+          (sb-ext:gc :full t))))))
 
 (defun summarize-test-results (results)
   (let* ((total (length results))
@@ -798,9 +825,19 @@
     (ensure-directories-exist root)
     root))
 
+(defun normalized-test-report-stem ()
+  (let ((stem (or *test-report-stem* "latest-report")))
+    (string-downcase
+     (substitute #\- #\Space
+                 (substitute #\- #\_
+                             (princ-to-string stem))))))
+
 (defun write-test-report-json (report)
   (let* ((root (ensure-test-report-directory))
-         (path (merge-pathnames #P"latest-report.json" root)))
+         (path (merge-pathnames
+                (make-pathname :name (normalized-test-report-stem)
+                               :type "json")
+                root)))
     (with-open-file (stream path
                             :direction :output
                             :if-exists :supersede
@@ -812,7 +849,10 @@
 
 (defun write-test-report-markdown (report)
   (let* ((root (ensure-test-report-directory))
-         (path (merge-pathnames #P"latest-report.md" root))
+         (path (merge-pathnames
+                (make-pathname :name (normalized-test-report-stem)
+                               :type "md")
+                root))
          (summary (getf report :summary)))
     (with-open-file (stream path
                             :direction :output
@@ -869,37 +909,44 @@
 
 (defun run-and-write-test-report ()
   (format t "Running sbcl-agent categorized test program...~%")
-  (let* ((results (run-test-program :stop-on-failure nil))
-         (report (generate-test-program-report results))
-         (json-path (write-test-report-json report))
-         (markdown-path (write-test-report-markdown report))
-         (summary (getf report :summary)))
-    (format t "test-report> total=~D passed=~D failed=~D duration=~,3Fs~%"
-            (or (getf summary :total) 0)
-            (or (getf summary :passed) 0)
-            (or (getf summary :failed) 0)
-            (or (getf summary :duration-seconds) 0.0))
-    (format t "test-report/json> ~A~%" (namestring json-path))
-    (format t "test-report/markdown> ~A~%" (namestring markdown-path))
-    report))
+  (let ((*test-report-stem* "latest-report")
+        (*run-test-case-full-gc-p* nil))
+    (let* ((results (run-test-program :stop-on-failure nil))
+           (report (generate-test-program-report results))
+           (json-path (write-test-report-json report))
+           (markdown-path (write-test-report-markdown report))
+           (summary (getf report :summary)))
+      (format t "test-report> total=~D passed=~D failed=~D duration=~,3Fs~%"
+              (or (getf summary :total) 0)
+              (or (getf summary :passed) 0)
+              (or (getf summary :failed) 0)
+              (or (getf summary :duration-seconds) 0.0))
+      (format t "test-report/json> ~A~%" (namestring json-path))
+      (format t "test-report/markdown> ~A~%" (namestring markdown-path))
+      report)))
 
 (defun run-and-write-test-report-for-categories (categories)
   (format t "Running sbcl-agent focused test program for ~{~A~^, ~}...~%"
           categories)
-  (let* ((results (run-test-program-category :categories categories
-                                             :stop-on-failure nil))
-         (report (generate-test-program-report results))
-         (json-path (write-test-report-json report))
-         (markdown-path (write-test-report-markdown report))
-         (summary (getf report :summary)))
-    (format t "test-report> total=~D passed=~D failed=~D duration=~,3Fs~%"
-            (or (getf summary :total) 0)
-            (or (getf summary :passed) 0)
-            (or (getf summary :failed) 0)
-            (or (getf summary :duration-seconds) 0.0))
-    (format t "test-report/json> ~A~%" (namestring json-path))
-    (format t "test-report/markdown> ~A~%" (namestring markdown-path))
-    report))
+  (let ((*test-report-stem*
+          (if (= (length categories) 1)
+              (format nil "~(~A~)-report" (first categories))
+              "focused-report"))
+        (*run-test-case-full-gc-p* nil))
+    (let* ((results (run-test-program-category :categories categories
+                                               :stop-on-failure nil))
+           (report (generate-test-program-report results))
+           (json-path (write-test-report-json report))
+           (markdown-path (write-test-report-markdown report))
+           (summary (getf report :summary)))
+      (format t "test-report> total=~D passed=~D failed=~D duration=~,3Fs~%"
+              (or (getf summary :total) 0)
+              (or (getf summary :passed) 0)
+              (or (getf summary :failed) 0)
+              (or (getf summary :duration-seconds) 0.0))
+      (format t "test-report/json> ~A~%" (namestring json-path))
+      (format t "test-report/markdown> ~A~%" (namestring markdown-path))
+      report)))
 
 (defun run-and-write-test-report-for-harness (harness-id)
   (let ((harness (find-test-harness harness-id)))

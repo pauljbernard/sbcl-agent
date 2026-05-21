@@ -1,5 +1,8 @@
 (in-package #:sbcl-agent)
 
+(defparameter *environment-runtime-history-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-runtime-history"))
+
 (defstruct environment-runtime-state
   runtimes
   active-runtime-id
@@ -7,6 +10,33 @@
   eval-history
   open-resources
   summaries)
+
+(defun call-with-environment-runtime-history (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*environment-runtime-history-lock*)
+    (funcall thunk)))
+
+(defun environment-runtime-history-snapshot (environment)
+  (call-with-environment-runtime-history
+   environment
+   (lambda ()
+     (copy-list (or (environment-runtime-history environment) '())))))
+
+(defun replace-environment-runtime-history (environment entries)
+  (call-with-environment-runtime-history
+   environment
+   (lambda ()
+     (let ((runtime-state (or (environment-runtime-state environment)
+                              (setf (environment-runtime-state environment)
+                                    (make-environment-runtime-state
+                                     :runtimes '()
+                                     :active-runtime-id (default-runtime-id)
+                                     :loaded-systems '()
+                                     :eval-history '()
+                                     :open-resources '()
+                                     :summaries '())))))
+       (setf (environment-runtime-state-eval-history runtime-state)
+             entries)))))
 
 (defun default-runtime-id ()
   "runtime-primary")
@@ -46,7 +76,7 @@
          (loaded-systems (and runtime-state
                               (environment-runtime-state-loaded-systems runtime-state)))
          (eval-history (and runtime-state
-                            (environment-runtime-state-eval-history runtime-state))))
+                            (environment-runtime-history-snapshot environment))))
     (when runtime-state
       (setf (environment-runtime-state-summaries runtime-state)
             (list :runtime-count 1
@@ -58,25 +88,28 @@
   environment)
 
 (defun append-environment-runtime-history (environment entry)
-  (let ((runtime-state (or (environment-runtime-state environment)
-                           (setf (environment-runtime-state environment)
-                                 (make-environment-runtime-state
-                                  :runtimes '()
-                                  :active-runtime-id (default-runtime-id)
-                                  :loaded-systems '()
-                                  :eval-history '()
-                                  :open-resources '()
-                                  :summaries '())))))
-    (setf (environment-runtime-state-eval-history runtime-state)
-          (append (environment-runtime-state-eval-history runtime-state)
-                  (list entry))))
+  (call-with-environment-runtime-history
+   environment
+   (lambda ()
+     (let ((runtime-state (or (environment-runtime-state environment)
+                              (setf (environment-runtime-state environment)
+                                    (make-environment-runtime-state
+                                     :runtimes '()
+                                     :active-runtime-id (default-runtime-id)
+                                     :loaded-systems '()
+                                     :eval-history '()
+                                     :open-resources '()
+                                     :summaries '())))))
+       (setf (environment-runtime-state-eval-history runtime-state)
+             (append (environment-runtime-state-eval-history runtime-state)
+                     (list entry))))))
   environment)
 
 (defun make-environment-runtime-state-from-session (environment session)
   (let* ((runtime-summary (make-runtime-summary-from-session session))
          (existing-runtime-state (environment-runtime-state environment))
          (existing-eval-history (and existing-runtime-state
-                                     (environment-runtime-state-eval-history existing-runtime-state)))
+                                     (environment-runtime-history-snapshot environment)))
          (existing-open-resources (and existing-runtime-state
                                        (environment-runtime-state-open-resources existing-runtime-state)))
          (loaded-systems (loaded-system-names)))

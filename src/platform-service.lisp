@@ -21,6 +21,8 @@
 (defparameter +platform-package-registry-key+ :platform-packages)
 (defparameter +platform-active-package-ids-key+ :platform-active-package-ids)
 (defparameter +platform-package-history-key+ :platform-package-history)
+(defparameter *platform-state-lock*
+  (sb-thread:make-mutex :name "platform-state-lock"))
 
 (defparameter +platform-sdk-command-entries+
   '((:command-id :platform/manifest
@@ -226,7 +228,7 @@
      :title "Internal Evaluations"
      :description "Run the built-in evaluation families that exercise governed execution, recovery, orchestration, and self-improvement behavior."
      :runner-package "SBCL-AGENT/TESTS"
-     :runner-symbol "RUN-INTERNAL-EVALUATIONS"
+     :runner-symbol "RUN-INTERNAL-EVALUATIONS-SMOKE"
      :report-shape :evaluation-report-v1)))
 
 (defun platform-harness-runner-function (entry)
@@ -383,10 +385,22 @@
 (defun platform-runtime-requirements-data ()
   (list :supported-package-format +platform-package-format+
         :supported-manifest-version +platform-manifest-version+
-        :required-kernel-class "execution-kernel"
-        :required-kernel-api '("invoke" "inspect" "control")
+        :required-runtime-class "execution-runtime"
+        :required-runtime-api '("invoke" "inspect" "control")
         :required-desktop-contract +platform-desktop-contract-id+
         :required-surface-contract +platform-surface-contract-id+))
+
+(defun platform-required-runtime-class (requirements)
+  (platform-json-object-entry requirements "required_runtime_class"))
+
+(defun platform-required-runtime-api (requirements)
+  (platform-json-object-entry requirements "required_runtime_api"))
+
+(defun platform-manifest-runtime-class (manifest)
+  (platform-json-object-entry manifest "runtime_class"))
+
+(defun platform-manifest-runtime-api (manifest)
+  (platform-json-object-entry manifest "runtime_api"))
 
 (defun platform-support-data ()
   (list :release-channel +platform-default-release-channel+
@@ -505,8 +519,8 @@
   (let* ((requirements (platform-json-object-entry descriptor "requires"))
          (supported-package-format (platform-json-object-entry requirements "supported_package_format"))
          (supported-manifest-version (platform-json-object-entry requirements "supported_manifest_version"))
-         (required-kernel-class (platform-json-object-entry requirements "required_kernel_class"))
-         (required-kernel-api (platform-json-object-entry requirements "required_kernel_api"))
+         (required-runtime-class (platform-required-runtime-class requirements))
+         (required-runtime-api (platform-required-runtime-api requirements))
          (required-desktop-contract (platform-json-object-entry requirements "required_desktop_contract"))
          (required-surface-contract (platform-json-object-entry requirements "required_surface_contract"))
          (issues '()))
@@ -517,11 +531,11 @@
       (push "requires supported_package_format does not match the supported IntentOS package format" issues))
     (unless (eql supported-manifest-version +platform-manifest-version+)
       (push "requires supported_manifest_version does not match the supported platform manifest version" issues))
-    (unless (string= (or required-kernel-class "") "execution-kernel")
-      (push "requires required_kernel_class must be execution-kernel" issues))
-    (unless (and (listp required-kernel-api)
-                 (equal required-kernel-api '("invoke" "inspect" "control")))
-      (push "requires required_kernel_api must expose invoke, inspect, and control" issues))
+    (unless (string= (or required-runtime-class "") "execution-runtime")
+      (push "requires required_runtime_class must be execution-runtime" issues))
+    (unless (and (listp required-runtime-api)
+                 (equal required-runtime-api '("invoke" "inspect" "control")))
+      (push "requires required_runtime_api must expose invoke, inspect, and control" issues))
     (unless (string= (or required-desktop-contract "") +platform-desktop-contract-id+)
       (push "requires required_desktop_contract does not match the supported desktop host contract" issues))
     (unless (string= (or required-surface-contract "") +platform-surface-contract-id+)
@@ -722,20 +736,61 @@
         :compatibility-kinds (mapcar (lambda (entry) (getf entry :kind))
                                      (getf manifest :compatibility-kinds))))
 
+(defun call-with-platform-state (environment thunk)
+  (declare (ignore environment))
+  (sb-thread:with-mutex (*platform-state-lock*)
+    (funcall thunk)))
+
+(defun %platform-registry-entries (environment)
+  (or (environment-metadata-value (ensure-environment environment)
+                                  +platform-package-registry-key+)
+      '()))
+
+(defun %platform-package-history-entries (environment)
+  (or (environment-metadata-value (ensure-environment environment)
+                                  +platform-package-history-key+)
+      '()))
+
+(defun %platform-active-package-ids (environment)
+  (or (environment-metadata-value (ensure-environment environment)
+                                  +platform-active-package-ids-key+)
+      '()))
+
+(defun replace-platform-registry-entries (environment entries)
+  (set-environment-metadata-value (ensure-environment environment)
+                                  +platform-package-registry-key+
+                                  entries))
+
+(defun replace-platform-package-history-entries (environment entries)
+  (set-environment-metadata-value (ensure-environment environment)
+                                  +platform-package-history-key+
+                                  entries))
+
+(defun replace-platform-active-package-ids (environment ids)
+  (set-environment-metadata-value (ensure-environment environment)
+                                  +platform-active-package-ids-key+
+                                  ids))
+
 (defun platform-registry-entries (&optional environment)
-  (copy-list (or (environment-metadata-value (ensure-environment environment)
-                                             +platform-package-registry-key+)
-                 '())))
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-platform-state
+     active-environment
+     (lambda ()
+       (copy-list (%platform-registry-entries active-environment))))))
 
 (defun platform-package-history-entries (&optional environment)
-  (copy-list (or (environment-metadata-value (ensure-environment environment)
-                                             +platform-package-history-key+)
-                 '())))
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-platform-state
+     active-environment
+     (lambda ()
+       (copy-list (%platform-package-history-entries active-environment))))))
 
 (defun platform-active-package-ids (&optional environment)
-  (copy-list (or (environment-metadata-value (ensure-environment environment)
-                                             +platform-active-package-ids-key+)
-                 '())))
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-platform-state
+     active-environment
+     (lambda ()
+       (copy-list (%platform-active-package-ids active-environment))))))
 
 (defun platform-entry-active-p (entry &optional environment)
   (or (getf entry :active-p)
@@ -773,7 +828,6 @@
                                             manual-recovery-override-p
                                             untrusted-override-p)
   (let* ((active-environment (ensure-environment environment))
-         (history (platform-package-history-entries active-environment))
          (entry (list :timestamp (get-universal-time)
                       :action action
                       :package-id (getf package-summary :package-id)
@@ -790,9 +844,13 @@
                       :manual-recovery-override-p manual-recovery-override-p
                       :untrusted-override-p untrusted-override-p
                       :active-p active-p)))
-    (set-environment-metadata-value active-environment
-                                    +platform-package-history-key+
-                                    (append history (list entry)))
+    (call-with-platform-state
+     active-environment
+     (lambda ()
+       (replace-platform-package-history-entries
+        active-environment
+        (append (%platform-package-history-entries active-environment)
+                (list entry)))))
     entry))
 
 (defun platform-history-override-count (history)
@@ -868,22 +926,24 @@
         :test #'string=))
 
 (defun platform-update-registry-entry (environment package-id updater)
-  (let* ((registry (platform-registry-entries environment))
-         (updated nil)
-         (updated-registry
-           (mapcar (lambda (entry)
-                     (if (string= (getf entry :package-id) package-id)
-                         (progn
-                           (setf updated t)
-                           (funcall updater (copy-list entry)))
-                         entry))
-                   registry)))
-    (unless updated
-      (error "Unknown imported platform package ~A" package-id))
-    (set-environment-metadata-value environment
-                                    +platform-package-registry-key+
-                                    updated-registry)
-    updated-registry))
+  (let ((active-environment (ensure-environment environment)))
+    (call-with-platform-state
+     active-environment
+     (lambda ()
+       (let* ((registry (%platform-registry-entries active-environment))
+              (updated nil)
+              (updated-registry
+                (mapcar (lambda (entry)
+                          (if (string= (getf entry :package-id) package-id)
+                              (progn
+                                (setf updated t)
+                                (funcall updater (copy-list entry)))
+                              entry))
+                        registry)))
+         (unless updated
+           (error "Unknown imported platform package ~A" package-id))
+         (replace-platform-registry-entries active-environment updated-registry)
+         updated-registry)))))
 
 (defun platform-entry-manifest (entry)
   (getf (platform-json-object-entry (parse-platform-package-file (getf entry :path))
@@ -1117,8 +1177,8 @@
          (contents (platform-json-object-entry descriptor "contents"))
          (manifest (platform-json-object-entry descriptor "manifest"))
          (manifest-version (platform-json-object-entry manifest "manifest_version"))
-         (kernel-class (platform-json-object-entry manifest "kernel_class"))
-         (kernel-api (platform-json-object-entry manifest "kernel_api"))
+         (runtime-class (platform-manifest-runtime-class manifest))
+         (runtime-api (platform-manifest-runtime-api manifest))
          (capabilities (platform-json-object-entry manifest "capabilities"))
          (policies (platform-json-object-entry manifest "policies"))
          (workflows (platform-json-object-entry manifest "workflows"))
@@ -1150,11 +1210,11 @@
       (push "manifest is required" issues))
     (unless (eql manifest-version +platform-manifest-version+)
       (push "manifest_version does not match the supported platform manifest version" issues))
-    (unless (string= (or kernel-class "") "execution-kernel")
-      (push "manifest kernel_class must be execution-kernel" issues))
-    (unless (and (listp kernel-api)
-                 (equal kernel-api '("invoke" "inspect" "control")))
-      (push "manifest kernel_api must expose invoke, inspect, and control" issues))
+    (unless (string= (or runtime-class "") "execution-runtime")
+      (push "manifest runtime_class must be execution-runtime" issues))
+    (unless (and (listp runtime-api)
+                 (equal runtime-api '("invoke" "inspect" "control")))
+      (push "manifest runtime_api must expose invoke, inspect, and control" issues))
     (unless (listp capabilities)
       (push "manifest capabilities must be an array" issues))
     (unless (listp policies)
@@ -1388,6 +1448,114 @@
                                                                   :session session
                                                                   :environment active-environment))))
 
+(defun make-platform-control-actor-address (session)
+  (make-standard-actor-address :platform
+                               :scope (agent-session-id session)))
+
+(defun make-platform-control-request (session action capability
+                                      &key payload metadata environment)
+  (make-governed-desktop-task-request
+   :requester :context-chat
+   :target :platform
+   :operation action
+   :capability capability
+   :payload payload
+   :metadata (append (list :session-id (agent-session-id session)
+                           :actor-slice :platform-control-v1)
+                     (when environment
+                       (list :environment-id (environment-id environment)))
+                     metadata)))
+
+(defun actorize-platform-command-response (response
+                                           &key actor-execution-job-id
+                                             governance-authority
+                                             policy-id
+                                             approval-required-p
+                                             approval-granted-p)
+  (if (listp response)
+      (let* ((metadata (copy-list (or (service-response-metadata response) '())))
+             (data (service-response-data response)))
+        (when actor-execution-job-id
+          (setf (getf metadata :actor-execution-job-id) actor-execution-job-id))
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
+              (getf response :metadata) metadata)
+        (when (keyword-plist-p data)
+          (let ((updated-data (copy-list data)))
+            (when actor-execution-job-id
+              (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id))
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
+                  (getf response :data) updated-data)))
+        response)
+      response))
+
+(defun platform-command-policy-id (capability)
+  (let ((normalized (capability-name-string capability)))
+    (cond
+      ((string= normalized "platform/package") :platform-package)
+      ((string= normalized "platform/import-package") :platform-import-package)
+      ((string= normalized "platform/activate-package") :platform-activate-package)
+      ((string= normalized "platform/deactivate-package") :platform-deactivate-package)
+      ((string= normalized "platform/install-package") :platform-install-package)
+      ((string= normalized "platform/run-harness") :platform-run-harness)
+      (t nil))))
+
+(defun platform-command-approval-required-p (policy-id)
+  (let ((policy (and policy-id
+                     (ignore-errors (ensure-capability-policy policy-id)))))
+    (and policy
+         (not (eq (capability-policy-default-grant-mode policy) :implicit)))))
+
+(defun call-with-platform-governed-actor (session request thunk capability action
+                                          &key environment metadata policy-id approval-required-p)
+  (let* ((actor-address (make-platform-control-actor-address session))
+         (resolved-policy-id (or policy-id (platform-command-policy-id capability)))
+         (resolved-approval-required-p
+           (if (null approval-required-p)
+               (platform-command-approval-required-p resolved-policy-id)
+               approval-required-p))
+         (actor-context
+           (make-actor-execution-context
+            :actor-id (actor-address-id actor-address)
+            :capability capability
+            :authority :governed-runtime
+            :policy-id resolved-policy-id
+            :target :platform
+            :operation action
+            :request-id (desktop-task-request-id request)
+            :approval-required-p resolved-approval-required-p
+            :metadata (append (when environment
+                                (list :environment-id (environment-id environment)))
+                              metadata)))
+         (approval-granted-p (and resolved-approval-required-p
+                                  resolved-policy-id
+                                  (ignore-errors (policy-approved-p session resolved-policy-id)))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (when (fboundp 'update-current-actor-execution-context)
+         (update-current-actor-execution-context actor-context :replace-p t))
+       (when (and resolved-approval-required-p resolved-policy-id)
+         (ensure-policy-approved session resolved-policy-id))
+       (actorize-platform-command-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)
+        :governance-authority :actor-runtime
+        :policy-id resolved-policy-id
+        :approval-required-p resolved-approval-required-p
+        :approval-granted-p approval-granted-p))
+     :context actor-context)))
+
 (defun command-platform-validate-package-service (path &key environment session)
   (let* ((descriptor (parse-platform-package-file path))
          (issues (platform-package-validation-issues descriptor))
@@ -1409,7 +1577,7 @@
                                                                     :session session
                                                                     :environment active-environment))))
 
-(defun command-platform-import-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
+(defun perform-platform-import-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
   (let* ((active-environment (platform-resolve-environment :environment environment
                                                            :session session))
          (descriptor (parse-platform-package-file path))
@@ -1457,23 +1625,29 @@
                                :key (lambda (entry) (getf entry :package-id))
                                :test #'string=))
              (updated-registry (append registry (list summary))))
-        (set-environment-metadata-value active-environment
-                                        +platform-package-registry-key+
-                                        updated-registry)
-        (record-platform-package-history active-environment
-                                         :import
-                                         summary
-                                         :session session
-                                         :update-posture update-posture
-                                         :downgrade-p downgrade-p
-                                         :deprecated-p deprecated-p
-                                         :manual-recovery-p manual-recovery-p
-                                         :untrusted-p untrusted-p
-                                         :downgrade-override-p (and downgrade-p allow-downgrade-p)
-                                         :deprecated-override-p (and deprecated-p allow-deprecated-p)
-                                         :manual-recovery-override-p (and manual-recovery-p allow-manual-recovery-p)
-                                         :untrusted-override-p (and untrusted-p allow-untrusted-p)
-                                         :active-p (getf summary :active-p))
+        (call-with-platform-state
+         active-environment
+         (lambda ()
+           (replace-platform-registry-entries active-environment updated-registry)
+           (replace-platform-package-history-entries
+            active-environment
+            (append (%platform-package-history-entries active-environment)
+                    (list (list :timestamp (get-universal-time)
+                                :action :import
+                                :package-id (getf summary :package-id)
+                                :package-version (getf summary :package-version)
+                                :path (getf summary :path)
+                                :session-id (and session (agent-session-id session))
+                                :update-posture update-posture
+                                :downgrade-p downgrade-p
+                                :deprecated-p deprecated-p
+                                :manual-recovery-p manual-recovery-p
+                                :untrusted-p untrusted-p
+                                :downgrade-override-p (and downgrade-p allow-downgrade-p)
+                                :deprecated-override-p (and deprecated-p allow-deprecated-p)
+                                :manual-recovery-override-p (and manual-recovery-p allow-manual-recovery-p)
+                                :untrusted-override-p (and untrusted-p allow-untrusted-p)
+                                :active-p (getf summary :active-p)))))))
         (make-service-command-response :platform
                                        :import-package
                                        (list :path (platform-path-designator path)
@@ -1484,9 +1658,40 @@
                                                                                             active-environment))
                                                                updated-registry))
                                        :metadata (make-service-metadata :authority :environment
-                                                                        :command-model :platform-package-import-v1
+                                                                        :command-model :platform-package-import-v2
                                                                         :session session
-                                                                        :environment active-environment))))))
+                                                                        :environment active-environment
+                                                                        :policy-id :platform-import-package))))))
+
+(defun command-platform-import-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (request (make-platform-control-request session
+                                                 :import-package
+                                                 :platform/import-package
+                                                 :payload (list :path (platform-path-designator path)
+                                                                :allow-downgrade allow-downgrade-p
+                                                                :allow-untrusted allow-untrusted-p
+                                                                :allow-deprecated allow-deprecated-p
+                                                                :allow-manual-recovery allow-manual-recovery-p)
+                                                 :environment active-environment
+                                                 :metadata (list :path (platform-path-designator path)))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-import-package-service path
+                                                :environment active-environment
+                                                :session session
+                                                :allow-downgrade-p allow-downgrade-p
+                                                :allow-untrusted-p allow-untrusted-p
+                                                :allow-deprecated-p allow-deprecated-p
+                                                :allow-manual-recovery-p allow-manual-recovery-p))
+     :platform/import-package
+     :import-package
+     :environment active-environment
+     :metadata (list :path (platform-path-designator path))
+     :policy-id :platform-import-package)))
 
 (defun query-platform-package-registry-service (&key environment session)
   (let* ((active-environment (platform-resolve-environment :environment environment
@@ -1628,7 +1833,7 @@
                                                                   :session session
                                                                   :environment active-environment))))
 
-(defun command-platform-run-harness-service (&key harness-id environment session)
+(defun perform-platform-run-harness-service (&key harness-id environment session)
   (let* ((active-environment (platform-resolve-environment :environment environment
                                                            :session session))
          (resolved-id (or harness-id :internal-evaluations))
@@ -1643,9 +1848,34 @@
                                      (list :harness (platform-harness-summary entry)
                                            :report report)
                                      :metadata (make-service-metadata :authority :environment
-                                                                      :command-model :platform-harness-run-v1
+                                                                      :command-model :platform-harness-run-v2
                                                                       :session session
-                                                                      :environment active-environment)))))
+                                                                      :environment active-environment
+                                                                      :policy-id :platform-run-harness)))))
+
+(defun command-platform-run-harness-service (&key harness-id environment session)
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (resolved-id (or harness-id :internal-evaluations))
+         (request (make-platform-control-request session
+                                                 :run-harness
+                                                 :platform/run-harness
+                                                 :payload (list :harness-id resolved-id)
+                                                 :environment active-environment
+                                                 :metadata (list :harness-id resolved-id))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-run-harness-service
+        :harness-id resolved-id
+        :environment active-environment
+        :session session))
+     :platform/run-harness
+     :run-harness
+     :environment active-environment
+     :metadata (list :harness-id resolved-id)
+     :policy-id :platform-run-harness)))
 
 (defun query-platform-profile-service (&key environment session)
   (let ((active-environment (platform-resolve-environment :environment environment
@@ -1658,7 +1888,7 @@
                                                                   :session session
                                                                   :environment active-environment))))
 
-(defun command-platform-activate-package-service (package-id &key environment session)
+(defun perform-platform-activate-package-service (package-id &key environment session)
   (let ((active-environment (platform-resolve-environment :environment environment
                                                           :session session)))
     (let* ((activated-at (get-universal-time))
@@ -1675,28 +1905,57 @@
                                        (platform-active-package-ids active-environment)
                                        :test #'string=))
            (entry (platform-find-registry-entry package-id active-environment)))
-      (set-environment-metadata-value active-environment
-                                      +platform-active-package-ids-key+
-                                      updated-active-ids)
-      (record-platform-package-history active-environment
-                                       :activate
-                                       entry
-                                       :session session
-                                       :active-p t)
+      (call-with-platform-state
+       active-environment
+       (lambda ()
+         (replace-platform-active-package-ids active-environment updated-active-ids)
+         (replace-platform-package-history-entries
+          active-environment
+          (append (%platform-package-history-entries active-environment)
+                  (list (list :timestamp (get-universal-time)
+                              :action :activate
+                              :package-id (getf entry :package-id)
+                              :package-version (getf entry :package-version)
+                              :path (getf entry :path)
+                              :session-id (and session (agent-session-id session))
+                              :active-p t))))))
       (make-service-command-response :platform
                                      :activate-package
                                      (list :package (platform-registry-summary entry active-environment)
                                            :active-count (length updated-active-ids)
                                            :registry-count (length updated-registry))
                                      :metadata (make-service-metadata :authority :environment
-                                                                     :command-model :platform-package-activation-v1
+                                                                     :command-model :platform-package-activation-v2
                                                                      :session session
-                                                                     :environment active-environment)))))
+                                                                     :environment active-environment
+                                                                     :policy-id :platform-activate-package)))))
 
-(defun command-platform-install-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
+(defun command-platform-activate-package-service (package-id &key environment session)
   (let* ((active-environment (platform-resolve-environment :environment environment
                                                            :session session))
-         (import-response (command-platform-import-package-service path
+         (request (make-platform-control-request session
+                                                 :activate-package
+                                                 :platform/activate-package
+                                                 :payload (list :package-id package-id)
+                                                 :environment active-environment
+                                                 :metadata (list :package-id package-id))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-activate-package-service package-id
+                                                  :environment active-environment
+                                                  :session session))
+     :platform/activate-package
+     :activate-package
+     :environment active-environment
+     :metadata (list :package-id package-id)
+     :policy-id :platform-activate-package)))
+
+(defun perform-platform-install-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (import-response (perform-platform-import-package-service path
                                                                   :allow-downgrade-p allow-downgrade-p
                                                                   :allow-deprecated-p allow-deprecated-p
                                                                   :allow-manual-recovery-p allow-manual-recovery-p
@@ -1704,7 +1963,7 @@
                                                                   :environment active-environment
                                                                   :session session))
          (package-id (getf (getf (service-response-data import-response) :package) :package-id))
-         (activate-response (command-platform-activate-package-service package-id
+         (activate-response (perform-platform-activate-package-service package-id
                                                                       :environment active-environment
                                                                       :session session))
          (activate-result (service-response-data activate-response))
@@ -1735,11 +1994,42 @@
                                          :registry-count (getf activate-result :registry-count)
                                          :profile (platform-active-package-profile active-environment))
                                    :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :platform-package-install-v1
+                                                                    :command-model :platform-package-install-v2
                                                                     :session session
-                                                                    :environment active-environment))))
+                                                                    :environment active-environment
+                                                                    :policy-id :platform-install-package))))
 
-(defun command-platform-deactivate-package-service (package-id &key environment session)
+(defun command-platform-install-package-service (path &key environment session allow-downgrade-p allow-untrusted-p allow-deprecated-p allow-manual-recovery-p)
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (request (make-platform-control-request session
+                                                 :install-package
+                                                 :platform/install-package
+                                                 :payload (list :path (platform-path-designator path)
+                                                                :allow-downgrade allow-downgrade-p
+                                                                :allow-untrusted allow-untrusted-p
+                                                                :allow-deprecated allow-deprecated-p
+                                                                :allow-manual-recovery allow-manual-recovery-p)
+                                                 :environment active-environment
+                                                 :metadata (list :path (platform-path-designator path)))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-install-package-service path
+                                                 :environment active-environment
+                                                 :session session
+                                                 :allow-downgrade-p allow-downgrade-p
+                                                 :allow-untrusted-p allow-untrusted-p
+                                                 :allow-deprecated-p allow-deprecated-p
+                                                 :allow-manual-recovery-p allow-manual-recovery-p))
+     :platform/install-package
+     :install-package
+     :environment active-environment
+     :metadata (list :path (platform-path-designator path))
+     :policy-id :platform-install-package)))
+
+(defun perform-platform-deactivate-package-service (package-id &key environment session)
   (let ((active-environment (platform-resolve-environment :environment environment
                                                           :session session)))
     (let* ((deactivated-at (get-universal-time))
@@ -1755,23 +2045,52 @@
                                        (platform-active-package-ids active-environment)
                                        :test #'string=))
            (entry (platform-find-registry-entry package-id active-environment)))
-      (set-environment-metadata-value active-environment
-                                      +platform-active-package-ids-key+
-                                      updated-active-ids)
-      (record-platform-package-history active-environment
-                                       :deactivate
-                                       entry
-                                       :session session
-                                       :active-p nil)
+      (call-with-platform-state
+       active-environment
+       (lambda ()
+         (replace-platform-active-package-ids active-environment updated-active-ids)
+         (replace-platform-package-history-entries
+          active-environment
+          (append (%platform-package-history-entries active-environment)
+                  (list (list :timestamp (get-universal-time)
+                              :action :deactivate
+                              :package-id (getf entry :package-id)
+                              :package-version (getf entry :package-version)
+                              :path (getf entry :path)
+                              :session-id (and session (agent-session-id session))
+                              :active-p nil))))))
       (make-service-command-response :platform
                                      :deactivate-package
                                      (list :package (platform-registry-summary entry active-environment)
                                            :active-count (length updated-active-ids)
                                            :registry-count (length updated-registry))
                                      :metadata (make-service-metadata :authority :environment
-                                                                      :command-model :platform-package-activation-v1
+                                                                      :command-model :platform-package-activation-v2
                                                                       :session session
-                                                                      :environment active-environment)))))
+                                                                      :environment active-environment
+                                                                      :policy-id :platform-deactivate-package)))))
+
+(defun command-platform-deactivate-package-service (package-id &key environment session)
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (request (make-platform-control-request session
+                                                 :deactivate-package
+                                                 :platform/deactivate-package
+                                                 :payload (list :package-id package-id)
+                                                 :environment active-environment
+                                                 :metadata (list :package-id package-id))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-deactivate-package-service package-id
+                                                    :environment active-environment
+                                                    :session session))
+     :platform/deactivate-package
+     :deactivate-package
+     :environment active-environment
+     :metadata (list :package-id package-id)
+     :policy-id :platform-deactivate-package)))
 
 (defun platform-capability-entries (&key capability-ids)
   (let* ((normalized-capability-ids (normalize-platform-capability-ids capability-ids))
@@ -1818,12 +2137,15 @@
          (workflow-entries (platform-workflow-entries capability-entries))
          (compatibility-entries (platform-compatibility-entries capability-entries))
          (sdk-command-entries (platform-sdk-command-entries))
-         (active-environment (or environment
-                                 (and session (session-bound-environment session))
-                                 (and (boundp '*current-environment*) *current-environment*))))
+         (active-environment (if session
+                                 (service-active-environment :session session
+                                                             :environment environment)
+                                 (or environment
+                                     (and (boundp '*current-environment*)
+                                          *current-environment*)))))
     (list :manifest-version +platform-manifest-version+
-          :kernel-class :execution-kernel
-          :kernel-api '(:invoke :inspect :control)
+          :runtime-class :execution-runtime
+          :runtime-api '(:invoke :inspect :control)
           :package-format +platform-package-format+
           :sdk-command-count (length sdk-command-entries)
           :workflow-count (length workflow-entries)
@@ -1849,7 +2171,6 @@
     :sdk-command-ids
     :compatibility-app-ids
     :compatibility-kinds
-    :kernel-api
     :capabilities
     :policies
     :workflows
@@ -1892,8 +2213,10 @@
      (princ-to-string value))))
 
 (defun query-platform-manifest-service (&key capability-ids environment session)
-  (let ((active-environment (or environment
-                                (and session (session-bound-environment session)))))
+  (let ((active-environment (if session
+                                (service-active-environment :session session
+                                                            :environment environment)
+                                environment)))
     (make-service-query-response :platform
                                  :manifest
                                  (platform-manifest-data :capability-ids capability-ids
@@ -1904,14 +2227,16 @@
                                                                   :session session
                                                                   :environment active-environment))))
 
-(defun command-platform-package-service (output-path &key package-id package-version title capability-ids environment session publisher build-system source-repository build-kind
+(defun perform-platform-package-service (output-path &key package-id package-version title capability-ids environment session publisher build-system source-repository build-kind
                                                     release-status replacement-package-id rollback-strategy
                                                     failure-mode backup-required-p recovery-runbook
                                                     ((:attested-p attested-p) t attested-p-supplied-p))
   (unless output-path
     (error "platform package requires an output path"))
-  (let* ((active-environment (or environment
-                                 (and session (session-bound-environment session))))
+  (let* ((active-environment (if session
+                                 (service-active-environment :session session
+                                                             :environment environment)
+                                 environment))
          (manifest (platform-manifest-data :capability-ids capability-ids
                                            :environment active-environment
                                            :session session))
@@ -2007,6 +2332,84 @@
                                            :contents (platform-package-contents-summary manifest)
                                            :manifest manifest))
                                    :metadata (make-service-metadata :authority :environment
-                                                                    :command-model :platform-package-v1
+                                                                    :command-model :platform-package-v2
                                                                     :session session
-                                                                    :environment active-environment))))
+                                                                    :environment active-environment
+                                                                    :policy-id :platform-package))))
+
+(defun command-platform-package-service (output-path &key package-id package-version title capability-ids environment session publisher build-system source-repository build-kind
+                                                    release-status replacement-package-id rollback-strategy
+                                                    failure-mode backup-required-p recovery-runbook
+                                                    ((:attested-p attested-p) t attested-p-supplied-p))
+  (unless session
+    (return-from command-platform-package-service
+      (perform-platform-package-service output-path
+                                        :package-id package-id
+                                        :package-version package-version
+                                        :title title
+                                        :capability-ids capability-ids
+                                        :environment environment
+                                        :session session
+                                        :publisher publisher
+                                        :build-system build-system
+                                        :source-repository source-repository
+                                        :build-kind build-kind
+                                        :release-status release-status
+                                        :replacement-package-id replacement-package-id
+                                        :rollback-strategy rollback-strategy
+                                        :failure-mode failure-mode
+                                        :backup-required-p backup-required-p
+                                        :recovery-runbook recovery-runbook
+                                        :attested-p attested-p)))
+  (let* ((active-environment (platform-resolve-environment :environment environment
+                                                           :session session))
+         (request (make-platform-control-request session
+                                                 :package
+                                                 :platform/package
+                                                 :payload (append (list :output-path (platform-path-designator output-path)
+                                                                        :package-id package-id
+                                                                        :package-version package-version
+                                                                        :title title
+                                                                        :publisher publisher
+                                                                        :build-system build-system
+                                                                        :source-repository source-repository
+                                                                        :build-kind build-kind
+                                                                        :release-status release-status
+                                                                        :replacement-package-id replacement-package-id
+                                                                        :rollback-strategy rollback-strategy
+                                                                        :failure-mode failure-mode
+                                                                        :recovery-runbook recovery-runbook
+                                                                        :capability-ids capability-ids)
+                                                                  (when backup-required-p
+                                                                    (list :backup-required-p backup-required-p))
+                                                                  (when attested-p-supplied-p
+                                                                    (list :attested-p attested-p)))
+                                                 :environment active-environment
+                                                 :metadata (list :output-path (platform-path-designator output-path)))))
+    (call-with-platform-governed-actor
+     session
+     request
+     (lambda ()
+       (perform-platform-package-service output-path
+                                         :package-id package-id
+                                         :package-version package-version
+                                         :title title
+                                         :capability-ids capability-ids
+                                         :environment active-environment
+                                         :session session
+                                         :publisher publisher
+                                         :build-system build-system
+                                         :source-repository source-repository
+                                         :build-kind build-kind
+                                         :release-status release-status
+                                         :replacement-package-id replacement-package-id
+                                         :rollback-strategy rollback-strategy
+                                         :failure-mode failure-mode
+                                         :backup-required-p backup-required-p
+                                         :recovery-runbook recovery-runbook
+                                         :attested-p attested-p))
+     :platform/package
+     :package
+     :environment active-environment
+     :metadata (list :output-path (platform-path-designator output-path))
+     :policy-id :platform-package)))

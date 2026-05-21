@@ -116,13 +116,15 @@
           :missing-evidence missing
           :status (if (null missing) :ready :blocked))))
 
-(defun project-quality-gate-recovery-summary ()
-  (let* ((status-response (query-environment-status-service (ensure-environment)
+(defun project-quality-gate-recovery-summary (session)
+  (let* ((environment (or (and session (session-bound-environment session))
+                          (ensure-environment)))
+         (status-response (query-environment-status-service environment
                                                             :include-alignment-state-p nil
                                                             :include-reconciliation-decision-p nil))
          (status-data (service-response-data status-response)))
     (or (getf status-data :recovery)
-        (environment-recovery-report (ensure-environment))
+        (environment-recovery-report environment)
         (list :recovery-valid-p t :status :steady))))
 
 (defun readiness-obligation-ready-p (status)
@@ -435,7 +437,7 @@
          (performance (or (getf testing-evidence :performance) '()))
          (say-turn-latency (or (getf performance :say-turn-latency) '()))
          (environment-save-load (or (getf performance :environment-save-load) '()))
-         (recovery-summary (project-quality-gate-recovery-summary))
+         (recovery-summary (project-quality-gate-recovery-summary session))
          (failed-tests (or (getf latest-summary :failed) 0))
          (unmet '()))
     (dolist (harness-id (or (project-quality-gate-required-harness-ids gate) '()))
@@ -528,7 +530,7 @@
          (testing-evidence (project-quality-gate-testing-evidence))
          (testing-suite-statuses (project-testing-suite-statuses project testing-strategy testing-evidence))
          (testing-evidence-status (project-testing-evidence-status-summary testing-strategy testing-evidence))
-         (recovery-summary (project-quality-gate-recovery-summary))
+         (recovery-summary (project-quality-gate-recovery-summary session))
          (readiness-obligation-summary (project-readiness-obligation-summary readiness-obligations))
          (readiness-summary (project-readiness-summary
                              quality-gate-evaluation
@@ -578,6 +580,12 @@
            :trace-neighborhood
            (trace-neighborhood-summary session :project (project-record-id project))))))
 
+(defun project-command-detail-payload (session project)
+  (project-detail-payload session
+                          project
+                          :include-alignment-state-p nil
+                          :include-reconciliation-decision-p nil))
+
 (defun query-project-list-service (session)
   (make-service-query-response
    :project
@@ -595,7 +603,7 @@
     (make-service-query-response
      :project
      :detail
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :read-model :project-detail-v1
                                       :session session))))
@@ -604,16 +612,34 @@
   (make-standard-actor-address :project
                                :scope (agent-session-id session)))
 
-(defun actorize-project-command-response (response &key actor-execution-job-id)
-  (if (and actor-execution-job-id
-           (listp response))
+(defun actorize-project-command-response (response
+                                          &key actor-execution-job-id
+                                            governance-authority
+                                            policy-id
+                                            approval-required-p
+                                            approval-granted-p)
+  (if (listp response)
       (let* ((metadata (copy-list (or (service-response-metadata response) '())))
              (data (service-response-data response)))
-        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+        (when actor-execution-job-id
+          (setf (getf metadata :actor-execution-job-id) actor-execution-job-id))
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
-            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+            (when actor-execution-job-id
+              (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id))
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
                   (getf response :data) updated-data)))
         response)
       response))
@@ -625,8 +651,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -663,11 +688,7 @@
                                  :project-list-query
                                  :project/list)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read project list."
-                                    "project/list"
-                                    :authority :operator
-                                    :payload '()))
+     (query-project-list-service session))
    :project/list
    :project-list-query))
 
@@ -675,19 +696,25 @@
   (call-with-project-query-actor
    session
    (make-project-control-request session
-                                 :project-detail-query
-                                 :project/detail
-                                 :payload (list :project-id project-id)
-                                 :project-id project-id)
+                                :project-detail-query
+                                :project/detail
+                                :payload (list :project-id project-id)
+                                :project-id project-id)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read project detail."
-                                    "project/detail"
-                                    :authority :operator
-                                    :payload (list :project-id project-id)))
+     (query-project-detail-service session project-id))
    :project/detail
    :project-detail-query
    :project-id project-id))
+
+(defun query-project-testing-harness-inventory-service (session)
+  (make-service-query-response
+   :project
+   :testing-harness-inventory
+   (list :count (length (testing-harness-inventory))
+         :entries (copy-tree (testing-harness-inventory)))
+   :metadata (make-service-metadata :authority :environment
+                                    :read-model :project-testing-harness-inventory-v1
+                                    :session session)))
 
 (defun command-project-testing-harness-inventory-query-service (session)
   (call-with-project-query-actor
@@ -696,11 +723,7 @@
                                  :project-testing-harness-inventory-query
                                  :project/testing-harness-inventory)
    (lambda ()
-     (command-kernel-invoke-service session
-                                    "Read project testing harness inventory."
-                                    "project/testing-harness-inventory"
-                                    :authority :operator
-                                    :payload '()))
+     (query-project-testing-harness-inventory-service session))
    :project/testing-harness-inventory
    :project-testing-harness-inventory-query))
 
@@ -722,28 +745,58 @@
                        (list :incident-id incident-id))
                      metadata)))
 
+(defun project-command-policy-id (capability)
+  (let ((normalized (capability-name-string capability)))
+    (cond
+      ((or (string= normalized "project/planning")
+           (string= normalized "project/binding"))
+       :project-governance-write)
+      (t nil))))
+
+(defun project-command-approval-required-p (policy-id)
+  (let ((policy (and policy-id
+                     (ignore-errors (ensure-capability-policy policy-id)))))
+    (and policy
+         (not (eq (capability-policy-default-grant-mode policy) :implicit)))))
+
 (defun call-with-project-actor (session request thunk capability action
                                 &key project-id work-item-id incident-id)
-  (let ((actor-address (make-project-control-actor-address session)))
+  (let* ((actor-address (make-project-control-actor-address session))
+         (policy-id (project-command-policy-id capability))
+         (approval-required-p (project-command-approval-required-p policy-id))
+         (actor-context (make-actor-execution-context
+                         :actor-id (actor-address-id actor-address)
+                         :capability capability
+                         :authority :governance
+                         :policy-id policy-id
+                         :target :project
+                         :operation action
+                         :request-id (desktop-task-request-id request)
+                         :work-item-id work-item-id
+                         :approval-required-p approval-required-p
+                         :metadata (append (when project-id
+                                             (list :project-id project-id))
+                                           (when incident-id
+                                             (list :incident-id incident-id)))))
+         (approval-granted-p (and approval-required-p
+                                  policy-id
+                                  (ignore-errors (policy-approved-p session policy-id)))))
     (call-with-actor-worker-for-request
      session
      request
      (lambda ()
+       (when (fboundp 'update-current-actor-execution-context)
+         (update-current-actor-execution-context actor-context :replace-p t))
+       (when (and approval-required-p policy-id)
+         (ensure-policy-approved session policy-id))
        (actorize-project-command-response
         (funcall thunk)
-        :actor-execution-job-id (current-actor-execution-job-id)))
-     :context (make-actor-execution-context
-               :actor-id (actor-address-id actor-address)
-               :capability capability
-               :authority :governance
-               :target :project
-               :operation action
-               :request-id (desktop-task-request-id request)
-               :work-item-id work-item-id
-               :metadata (append (when project-id
-                                   (list :project-id project-id))
-                                 (when incident-id
-                                   (list :incident-id incident-id)))))))
+        :actor-execution-job-id (current-actor-execution-job-id)
+        :governance-authority :actor-runtime
+        :policy-id policy-id
+        :approval-required-p approval-required-p
+        :approval-granted-p approval-granted-p))
+     :context actor-context)))
 
 (defun perform-project-create-service (session &key title summary constitution requirements
                                                feature-specifications design-system
@@ -841,7 +894,7 @@
     (make-service-command-response
      :project
      :create
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -890,7 +943,7 @@
     (make-service-command-response
      :project
      :select
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -914,7 +967,7 @@
     (make-service-command-response
      :project
      :set-constitution
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -939,7 +992,7 @@
     (make-service-command-response
      :project
      :set-design-system
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -964,7 +1017,7 @@
     (make-service-command-response
      :project
      :set-style-guide
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -989,7 +1042,7 @@
     (make-service-command-response
      :project
      :set-testing-strategy
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1014,7 +1067,7 @@
     (make-service-command-response
      :project
      :set-release-readiness
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1039,7 +1092,7 @@
     (make-service-command-response
      :project
      :set-readiness-obligations
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1087,7 +1140,7 @@
     (make-service-command-response
      :project
      :append-requirement
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1173,7 +1226,7 @@
     (make-service-command-response
      :project
      :append-feature-specification
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1236,7 +1289,7 @@
     (make-service-command-response
      :project
      :append-user-journey
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1311,7 +1364,7 @@
     (make-service-command-response
      :project
      :append-architecture-decision
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1366,7 +1419,7 @@
     (make-service-command-response
      :project
      :bind-work-item
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1402,7 +1455,7 @@
     (make-service-command-response
      :project
      :bind-incident
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1439,7 +1492,7 @@
     (make-service-command-response
      :project
      :bind-testing-harness
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1471,7 +1524,7 @@
     (make-service-command-response
      :project
      :append-source-root
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))
@@ -1525,7 +1578,7 @@
     (make-service-command-response
      :project
      :append-quality-gate
-     (project-detail-payload session project)
+     (project-command-detail-payload session project)
      :metadata (make-service-metadata :authority :environment
                                       :command-model :project-command-v1
                                       :session session))))

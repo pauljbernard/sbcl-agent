@@ -510,7 +510,7 @@
                 (serializable-worker-states session))
           (setf (agent-session-workers-tail session)
                 (last (agent-session-workers session)))))
-      (normalize-kernel-execution-registry-for-load environment)
+      (normalize-execution-registry-for-load environment)
       (rehydrate-environment-derived-state environment)
       (setf (environment-compatibility-session environment)
             (ensure-environment-compatibility-payload

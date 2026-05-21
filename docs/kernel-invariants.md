@@ -1,5 +1,7 @@
 # IntentOS Kernel Invariants
 
+> Historical note: this page is retained as doctrine and origin context for the earlier execution-kernel program. The current implemented architecture uses the same `invoke` / `inspect` / `control` service discipline, but governance now lives in actor execution and effect handling over a shared concurrency/execution substrate rather than in a standalone kernel tier.
+
 ## Core Definition
 
 IntentOS is a minimal, governed execution kernel where every action is a governed execution derived from an intention.

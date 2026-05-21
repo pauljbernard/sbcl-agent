@@ -1,21 +1,28 @@
 ---
 layout: default
-title: Actor Runtime And Kernel
-hero_title: Actor Runtime And Governed Kernel
-hero_text: The system now layers an address-based actor runtime above the governed kernel while keeping SBCL/Common Lisp as the foundational runtime and persistence substrate.
+title: Actor Runtime, Concurrency, And Governance
+hero_title: Actor Runtime, Concurrency, And Governance
+hero_text: The system now runs as a self-hosted actor environment over a shared concurrency and execution substrate, with governance enforced in actor execution and effect handling rather than in a monolithic kernel tier.
 eyebrow: Actor Runtime
 permalink: /robust-actor-kernel-architecture.html
-description: Robust actor model architecture for sbcl-agent within the governed kernel.
+description: Actor model, concurrency model, and governance architecture for sbcl-agent.
 ---
 
-# Robust Actor Model Within The Governed Kernel
+# Actor Runtime, Concurrency, And Governance
 
-This document defines the updated target architecture for a robust actor model that still respects the existing kernel doctrine:
+This document is now the deep architectural reference for five tightly related concerns:
 
-- all execution begins with `invoke`
-- authority and governance remain kernel-owned
-- actors become the primary execution and messaging substrate above the kernel
-- transcripts and UI surfaces remain projections, not routing backbones
+- the actor model
+- the concurrency model
+- the governance model
+- the self-hosted introspective runtime
+- the way context integration flows through those layers
+
+The older “governed kernel above the runtime” framing is now historically useful but no longer the best description of the implemented system. The architecture has been simplified:
+
+- the shared execution and concurrency substrate owns worker pools, queues, futures, execution handles, and registry mechanics
+- the actor runtime owns message-driven workflow continuity
+- governance is enforced in actor execution and effect handling
 - the integrated agent inhabits the same environment it is inspecting and changing
 
 ## Visual Architecture
@@ -34,12 +41,13 @@ flowchart TB
         RuntimeUI
     end
 
-    subgraph Kernel["Governed Execution Kernel"]
-        Invoke["Kernel API<br/>invoke / inspect / control"]
+    subgraph Core["Concurrency / Execution Core"]
+        Invoke["Execution Services<br/>invoke / inspect / control"]
         Trace["Execution Trace / Event Log"]
         Ledger["Execution Ledger / Task Records"]
-        Policy["Governance Kernel<br/>policy / approval / mutation authority"]
-        Registry["Capability Registry / Manifests"]
+        Registry["Execution Registry / Manifests"]
+        Pools["Bounded Worker Pools"]
+        Futures["Ask / Future Registry"]
     end
 
     subgraph ActorRuntime["Actor Runtime"]
@@ -47,6 +55,7 @@ flowchart TB
         Mailboxes["Persistent Mailboxes"]
         DLQ["Dead Letter Queue"]
         Supervisor["Supervision / Retry / Restart Policy"]
+        Policy["Governance / Approval / Effect Gate"]
 
         ContextChat["ContextChatActor(session-id)"]
         Governance["GovernanceActor(session-id)"]
@@ -96,6 +105,8 @@ flowchart TB
     CalculatorActor --> Invoke
     MCPActor --> Registry
     EnvironmentActor --> Ledger
+    Router --> Pools
+    Mailboxes --> Futures
 
     Invoke --> Ledger
     Invoke --> Trace
@@ -131,11 +142,19 @@ The target model above is no longer only aspirational. The current code now incl
   - explicit Context Chat project targeting
   - contradiction-aware uncertainty
 - a real SBCL worker-pool runner for thread-pool-backed actor execution
+- a dedicated shared concurrency core for:
+  - worker lifecycle
+  - futures
+  - queue primitives
+  - keyed serialization
+  - lease/wait coordination
+- actor-governed mutation paths across runtime, workspace/editor, environment, package-management, project, workflow, and platform control families
 
 The system is therefore in the middle phase:
 
 - no longer a purely metadata-shaped actor model
-- not yet a complete mailbox-first actor runtime across every execution path
+- no longer a kernel-centric control plane
+- still being hardened and documented around remaining edge cases and UX recovery behavior
 
 ## Layered Stack
 
@@ -147,11 +166,11 @@ The target architecture is intentionally layered:
    - primary persistence/materialization layer
    - full introspection of runtime objects, packages, symbols, methods, and persisted state
 
-2. `Kernel`
-   - more traditional governed execution substrate
-   - authority boundary for invoke / inspect / control
-   - execution recording, policy, and capability mediation
-   - introspectable by both humans and agents as a first-class peer surface
+2. `Concurrency / Execution Core`
+   - bounded worker pools
+   - shared queues, futures, and execution-handle lifecycle
+   - execution recording, inspect/control services, and capability registry
+   - keyed serialization where mutation or effect classes require it
 
 3. `Actor System`
    - primary messaging and workflow substrate
@@ -159,6 +178,7 @@ The target architecture is intentionally layered:
    - mailbox execution
    - supervision hierarchy
    - singleton/pool allocation policy
+   - governance-aware turn and effect routing
    - introspectable actor hierarchy, message graph, mailbox pressure, and failure state
 
 4. `React Presentation Tier`
@@ -171,20 +191,21 @@ The target architecture is intentionally layered:
 flowchart TB
     React["React Presentation Tier<br/>projection / UI / human workflows"]
     Actor["Actor System<br/>messaging / workflow / supervision / registry"]
-    Kernel["Kernel<br/>invoke / inspect / control / authority / governance"]
+    Core["Concurrency / Execution Core<br/>invoke / inspect / control / worker pools / execution registry"]
     Runtime["SBCL / Common Lisp<br/>runtime / persistence / introspection"]
 
     React --> Actor
-    Actor --> Kernel
-    Kernel --> Runtime
+    Actor --> Core
+    Core --> Runtime
 ```
 
 ### Layering Rules
 
 1. The presentation tier projects state; it does not own workflow continuity.
 2. The actor system owns message-driven business workflow.
-3. The kernel owns authority, governance, and execution mediation.
-4. SBCL/Common Lisp remains the foundational runtime and persistence substrate.
+3. Governance is enforced in actor execution and effect handling, not in a monolithic shell-facing kernel layer.
+4. The execution core owns scheduling, handles, queues, and concurrency primitives.
+5. SBCL/Common Lisp remains the foundational runtime and persistence substrate.
 5. Every layer must be introspectable so agents and humans can inspect the same system from different vantage points.
 
 ## Shared Environment Principle
@@ -196,7 +217,61 @@ It:
 - draws context from the same SBCL environment
 - reasons over the same runtime and persisted state
 - performs work inside that same environment
-- and is constrained by the same kernel-owned policy and governance boundaries as any other actor-driven execution
+- and is constrained by the same governance and effect boundaries as any other actor-driven execution
+
+## Concurrency Model
+
+The system does not use one thread per actor. It uses many actors mapped onto bounded SBCL worker pools.
+
+The primary execution unit is the actor turn:
+
+1. dequeue eligible work
+2. bind actor and environment context
+3. execute handler logic
+4. emit candidate effects
+5. govern and commit or reject those effects
+6. record the resulting execution and events
+7. yield back to the pool
+
+Important properties of the current model:
+
+- reads may overlap when policy allows them
+- governed writes serialize by keyed domains rather than one global choke point
+- same-actor execution respects actor max-concurrency settings
+- queue leasing, future completion, gates, and worker lifecycle come from the shared concurrency core
+- the execution substrate is shared by both actor runtime paths and public execution services
+
+## Governance Model
+
+Governance is now part of the actor runtime, not a separate post-hoc audit layer.
+
+The practical governance loop is:
+
+1. a request enters through an execution service
+2. an actor claims or routes the work
+3. policy is resolved for the requested operation
+4. approval requirements are computed
+5. effects are allowed, blocked, or paused
+6. the resulting execution is recorded with evidence, approval state, and authority metadata
+
+This model matters because it makes governance operate at the same boundary as the work itself:
+
+- runtime mutation
+- workspace mutation
+- environment mutation
+- project/workflow mutation
+- package and platform mutation
+- approval/resume/recovery flows
+
+The system therefore preserves:
+
+- who requested the change
+- what authority existed
+- whether approval was required
+- whether approval was granted
+- what evidence or incident state resulted
+
+without routing everything through a monolithic kernel switchboard.
 
 ## Actor Message Spine
 
@@ -219,11 +294,11 @@ sequenceDiagram
     participant G as GovernanceActor(session-id)
     participant R as RuntimeActor(runtime-scope-id)
     participant E as EditorActor(editor-scope-id)
-    participant K as Kernel
+    participant Core as Execution Services
 
     U->>CUI: Submit intent
     CUI->>C: SubmitUserIntent(message)
-    C->>K: invoke(intent, capability, authority, context)
+    C->>Core: invoke(intent, capability, authority, context)
     C->>G: RequestExecution(actor-message)
     G->>G: Persist approval / policy state
 
@@ -239,13 +314,13 @@ sequenceDiagram
     alt Runtime evaluation
         G->>R: AuthorizeRuntimeEvaluation(request-id, session-id)
         R->>R: Load runtime state / mailbox
-        R->>K: invoke(runtime-eval)
+        R->>Core: invoke(runtime-eval)
         R->>R: Persist result / bindings / history
         R->>C: RuntimeEvaluationCompleted(result)
     else Editor mutation
         G->>E: AuthorizePendingEditorMutation(pending-action-id)
         E->>E: Load pending mutation state
-        E->>K: invoke(editor-mutation)
+        E->>Core: invoke(editor-mutation)
         E->>E: Persist updated editor state
         E->>C: EditorMutationApplied(result)
     end
@@ -256,8 +331,7 @@ sequenceDiagram
 
 ## Design Rules
 
-1. The kernel remains the authority boundary.
-   - Actors do not bypass policy or execution recording.
+1. Actors do not bypass policy, execution recording, or effect mediation.
    - They send requests through kernel-governed execution surfaces.
 
 2. Actors own routing and continuity.

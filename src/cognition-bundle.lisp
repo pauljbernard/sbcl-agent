@@ -12,6 +12,17 @@
   action-agenda
   outcome-brief)
 
+(declaim (notinline cognition-bundle-retrieval-dossier
+                    cognition-bundle-retrieval-focus-plan
+                    cognition-bundle-prior-outcome-brief
+                    cognition-bundle-reasoning-brief
+                    cognition-bundle-planning-brief
+                    cognition-bundle-execution-strategy
+                    cognition-bundle-validation-strategy
+                    cognition-bundle-validation-plan
+                    cognition-bundle-action-agenda
+                    cognition-bundle-outcome-brief))
+
 (defun execution-strategy-mode (retrieval-dossier reasoning-brief planning-brief prior-outcome-brief)
   (declare (ignore planning-brief))
   (let ((intent (getf retrieval-dossier :intent)))

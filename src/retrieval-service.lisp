@@ -595,11 +595,11 @@
         :resolved-mutation-count (length linked-mutations)))
 
 (defun build-alignment-context-packet (session prompt &key (operator-mode :conversation))
-  (let* ((dossier (build-retrieval-dossier session prompt :operator-mode operator-mode))
+  (let* ((active-environment (service-active-environment :session session))
+         (dossier (build-retrieval-dossier session prompt :operator-mode operator-mode))
          (environment-status (service-response-data
                               (query-environment-status-service
-                               (or (session-bound-environment session)
-                                   (ensure-environment))
+                               active-environment
                                :include-alignment-state-p nil
                                :include-reconciliation-decision-p nil)))
          (environment-summary (getf environment-status :summary))
@@ -609,8 +609,7 @@
          (runtime-context (retrieval-dossier-runtime-context dossier))
          (event-stream (service-response-data
                         (query-service-event-stream
-                         :environment (or (session-bound-environment session)
-                                          (ensure-environment))
+                         :environment active-environment
                          :limit 16)))
          (linked-events (resolved-alignment-events intent-context event-stream))
          (linked-mutations (resolved-alignment-mutations session intent-context))

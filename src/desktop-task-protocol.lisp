@@ -1264,32 +1264,31 @@
 
 (defun mark-desktop-task-record-awaiting-approval (session record &key policy-id)
   (let* ((approval-id (or (desktop-task-record-approval-id record)
-                          (make-governance-approval-id)))
-         (_request-metadata
-           (setf (desktop-task-record-request-metadata record)
-                 (append (desktop-task-record-request-metadata record)
-                         (when policy-id (list :policy-id policy-id))
-                         (list :approval-id approval-id
-                               :session-id (agent-session-id session)))))
-         (updated
-          (update-desktop-task-record
-           session
-           record
-           :status :awaiting-approval
-           :governance-status :awaiting-approval
-           :approval-status :awaiting-approval
-           :metadata (append (when policy-id (list :policy-id policy-id))
-                             (list :approval-id approval-id
-                                   :session-id (agent-session-id session))
-                             '(:approval-required-p t))
-           :actor-message (transition-actor-message
-                           (desktop-task-record-actor-message record)
-                           :awaiting-approval
-                           :metadata (list :approval-id approval-id
-                                           :session-id (agent-session-id session)
-                                           :governance-actor-id
-                                           (actor-address-id (make-governance-actor-address
-                                                              :session-id (agent-session-id session))))))))
+                          (make-governance-approval-id))))
+    (setf (desktop-task-record-request-metadata record)
+          (append (desktop-task-record-request-metadata record)
+                  (when policy-id (list :policy-id policy-id))
+                  (list :approval-id approval-id
+                        :session-id (agent-session-id session))))
+    (let ((updated
+            (update-desktop-task-record
+             session
+             record
+             :status :awaiting-approval
+             :governance-status :awaiting-approval
+             :approval-status :awaiting-approval
+             :metadata (append (when policy-id (list :policy-id policy-id))
+                               (list :approval-id approval-id
+                                     :session-id (agent-session-id session))
+                               '(:approval-required-p t))
+             :actor-message (transition-actor-message
+                             (desktop-task-record-actor-message record)
+                             :awaiting-approval
+                             :metadata (list :approval-id approval-id
+                                             :session-id (agent-session-id session)
+                                             :governance-actor-id
+                                             (actor-address-id (make-governance-actor-address
+                                                                :session-id (agent-session-id session))))))))
     (append-actor-message-transport-event session :governance-review updated
                                           :metadata (append (when policy-id
                                                               (list :policy-id policy-id))
@@ -1304,7 +1303,7 @@
                                                                   (actor-address-summary
                                                                    (make-governance-actor-address)))))
     (append-desktop-task-record-transition-event session :awaiting-approval updated)
-    updated))
+      updated)))
 
 (defun mark-desktop-task-record-approved (session record &key approved-at)
   (let ((updated
@@ -1578,10 +1577,10 @@
         :actor-message (actor-message-summary
                         (desktop-task-request-actor-message request))
         :metadata (append (copy-list (or (desktop-task-resolution-metadata resolution) '()))
-                          (when (and (listp invocation-result)
-                                     (getf invocation-result :kernel-execution-id))
-                            (list :kernel-execution-id
-                                  (getf invocation-result :kernel-execution-id)))
+                          (let ((execution-id (and (listp invocation-result)
+                                                   (getf invocation-result :execution-id))))
+                            (when execution-id
+                              (list :execution-id execution-id)))
                           (list :native-executor-p
                                 (desktop-task-resolution-native-executor-p resolution)))))
 
@@ -1617,11 +1616,11 @@
                                            (getf (desktop-task-record-metadata record) :actor-execution-job-id))
                                       (and (listp result)
                                            (getf result :actor-execution-job-id)))
-          :kernel-execution-id (or (and (listp result)
-                                        (getf result :kernel-execution-id))
-                                   (and (listp result)
-                                        (listp (getf result :metadata))
-                                        (getf (getf result :metadata) :kernel-execution-id)))
+          :execution-id (or (and (listp result)
+                                 (getf result :execution-id))
+                            (and (listp result)
+                                 (listp (getf result :metadata))
+                                 (getf (getf result :metadata) :execution-id)))
           :actor-message (actor-message-summary
                           (desktop-task-record-actor-message record))
           :result result
@@ -1819,6 +1818,11 @@
                                request
                                effective-manifest
                                effective-resolution))
+         (approval-granted-p
+           (and approval-required-p
+                policy-id
+                (ignore-errors
+                  (policy-approved-p session policy-id))))
          (actor-execution-context
            (desktop-task-actor-execution-context
             request
@@ -1830,7 +1834,28 @@
           :resolution effective-resolution
           :policy-id policy-id
           :approval-required-p approval-required-p
+          :approval-granted-p approval-granted-p
           :actor-execution-context actor-execution-context)))
+
+(defun enforce-governed-desktop-task-actor-governance (session request
+                                                       policy-id approval-required-p
+                                                       actor-execution-context)
+  (when approval-required-p
+    (unless policy-id
+      (error "Desktop task ~S/~S requires approval, but no policy id is available."
+             (desktop-task-request-target request)
+             (desktop-task-request-operation request)))
+    (append-desktop-task-audit-event
+     session
+     :desktop-task-actor-governance-enforcement
+     request
+     (list :request-id (desktop-task-request-id request)
+           :target (desktop-task-request-target request)
+           :operation (desktop-task-request-operation request)
+           :policy-id policy-id
+           :approval-required-p approval-required-p
+           :actor-execution (actor-execution-context-summary actor-execution-context)))
+    (ensure-policy-approved session policy-id)))
 
 (defun execute-governed-desktop-task-resolution (resolution session request manifest
                                                  &key policy-id approval-required-p
@@ -1884,23 +1909,12 @@
                     :approval-required-p effective-approval-required-p
                     :actor-execution
                     (actor-execution-context-summary effective-actor-execution-context)))
-             (when effective-approval-required-p
-               (unless effective-policy-id
-                 (error "Desktop task ~S/~S requires approval, but no policy id is available."
-                        (desktop-task-request-target request)
-                        (desktop-task-request-operation request)))
-               (append-desktop-task-audit-event
-                session
-                :desktop-task-actor-governance-enforcement
-                request
-                (list :request-id (desktop-task-request-id request)
-                      :target (desktop-task-request-target request)
-                      :operation (desktop-task-request-operation request)
-                      :policy-id effective-policy-id
-                      :approval-required-p effective-approval-required-p
-                      :actor-execution
-                      (actor-execution-context-summary effective-actor-execution-context)))
-               (ensure-policy-approved session effective-policy-id))
+             (enforce-governed-desktop-task-actor-governance
+              session
+              request
+              effective-policy-id
+              effective-approval-required-p
+              effective-actor-execution-context)
              (let ((result
                      (cond
                        ((desktop-task-resolution-native-executor-p effective-resolution)

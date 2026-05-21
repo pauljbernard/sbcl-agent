@@ -7,6 +7,11 @@
                  :type nil
                  :defaults *script-path*))
 
+(setf *compile-verbose* nil
+      *compile-print* nil
+      *load-verbose* nil
+      *load-print* nil)
+
 (require :asdf)
 
 (load (merge-pathnames #P"sbcl-agent.asd" *project-dir*))

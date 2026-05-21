@@ -2,7 +2,7 @@
 layout: default
 title: Architecture and Design
 hero_title: Architecture and Design
-hero_text: The goal is not a literal Codex clone or a conventional IDE. The goal is an SBCL-native symbolic environment where Common Lisp runtime, kernel, actor system, integrated agent context, and workflow governance are explicit, inspectable layers.
+hero_text: The goal is not a literal Codex clone or a conventional IDE. The goal is an SBCL-native symbolic environment where the introspective Common Lisp runtime, shared execution substrate, actor system, integrated agent context, and workflow governance are explicit, inspectable layers.
 eyebrow: Architecture
 permalink: /architecture.html
 description: Detailed architecture for sbcl-agent.
@@ -28,9 +28,9 @@ The current codebase now sits at a different point than the earlier transition d
 
 - the original shell-plus-streamed-ask runtime is still supported as an operator surface
 - the environment-native runtime is implemented and now shapes the architecture
-- the execution-kernel contract is implemented, with `invoke`, `inspect`, `control`, execution handles, and execution surfaces as first-class system structure
+- the execution-service contract is implemented, with `invoke`, `inspect`, `control`, execution handles, and execution surfaces as first-class system structure
 
-That means the right description of the codebase is no longer "prototype shell" and no longer "kernel transition underway" in the earlier sense. It is an implemented execution-kernel environment with active enhancement and hardening work still in progress.
+That means the right description of the codebase is no longer "prototype shell" and no longer "kernel transition underway" in the earlier sense. It is an implemented self-hosted actor environment with active enhancement and hardening work still in progress.
 
 ## Environment Framing
 
@@ -76,7 +76,7 @@ The planning packet is now a primary architectural seam because it determines ho
 
 ## Architecture Diagrams
 
-The following diagrams capture the current architecture more accurately than the older static kernel/chat/governance image set. The system is now best understood as a layered stack with an explicit actor runtime above a more traditional kernel.
+The following diagrams capture the current architecture more accurately than the older static kernel/chat/governance image set. The system is now best understood as a layered stack with an explicit actor runtime above a shared concurrency and execution substrate.
 
 ### Current Layered Stack
 
@@ -84,12 +84,12 @@ The following diagrams capture the current architecture more accurately than the
 flowchart TB
     React["React Surface Desktop<br/>projection / operator workflows / live surfaces"]
     Actor["Actor System<br/>address registry / mailboxes / supervision / worker pool"]
-    Kernel["Governed Kernel<br/>invoke / inspect / control / authority / policy"]
+    Core["Concurrency / Execution Core<br/>invoke / inspect / control / handles / queues / pools"]
     Runtime["SBCL / Common Lisp<br/>image / persistence / introspection / concurrency substrate"]
 
     React --> Actor
-    Actor --> Kernel
-    Kernel --> Runtime
+    Actor --> Core
+    Core --> Runtime
 ```
 
 The architectural reading order is therefore:
@@ -97,14 +97,15 @@ The architectural reading order is therefore:
 1. `SBCL / Common Lisp`
    - foundational runtime
    - foundational persistence and introspection substrate
-2. `Kernel`
-   - more traditional authority boundary
+2. `Concurrency / Execution Core`
    - execution mediation
-   - native policy-based governance
+   - handles, futures, queues, and worker pools
+   - public invoke / inspect / control services
 3. `Actor System`
    - address-based capability and workflow execution
    - supervision
    - worker-pool-backed concurrency
+   - actor-owned governance and effect handling
 4. `Presentation Tier`
    - projection of the lower layers, not the owner of continuity
 
@@ -130,7 +131,7 @@ flowchart TB
         Pool["SBCL Worker Pool"]
     end
 
-    subgraph Kernel["Governed Kernel"]
+    subgraph Core["Concurrency / Execution Core"]
         Invoke["invoke"]
         Inspect["inspect"]
         Control["control"]
@@ -242,7 +243,7 @@ sequenceDiagram
     participant Gov as GovernanceActor
     participant Runtime as RuntimeActor
     participant Editor as EditorActor
-    participant Kernel as Governed Kernel
+    participant Core as Execution Services
 
     UI->>Chat: submit user intent
     Chat->>Gov: RequestExecution(actor-message)
@@ -256,13 +257,13 @@ sequenceDiagram
 
     alt runtime evaluation
         Gov->>Runtime: AuthorizeRuntimeEvaluation
-        Runtime->>Kernel: invoke(runtime-eval)
-        Kernel-->>Runtime: result / evidence
+        Runtime->>Core: invoke(runtime-eval)
+        Core-->>Runtime: result / evidence
         Runtime-->>Chat: RuntimeReply
     else editor mutation
         Gov->>Editor: AuthorizePendingMutation
-        Editor->>Kernel: invoke(editor-mutation)
-        Kernel-->>Editor: result / evidence
+        Editor->>Core: invoke(editor-mutation)
+        Core-->>Editor: result / evidence
         Editor-->>Chat: MutationApplied
     end
 
@@ -496,7 +497,7 @@ That lifecycle now includes resumed-turn follow-up in the implemented path: afte
 
 ### Service boundary
 
-The runtime now also has an explicit service layer. Those modules expose stable query/command entry points over the environment kernel so that the shell is not the only client path.
+The runtime now also has an explicit service layer. Those modules expose stable query/command entry points over the environment runtime and execution core so that the shell is not the only client path.
 
 Concrete service modules now include:
 
@@ -516,11 +517,11 @@ Concrete service modules now include:
 
 `src/service-core.lisp` provides the shared response envelope and metadata contract used by those service modules.
 
-### Execution kernel
+### Execution services
 
-The current refactor is compressing the system around a governed execution kernel.
+The current system is organized around governed execution services rather than a standalone kernel tier.
 
-The intended kernel API is:
+The intended execution-service API is:
 
 - `invoke`
 - `inspect`
@@ -528,7 +529,7 @@ The intended kernel API is:
 
 Current implementation progress already includes:
 
-- kernel-facing invoke paths for shell actions, staged assistant actions, runtime mutation, patches, tool execution, and resumed work
+- execution-facing invoke paths for shell actions, staged assistant actions, runtime mutation, patches, tool execution, and resumed work
 - execution-handle creation and registry state
 - execution-handle-centered inspect and control paths
 - operator shell commands that can open, inspect, and intervene through execution identity

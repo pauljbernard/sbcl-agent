@@ -2,6 +2,8 @@
 
 (defparameter +environment-desktop-preferences-key+ :desktop-preferences)
 (defparameter +environment-agent-constitution-key+ :agent-constitution)
+(defparameter *environment-provider-state-lock*
+  (sb-thread:make-mutex :name "sbcl-agent-environment-provider-state"))
 
 (defparameter +desktop-preferences-legacy-key-map+
   '((:THEMEPREFERENCE . :THEME-PREFERENCE)
@@ -65,6 +67,39 @@
       (setf metadata (append metadata (list key value))))
     (setf (environment-metadata environment) metadata)))
 
+(defun environment-provider-state-snapshot (environment)
+  (let ((active-environment (ensure-environment environment)))
+    (sb-thread:with-mutex (*environment-provider-state-lock*)
+      (list :provider-profiles
+            (copy-tree (or (environment-metadata-value active-environment
+                                                       :provider-profiles)
+                           '()))
+            :active-provider-profile
+            (environment-metadata-value active-environment
+                                        :active-provider-profile)
+            :provider-routing-mode
+            (environment-metadata-value active-environment
+                                        :provider-routing-mode)
+            :last-provider-route
+            (copy-tree (environment-metadata-value active-environment
+                                                   :last-provider-route))))))
+
+(defun replace-environment-provider-state (environment state)
+  (let ((active-environment (ensure-environment environment)))
+    (sb-thread:with-mutex (*environment-provider-state-lock*)
+      (set-environment-metadata-value active-environment
+                                      :provider-profiles
+                                      (copy-tree (getf state :provider-profiles)))
+      (set-environment-metadata-value active-environment
+                                      :active-provider-profile
+                                      (getf state :active-provider-profile))
+      (set-environment-metadata-value active-environment
+                                      :provider-routing-mode
+                                      (getf state :provider-routing-mode))
+      (set-environment-metadata-value active-environment
+                                      :last-provider-route
+                                      (copy-tree (getf state :last-provider-route))))))
+
 (defun default-agent-constitution ()
   (list :id :sbcl-agent
         :version 2
@@ -73,10 +108,10 @@
         :system-role :self-hosted-agentic-coding-agent
         :purpose "Operate as a governed, introspective, self-hosted coding agent."
         :mission "Deliver grounded planning, implementation, validation, and recovery while preserving environment integrity and operator trust."
-        :governance-posture :actor-kernel-mediated
+        :governance-posture :actor-runtime-mediated
         :operating-principles
         '("Prefer authoritative environment state over inferred assumptions."
-          "Route public execution through actor and kernel authority boundaries."
+          "Route public execution through actor and runtime authority boundaries."
           "Keep planning evidence-backed, uncertainty-aware, and minimally sufficient."
           "Treat governance, validation, and recovery obligations as first-class constraints."
           "Improve the system only within explicit safety and policy boundaries.")
@@ -176,23 +211,51 @@
                                                                   :read-model :environment-desktop-preferences-v1
                                                                   :environment active-environment))))
 
+(defun ambient-session-compatible-with-environment-p (session environment)
+  (and session
+       environment
+       (eq (session-bound-environment session) environment)))
+
+(defun environment-control-bound-session (environment)
+  (or (environment-session environment)
+      (let ((session (and (boundp '*current-session*)
+                          *current-session*)))
+        (and (ambient-session-compatible-with-environment-p session environment)
+             session))
+      (error "Environment control requires a session bound to the target environment.")))
+
 (defun make-environment-control-actor-address (environment)
-  (let ((session (or (environment-session environment)
-                     *current-session*
-                     (error "Environment control requires a bound session."))))
+  (let ((session (environment-control-bound-session environment)))
     (make-standard-actor-address :environment
                                  :scope (agent-session-id session))))
 
-(defun actorize-environment-command-response (response &key actor-execution-job-id)
+(defun actorize-environment-command-response (response
+                                              &key actor-execution-job-id
+                                                governance-authority
+                                                policy-id
+                                                approval-required-p
+                                                approval-granted-p)
   (if (and actor-execution-job-id
            (listp response))
       (let* ((metadata (copy-list (or (service-response-metadata response) '())))
              (data (service-response-data response)))
-        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
+        (setf (getf metadata :actor-execution-job-id) actor-execution-job-id)
+        (when governance-authority
+          (setf (getf metadata :governance-authority) governance-authority))
+        (when policy-id
+          (setf (getf metadata :policy-id) policy-id))
+        (setf (getf metadata :approval-required-p) (and approval-required-p t)
+              (getf metadata :approval-granted-p) (and approval-granted-p t)
               (getf response :metadata) metadata)
-        (when (listp data)
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
-            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
+            (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id)
+            (when governance-authority
+              (setf (getf updated-data :governance-authority) governance-authority))
+            (when policy-id
+              (setf (getf updated-data :policy-id) policy-id))
+            (setf (getf updated-data :approval-required-p) (and approval-required-p t)
+                  (getf updated-data :approval-granted-p) (and approval-granted-p t)
                   (getf response :data) updated-data)))
         response)
       response))
@@ -204,8 +267,7 @@
              (data (service-response-data response)))
         (setf (getf metadata :actor-execution-job-id) actor-execution-job-id
               (getf response :metadata) metadata)
-        (when (and (listp data)
-                   (keywordp (first data)))
+        (when (keyword-plist-p data)
           (let ((updated-data (copy-list data)))
             (setf (getf updated-data :actor-execution-job-id) actor-execution-job-id
                   (getf response :data) updated-data)))
@@ -221,13 +283,7 @@
                                        :environment/preferences-read
                                        :payload '())
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect desktop preferences."
-        "environment/preferences-read"
-        :authority :environment
-        :environment active-environment
-        :payload '()))
+       (query-environment-desktop-preferences-service active-environment))
      :environment/preferences-read
      :desktop-preferences-query)))
 
@@ -240,13 +296,7 @@
                                        :environment/provider
                                        :payload '())
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment provider summary."
-        "environment/provider"
-        :authority :environment
-        :environment active-environment
-        :payload '()))
+       (query-environment-provider-service active-environment))
      :environment/provider
      :provider-query)))
 
@@ -259,18 +309,14 @@
      (make-environment-control-request
       active-environment
       :summary-query
-      :environment/summary
-      :payload (list :include-alignment-state-p include-alignment-state-p
+     :environment/summary
+     :payload (list :include-alignment-state-p include-alignment-state-p
                      :include-reconciliation-decision-p include-reconciliation-decision-p))
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment summary."
-        "environment/summary"
-        :authority :environment
-        :environment active-environment
-        :payload (list :include-alignment-state-p include-alignment-state-p
-                       :include-reconciliation-decision-p include-reconciliation-decision-p)))
+       (query-environment-summary-service
+        active-environment
+        :include-alignment-state-p include-alignment-state-p
+        :include-reconciliation-decision-p include-reconciliation-decision-p))
      :environment/summary
      :summary-query)))
 
@@ -283,25 +329,19 @@
      (make-environment-control-request
       active-environment
       :status-query
-      :environment/status
-      :payload (list :include-alignment-state-p include-alignment-state-p
+     :environment/status
+     :payload (list :include-alignment-state-p include-alignment-state-p
                      :include-reconciliation-decision-p include-reconciliation-decision-p))
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment status."
-        "environment/status"
-        :authority :environment
-        :environment active-environment
-        :payload (list :include-alignment-state-p include-alignment-state-p
-                       :include-reconciliation-decision-p include-reconciliation-decision-p)))
+       (query-environment-status-service
+        active-environment
+        :include-alignment-state-p include-alignment-state-p
+        :include-reconciliation-decision-p include-reconciliation-decision-p))
      :environment/status
      :status-query)))
 
 (defun environment-control-session (environment)
-  (or (environment-session environment)
-      *current-session*
-      (error "Environment control requires a bound session.")))
+  (environment-control-bound-session environment))
 
 (defun make-environment-control-request (environment action capability
                                          &key payload metadata)
@@ -337,6 +377,42 @@
                :request-id (desktop-task-request-id request)
                :metadata (list :environment-id (environment-id active-environment))))))
 
+(defun call-with-environment-governed-command-actor (environment request thunk capability action
+                                                     &key metadata policy-id approval-required-p)
+  (let* ((active-environment (ensure-environment environment))
+         (session (environment-control-session active-environment))
+         (actor-address (make-environment-control-actor-address active-environment))
+         (actor-context (make-actor-execution-context
+                         :actor-id (actor-address-id actor-address)
+                         :capability capability
+                         :authority :governed-environment
+                         :policy-id policy-id
+                         :target :environment
+                         :operation action
+                         :request-id (desktop-task-request-id request)
+                         :approval-required-p approval-required-p
+                         :metadata (append (list :environment-id (environment-id active-environment))
+                                           metadata)))
+         (approval-granted-p (and approval-required-p
+                                  policy-id
+                                  (ignore-errors (policy-approved-p session policy-id)))))
+    (call-with-actor-worker-for-request
+     session
+     request
+     (lambda ()
+       (when (fboundp 'update-current-actor-execution-context)
+         (update-current-actor-execution-context actor-context :replace-p t))
+       (when (and approval-required-p policy-id)
+         (ensure-policy-approved session policy-id))
+       (actorize-environment-command-response
+        (funcall thunk)
+        :actor-execution-job-id (current-actor-execution-job-id)
+        :governance-authority :actor-runtime
+        :policy-id policy-id
+        :approval-required-p approval-required-p
+        :approval-granted-p approval-granted-p))
+     :context actor-context)))
+
 (defun call-with-environment-query-actor (environment request thunk capability action)
   (let* ((active-environment (ensure-environment environment))
          (session (environment-control-session active-environment))
@@ -369,22 +445,22 @@
 
 (defun command-environment-set-desktop-preferences-service (preferences &optional environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :set-desktop-preferences
-                                       :environment/preferences
-                                       :payload (list :preferences preferences))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        "Set desktop preferences."
-        "environment/preferences"
-        :authority :environment
-        :environment active-environment
-        :payload (list :preferences preferences)))
-     :environment/preferences
-     :set-desktop-preferences)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :set-desktop-preferences
+                                        :environment/preferences
+                                        :payload (list :preferences preferences))
+      (lambda ()
+        (perform-environment-set-desktop-preferences-service preferences active-environment))
+      :environment/preferences
+      :set-desktop-preferences
+      :metadata (list :preferences preferences))
+     :session (environment-control-session active-environment)
+     :intention "Set desktop preferences."
+     :capability :environment/preferences
+     :authority :environment)))
 
 (defun normalize-provider-profile-name (name)
   (or (normalize-config-string name) "default"))
@@ -461,8 +537,8 @@
 
 (defun environment-provider-profiles (&optional environment)
   (mapcar #'canonicalize-provider-profile
-          (or (environment-metadata-value (ensure-environment environment)
-                                          :provider-profiles)
+          (or (getf (environment-provider-state-snapshot environment)
+                    :provider-profiles)
               '())))
 
 (defun environment-provider-working-directory (&optional environment)
@@ -495,9 +571,9 @@
         (list (default-environment-provider-profile environment)))))
 
 (defun environment-active-provider-profile-name (&optional environment)
-  (environment-metadata-value (ensure-environment environment)
-                              :active-provider-profile
-                              "default"))
+  (or (getf (environment-provider-state-snapshot environment)
+            :active-provider-profile)
+      "default"))
 
 (defun environment-find-provider-profile (environment profile-name)
   (find (normalize-provider-profile-name profile-name)
@@ -522,6 +598,7 @@
 
 (defun environment-provider-profile-summary (&optional environment)
   (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment))
          (profiles (effective-environment-provider-profiles active-environment))
          (public-profiles (mapcar (lambda (profile)
                                     (provider-profile-public-view profile active-environment))
@@ -530,9 +607,8 @@
          (active-profile (let ((raw-profile (environment-find-provider-profile active-environment active-name)))
                            (and raw-profile
                                 (provider-profile-public-view raw-profile active-environment))))
-         (routing-mode (or (environment-metadata-value active-environment :provider-routing-mode)
-                           :auto))
-         (last-route (environment-metadata-value active-environment :last-provider-route)))
+         (routing-mode (or (getf provider-state :provider-routing-mode) :auto))
+         (last-route (getf provider-state :last-provider-route)))
     (list :active-profile-name active-name
           :profile-count (length public-profiles)
           :profiles public-profiles
@@ -546,6 +622,7 @@
 
 (defun ensure-environment-provider-profile (&key environment config (profile-name "default"))
   (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment))
          (normalized (normalize-provider-profile
                       profile-name
                       (list :provider (config-provider config)
@@ -553,16 +630,15 @@
                             :fast-model (config-fast-model config)
                             :api-base (config-api-base config))))
          (profiles (remove (getf normalized :name)
-                           (environment-provider-profiles active-environment)
+                           (or (getf provider-state :provider-profiles) '())
                            :key (lambda (profile) (getf profile :name))
                            :test #'string=)))
-    (set-environment-metadata-value active-environment
-                                    :provider-profiles
-                                    (append profiles (list normalized)))
-    (unless (environment-metadata-value active-environment :active-provider-profile)
-      (set-environment-metadata-value active-environment
-                                      :active-provider-profile
-                                      (getf normalized :name)))
+    (setf (getf provider-state :provider-profiles)
+          (append profiles (list normalized)))
+    (unless (getf provider-state :active-provider-profile)
+      (setf (getf provider-state :active-provider-profile)
+            (getf normalized :name)))
+    (replace-environment-provider-state active-environment provider-state)
     normalized))
 
 (defun provider-profile-provider (profile)
@@ -623,8 +699,8 @@
       (first profiles)))
 
 (defun provider-routing-mode (&optional environment)
-  (or (environment-metadata-value (ensure-environment environment)
-                                  :provider-routing-mode)
+  (or (getf (environment-provider-state-snapshot environment)
+            :provider-routing-mode)
       :auto))
 
 (defun normalize-provider-routing-mode (mode)
@@ -868,6 +944,7 @@
 
 (defun record-environment-provider-route (route &optional environment)
   (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment))
          (profile (getf route :selected-profile))
          (summary (list :routing-mode (getf route :routing-mode)
                         :reason (getf route :reason)
@@ -885,7 +962,8 @@
                         :mutation-likely-p (getf route :mutation-likely-p)
                         :validation-mode (getf route :validation-mode)
                         :execution-mode (getf route :execution-mode))))
-    (set-environment-metadata-value active-environment :last-provider-route summary)
+    (setf (getf provider-state :last-provider-route) summary)
+    (replace-environment-provider-state active-environment provider-state)
     summary))
 
 (defun provider-profile->config (profile &optional base-config)
@@ -978,6 +1056,7 @@
 (defun perform-environment-provider-configure-service (profile-name options
                                                                     &optional environment)
   (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment))
          (existing (environment-find-provider-profile active-environment profile-name))
          (resolved-options
            (if (plist-key-present-p options :clear-api-key)
@@ -997,7 +1076,7 @@
              (t legacy-api-key)))
          (sanitized (copy-list normalized))
          (profiles (remove (getf normalized :name)
-                           (environment-provider-profiles active-environment)
+                           (or (getf provider-state :provider-profiles) '())
                            :key (lambda (profile) (getf profile :name))
                            :test #'string=)))
     (cond
@@ -1006,13 +1085,12 @@
       (resolved-api-key
        (write-provider-api-key-file working-directory provider-name resolved-api-key)))
     (remf sanitized :api-key)
-    (set-environment-metadata-value active-environment
-                                    :provider-profiles
-                                    (append profiles (list sanitized)))
-    (unless (environment-metadata-value active-environment :active-provider-profile)
-      (set-environment-metadata-value active-environment
-                                      :active-provider-profile
-                                      (getf sanitized :name)))
+    (setf (getf provider-state :provider-profiles)
+          (append profiles (list sanitized)))
+    (unless (getf provider-state :active-provider-profile)
+      (setf (getf provider-state :active-provider-profile)
+            (getf sanitized :name)))
+    (replace-environment-provider-state active-environment provider-state)
     (when (fboundp 'notify-provider-request-snapshot-environment-change)
       (notify-provider-request-snapshot-environment-change
        active-environment
@@ -1029,35 +1107,35 @@
 (defun command-environment-provider-configure-service (profile-name options
                                                                     &optional environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :provider-configure
-                                       :environment/provider-admin
-                                       :payload (list :profile-name profile-name
-                                                      :options options)
-                                       :metadata (list :profile-name
-                                                       (normalize-provider-profile-name profile-name)))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        (format nil "Configure provider profile ~A." profile-name)
-        "environment/provider-configure"
-        :authority :environment
-        :environment active-environment
-        :payload (list :profile-name profile-name
-                       :options options)))
-     :environment/provider-admin
-     :provider-configure)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :provider-configure
+                                        :environment/provider-admin
+                                        :payload (list :profile-name profile-name
+                                                       :options options)
+                                        :metadata (list :profile-name
+                                                        (normalize-provider-profile-name profile-name)))
+      (lambda ()
+        (perform-environment-provider-configure-service profile-name options active-environment))
+      :environment/provider-admin
+      :provider-configure
+      :metadata (list :profile-name (normalize-provider-profile-name profile-name)))
+     :session (environment-control-session active-environment)
+     :intention (format nil "Configure provider profile ~A." profile-name)
+     :capability :environment/provider-configure
+     :authority :environment)))
 
 (defun perform-environment-provider-use-service (profile-name &optional environment)
   (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment))
          (profile (environment-find-provider-profile active-environment profile-name)))
     (unless profile
       (error "Unknown provider profile ~S" profile-name))
-    (set-environment-metadata-value active-environment
-                                    :active-provider-profile
-                                    (getf profile :name))
+    (setf (getf provider-state :active-provider-profile)
+          (getf profile :name))
+    (replace-environment-provider-state active-environment provider-state)
     (when (fboundp 'notify-provider-request-snapshot-environment-change)
       (notify-provider-request-snapshot-environment-change
        active-environment
@@ -1073,31 +1151,32 @@
 
 (defun command-environment-provider-use-service (profile-name &optional environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :provider-use
-                                       :environment/provider-admin
-                                       :payload (list :profile-name profile-name)
-                                       :metadata (list :profile-name
-                                                       (normalize-provider-profile-name profile-name)))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        (format nil "Use provider profile ~A." profile-name)
-        "environment/provider-use"
-        :authority :environment
-        :environment active-environment
-        :payload (list :profile-name profile-name)))
-     :environment/provider-admin
-     :provider-use)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :provider-use
+                                        :environment/provider-admin
+                                        :payload (list :profile-name profile-name)
+                                        :metadata (list :profile-name
+                                                        (normalize-provider-profile-name profile-name)))
+      (lambda ()
+        (perform-environment-provider-use-service profile-name active-environment))
+      :environment/provider-admin
+      :provider-use
+      :metadata (list :profile-name (normalize-provider-profile-name profile-name)))
+     :session (environment-control-session active-environment)
+     :intention (format nil "Use provider profile ~A." profile-name)
+     :capability :environment/provider-use
+     :authority :environment)))
 
 (defun perform-environment-provider-routing-service (&optional mode environment)
-  (let ((active-environment (ensure-environment environment)))
+  (let* ((active-environment (ensure-environment environment))
+         (provider-state (environment-provider-state-snapshot active-environment)))
     (when mode
-      (set-environment-metadata-value active-environment
-                                      :provider-routing-mode
-                                      (normalize-provider-routing-mode mode))
+      (setf (getf provider-state :provider-routing-mode)
+            (normalize-provider-routing-mode mode))
+      (replace-environment-provider-state active-environment provider-state)
       (when (fboundp 'notify-provider-request-snapshot-environment-change)
         (notify-provider-request-snapshot-environment-change
          active-environment
@@ -1113,24 +1192,25 @@
 
 (defun command-environment-provider-routing-service (&optional mode environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :provider-routing
-                                       :environment/provider-admin
-                                       :payload (list :mode mode)
-                                       :metadata (when mode
-                                                   (list :mode (normalize-provider-routing-mode mode))))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        "Update provider routing."
-        "environment/provider-routing"
-        :authority :environment
-        :environment active-environment
-        :payload (list :mode mode)))
-     :environment/provider-admin
-     :provider-routing)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :provider-routing
+                                        :environment/provider-admin
+                                        :payload (list :mode mode)
+                                        :metadata (when mode
+                                                    (list :mode (normalize-provider-routing-mode mode))))
+      (lambda ()
+        (perform-environment-provider-routing-service mode active-environment))
+      :environment/provider-admin
+      :provider-routing
+      :metadata (when mode
+                  (list :mode (normalize-provider-routing-mode mode))))
+     :session (environment-control-session active-environment)
+     :intention "Update provider routing."
+     :capability :environment/provider-routing
+     :authority :environment)))
 
 (defun query-environment-summary-service (&optional environment
                                             &key
@@ -1172,7 +1252,7 @@
          (status (or (getf summary :status)
                      (and work-item (work-item-status work-item))
                      :blocked))
-         (handles (kernel-execution-summaries-by-target :work-item-id
+         (handles (execution-handle-summaries-by-target :work-item-id
                                                         work-item-id
                                                         environment))
          (surface (or (primary-execution-surface-summary session
@@ -1246,7 +1326,7 @@
 
 (defun query-environment-events-service (&key tail environment)
   (let* ((active-environment (ensure-environment environment))
-         (events (environment-event-log active-environment))
+         (events (environment-event-log-snapshot active-environment))
          (tail-count (normalize-tail-count tail))
          (start (max 0 (- (length events) tail-count))))
     (make-service-query-response :environment
@@ -1268,13 +1348,8 @@
       :environment/events
       :payload (list :tail tail))
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment events."
-        "environment/events"
-        :authority :environment
-        :environment active-environment
-        :payload (list :tail tail)))
+       (query-environment-events-service :tail tail
+                                         :environment active-environment))
      :environment/events
      :events-query)))
 
@@ -1286,21 +1361,16 @@
       active-environment
       :event-stream-query
       :environment/event-stream
-      :payload (list :after-cursor after-cursor
+     :payload (list :after-cursor after-cursor
                      :limit limit
                      :family family
                      :visibility visibility))
      (lambda ()
-       (command-kernel-invoke-service
-        (environment-control-session active-environment)
-        "Inspect environment event stream."
-        "environment/event-stream"
-        :authority :environment
-        :environment active-environment
-        :payload (list :after-cursor after-cursor
-                       :limit limit
-                       :family family
-                       :visibility visibility)))
+       (query-service-event-stream :environment active-environment
+                                   :after-cursor after-cursor
+                                   :limit limit
+                                   :family family
+                                   :visibility visibility))
      :environment/event-stream
      :event-stream-query)))
 
@@ -1318,23 +1388,23 @@
 
 (defun command-environment-save-service (path &optional environment)
   (let ((active-environment (ensure-environment environment)))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :save
-                                       :environment/checkpoint
-                                       :payload (list :path path)
-                                       :metadata (list :path path))
-     (lambda ()
-       (command-kernel-invoke-service
-        (environment-session active-environment)
-        (format nil "Save environment to ~A." path)
-        "environment/save"
-        :authority :environment
-        :environment active-environment
-        :payload (list :path path)))
-     :environment/checkpoint
-     :save)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :save
+                                        :environment/checkpoint
+                                        :payload (list :path path)
+                                        :metadata (list :path path))
+      (lambda ()
+        (perform-environment-save-service path active-environment))
+      :environment/checkpoint
+      :save
+      :metadata (list :path path))
+     :session (environment-control-session active-environment)
+     :intention (format nil "Save environment to ~A." path)
+     :capability :environment/save
+     :authority :environment)))
 
 (defun perform-environment-load-service (path)
   (let ((environment (load-environment path)))
@@ -1350,22 +1420,21 @@
 (defun command-environment-load-service (path)
   (let* ((session (or *current-session*
                       (error "Environment load requires a current session.")))
-         (active-environment (or (session-bound-environment session)
-                                 (make-default-environment :session session))))
-    (call-with-environment-actor
-     active-environment
-     (make-environment-control-request active-environment
-                                       :load
-                                       :environment/checkpoint
-                                       :payload (list :path path)
-                                       :metadata (list :path path))
-     (lambda ()
-       (command-kernel-invoke-service
-        session
-        (format nil "Load environment from ~A." path)
-        "environment/load"
-        :authority :environment
-        :environment active-environment
-        :payload (list :path path)))
-     :environment/checkpoint
-     :load)))
+         (active-environment (service-active-environment :session session)))
+    (register-service-command-response
+     (call-with-environment-governed-command-actor
+      active-environment
+      (make-environment-control-request active-environment
+                                        :load
+                                        :environment/checkpoint
+                                        :payload (list :path path)
+                                        :metadata (list :path path))
+      (lambda ()
+        (perform-environment-load-service path))
+      :environment/checkpoint
+      :load
+      :metadata (list :path path))
+     :session session
+     :intention (format nil "Load environment from ~A." path)
+     :capability :environment/load
+     :authority :environment)))

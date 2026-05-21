@@ -1,5 +1,7 @@
 (in-package #:sbcl-agent)
 
+(declaim (special *current-session* *current-environment*))
+
 (defstruct actor-pool-worker-state
   id
   thread
@@ -19,11 +21,7 @@
   session
   context
   thunk
-  lock
-  waitqueue
-  done-p
-  result
-  error)
+  (future (make-concurrency-core-future-instance)))
 
 (defstruct actor-execution-context
   actor-id
@@ -46,8 +44,7 @@
   pool-size
   running-p
   queue
-  lock
-  waitqueue
+  gate
   active-actors
   active-jobs
   execution-history
@@ -58,6 +55,14 @@
 (defparameter *default-actor-thread-pool-size* 4)
 (defparameter *actor-runtime-history-limit* 24)
 (defparameter *current-actor-execution-job* nil)
+
+(defun actor-runtime-lifecycle-lock-key (session)
+  (list :actor-runtime-lifecycle (agent-session-id session)))
+
+(defmacro with-actor-runtime-lifecycle-lock ((session) &body body)
+  `(sb-thread:with-mutex ((ensure-concurrency-core-lock
+                           (actor-runtime-lifecycle-lock-key ,session)))
+     ,@body))
 
 (defun make-actor-pool-worker-id ()
   (format nil "actor-worker-~D-~D" (get-universal-time) (random 1000000)))
@@ -210,12 +215,15 @@
   (let* ((workers (and runtime (actor-runtime-state-workers runtime)))
          (busy-workers (count-if #'actor-pool-worker-state-busy-p workers))
          (idle-workers (max 0 (- (length workers) busy-workers)))
-         (queue-depth (and runtime (length (actor-runtime-state-queue runtime))))
+         (queue-items (and runtime
+                           (concurrency-core-queue-items
+                            (actor-runtime-state-queue runtime))))
+         (queue-depth (length (or queue-items '())))
          (queued-jobs
            (and runtime
                 (mapcar (lambda (job)
                           (actor-execution-job-summary job :status :queued))
-                        (actor-runtime-state-queue runtime))))
+                        queue-items)))
          (active-jobs
            (and runtime
                 (loop for job being the hash-values of (actor-runtime-state-active-jobs runtime)
@@ -278,22 +286,59 @@
                                             :status status
                                             :worker-id worker-id
                                             :error error)))
-    (sb-thread:with-mutex ((actor-runtime-state-lock runtime))
+    (record-actor-runtime-history-entry runtime entry)))
+
+(defun record-actor-runtime-history-entry (runtime entry)
+  (when runtime
+    (with-concurrency-core-gate ((actor-runtime-state-gate runtime))
       (setf (actor-runtime-state-execution-history runtime)
-            (subseq (cons entry (or (actor-runtime-state-execution-history runtime) '()))
+            (subseq (cons (copy-tree entry)
+                          (or (actor-runtime-state-execution-history runtime) '()))
                     0
                     (min *actor-runtime-history-limit*
                          (1+ (length (or (actor-runtime-state-execution-history runtime)
                                          '())))))))))
+
+(defun ensure-session-actor-runtime-state (session)
+  (or (agent-session-actor-runtime-state session)
+      (setf (agent-session-actor-runtime-state session)
+            (make-actor-runtime-state-instance))))
+
+(defun record-actor-supervision-runtime-history (session entry action
+                                                 &key incident recovery-summary automatic-p)
+  (let ((runtime (ensure-session-actor-runtime-state session)))
+    (record-actor-runtime-history-entry
+     runtime
+     (list :entry-kind :supervision
+           :status :supervision-applied
+           :recorded-at (get-universal-time)
+           :automatic-supervision-p (and automatic-p t)
+           :action action
+           :incident-id (and incident (incident-id incident))
+           :incident-status (and incident (incident-status incident))
+           :escalation-target (and incident
+                                   (getf (incident-metadata incident) :escalation-target))
+           :actor-id (and entry
+                          (actor-address-id (actor-mailbox-entry-owner entry)))
+           :actor-role (and entry
+                            (actor-address-role (actor-mailbox-entry-owner entry)))
+           :mailbox (and entry (actor-mailbox-entry-mailbox entry))
+           :mailbox-entry-id (and entry (actor-mailbox-entry-id entry))
+           :request-id (and entry (actor-mailbox-entry-request-id entry))
+           :actor-message-id (and entry (actor-mailbox-entry-actor-message-id entry))
+           :pending-action-id (and entry (actor-mailbox-entry-pending-action-id entry))
+           :delivery-status (and entry (actor-mailbox-entry-delivery-status entry))
+           :metadata (copy-tree (or (and entry (actor-mailbox-entry-metadata entry)) '()))
+           :recovery (copy-tree recovery-summary)))))
 
 (defun make-actor-runtime-state-instance (&key (pool-size *default-actor-thread-pool-size*))
   (make-actor-runtime-state
    :workers '()
    :pool-size pool-size
    :running-p nil
-   :queue '()
-   :lock (sb-thread:make-mutex :name "sbcl-agent-actor-thread-pool")
-   :waitqueue (sb-thread:make-waitqueue)
+   :queue (make-concurrency-core-queue-instance)
+   :gate (make-concurrency-core-gate-instance
+          :name "sbcl-agent-actor-runtime-gate")
    :active-actors (make-hash-table :test #'equal)
    :active-jobs (make-hash-table :test #'equal)
    :execution-history '()
@@ -305,58 +350,47 @@
   (actor-runtime-state-summary-from-runtime
    (agent-session-actor-runtime-state session)))
 
-(defun actor-runtime-pop-runnable-job (runtime worker)
-  (let ((queue (actor-runtime-state-queue runtime))
-        (active-actors (actor-runtime-state-active-actors runtime))
-        (previous nil)
-        (cursor nil))
-    (setf cursor queue)
-    (loop while cursor
-          for job = (car cursor)
-          for actor-id = (actor-execution-job-actor-id job)
-          for max-concurrency = (max 1 (actor-execution-job-max-concurrency job))
-          for active-count = (gethash actor-id active-actors 0)
-          do (if (< active-count max-concurrency)
-                 (progn
-                   (if previous
-                       (setf (cdr previous) (cdr cursor))
-                       (setf (actor-runtime-state-queue runtime) (cdr cursor)))
-                   (setf (gethash actor-id active-actors) (1+ active-count)
-                         (gethash (actor-execution-job-id job)
-                                  (actor-runtime-state-active-jobs runtime)) job
-                         (actor-pool-worker-state-busy-p worker) t
-                         (actor-pool-worker-state-phase worker) :leased
-                         (actor-pool-worker-state-leased-actor-id worker) actor-id
-                         (actor-pool-worker-state-current-job-id worker) (actor-execution-job-id job))
-                   (return-from actor-runtime-pop-runnable-job job))
-                 (progn
-                   (setf previous cursor
-                         cursor (cdr cursor)))))
-    nil))
+(defun actor-runtime-job-runnable-p (runtime candidate)
+  (let* ((actor-id (actor-execution-job-actor-id candidate))
+         (max-concurrency (max 1 (actor-execution-job-max-concurrency candidate)))
+         (active-count (gethash actor-id (actor-runtime-state-active-actors runtime) 0)))
+    (< active-count max-concurrency)))
+
+(defun lease-actor-runtime-job (runtime worker job)
+  (let* ((actor-id (actor-execution-job-actor-id job))
+         (active-actors (actor-runtime-state-active-actors runtime)))
+    (setf (gethash actor-id active-actors) (1+ (gethash actor-id active-actors 0))
+          (gethash (actor-execution-job-id job)
+                   (actor-runtime-state-active-jobs runtime)) job
+          (actor-pool-worker-state-busy-p worker) t
+          (actor-pool-worker-state-phase worker) :leased
+          (actor-pool-worker-state-leased-actor-id worker) actor-id
+          (actor-pool-worker-state-current-job-id worker) (actor-execution-job-id job)))
+  job)
+
+(defun enqueue-actor-runtime-job (runtime job)
+  (enqueue-concurrency-core-queue (actor-runtime-state-queue runtime) job))
 
 (defun actor-runtime-lease-next-job (runtime worker)
-  (sb-thread:with-mutex ((actor-runtime-state-lock runtime))
-    (loop
-      for job = (actor-runtime-pop-runnable-job runtime worker)
-      do (cond
-           (job
-            (return-from actor-runtime-lease-next-job job))
-           ((not (actor-runtime-state-running-p runtime))
-            (return-from actor-runtime-lease-next-job nil))
-           (t
-            (setf (actor-pool-worker-state-phase worker) :waiting)
-            (sb-thread:condition-wait (actor-runtime-state-waitqueue runtime)
-                                      (actor-runtime-state-lock runtime)))))))
+  (lease-concurrency-core-queue-item
+   (actor-runtime-state-gate runtime)
+   (actor-runtime-state-queue runtime)
+   (lambda (candidate)
+     (actor-runtime-job-runnable-p runtime candidate))
+   :on-match (lambda (job)
+               (lease-actor-runtime-job runtime worker job))
+   :stop-p (lambda ()
+             (not (actor-runtime-state-running-p runtime)))
+   :on-wait (lambda ()
+              (setf (actor-pool-worker-state-phase worker) :waiting))))
 
 (defun signal-actor-execution-job-complete (job result error)
-  (sb-thread:with-mutex ((actor-execution-job-lock job))
-    (setf (actor-execution-job-result job) result
-          (actor-execution-job-error job) error
-          (actor-execution-job-done-p job) t)
-    (sb-thread:condition-broadcast (actor-execution-job-waitqueue job))))
+  (if error
+      (reject-concurrency-core-future (actor-execution-job-future job) error)
+      (resolve-concurrency-core-future (actor-execution-job-future job) result)))
 
 (defun actor-runtime-release-job (runtime worker job &key result error)
-  (sb-thread:with-mutex ((actor-runtime-state-lock runtime))
+  (with-concurrency-core-gate ((actor-runtime-state-gate runtime))
     (let* ((actor-id (actor-execution-job-actor-id job))
            (active-actors (actor-runtime-state-active-actors runtime))
            (active-count (max 0 (1- (gethash actor-id active-actors 1)))))
@@ -374,7 +408,7 @@
     (if error
         (incf (actor-runtime-state-failed-job-count runtime))
         (incf (actor-runtime-state-completed-job-count runtime)))
-    (sb-thread:condition-broadcast (actor-runtime-state-waitqueue runtime)))
+    (concurrency-core-gate-broadcast (actor-runtime-state-gate runtime)))
   (append-actor-execution-lifecycle-event
    (actor-execution-job-session job)
    (if error :actor-execution-failed :actor-execution-completed)
@@ -387,68 +421,89 @@
                                 :status (if error :failed :completed)
                                 :worker-id (actor-pool-worker-state-id worker)
                                 :error error)
+  (when (and error
+             (fboundp 'maybe-record-runtime-actor-job-supervision-failure))
+    (ignore-errors
+      (maybe-record-runtime-actor-job-supervision-failure
+       (actor-execution-job-session job)
+       job
+       error)))
   (signal-actor-execution-job-complete job result error))
 
+(defun call-with-actor-execution-bindings (job thunk)
+  (let* ((session (actor-execution-job-session job))
+         (environment (and session
+                           (session-bound-environment session))))
+    (let ((*current-actor-execution-job* job)
+          (*current-session* session)
+          (*current-environment* environment))
+      (funcall thunk))))
+
 (defun actor-thread-pool-worker-loop (runtime worker)
-  (handler-case
-      (loop
-        for job = (actor-runtime-lease-next-job runtime worker)
-        while job
-        do (handler-case
-               (progn
-                 (setf (actor-pool-worker-state-phase worker) :executing)
-                 (append-actor-execution-lifecycle-event
-                  (actor-execution-job-session job)
-                  :actor-execution-started
-                  job
-                  :worker worker
-                  :status :executing)
-                 (record-actor-runtime-history runtime
-                                               job
-                                               :status :executing
-                                               :worker-id (actor-pool-worker-state-id worker))
-                 (let ((*current-actor-execution-job* job))
-                   (let ((result (funcall (actor-execution-job-thunk job))))
-                     (actor-runtime-release-job runtime worker job :result result))))
-             (error (condition)
-               (actor-runtime-release-job runtime worker job
-                                          :error (princ-to-string condition)))))
-    (error (condition)
-      (setf (actor-pool-worker-state-phase worker) :crashed
-            (actor-pool-worker-state-last-error worker) (princ-to-string condition))))
-  (setf (actor-pool-worker-state-running-p worker) nil
-         (actor-pool-worker-state-busy-p worker) nil
-        (actor-pool-worker-state-phase worker) :stopped
-        (actor-pool-worker-state-leased-actor-id worker) nil
-        (actor-pool-worker-state-current-job-id worker) nil))
+  (run-concurrency-core-managed-thread
+   (lambda ()
+     (loop
+       for job = (actor-runtime-lease-next-job runtime worker)
+       while job
+       do (handler-case
+              (progn
+                (setf (actor-pool-worker-state-phase worker) :executing)
+                (append-actor-execution-lifecycle-event
+                 (actor-execution-job-session job)
+                 :actor-execution-started
+                 job
+                 :worker worker
+                 :status :executing)
+                (record-actor-runtime-history runtime
+                                              job
+                                              :status :executing
+                                              :worker-id (actor-pool-worker-state-id worker))
+                (let ((result (call-with-actor-execution-bindings
+                               job
+                               (actor-execution-job-thunk job))))
+                  (actor-runtime-release-job runtime worker job :result result)))
+            (error (condition)
+              (actor-runtime-release-job runtime worker job
+                                         :error (princ-to-string condition))))))
+   :on-error (lambda (condition)
+               (setf (actor-pool-worker-state-phase worker) :crashed
+                     (actor-pool-worker-state-last-error worker)
+                     (princ-to-string condition)))
+   :on-finally (lambda ()
+                 (setf (actor-pool-worker-state-running-p worker) nil
+                       (actor-pool-worker-state-busy-p worker) nil
+                       (actor-pool-worker-state-phase worker) :stopped
+                       (actor-pool-worker-state-leased-actor-id worker) nil
+                       (actor-pool-worker-state-current-job-id worker) nil))))
 
 (defun start-actor-thread-pool (session &key (pool-size *default-actor-thread-pool-size*))
-  (let ((runtime (or (agent-session-actor-runtime-state session)
-                     (setf (agent-session-actor-runtime-state session)
-                           (make-actor-runtime-state-instance :pool-size pool-size)))))
-    (unless (actor-runtime-state-running-p runtime)
-      (setf (actor-runtime-state-pool-size runtime) pool-size
-            (actor-runtime-state-running-p runtime) t)
-      (setf (actor-runtime-state-workers runtime)
-            (loop repeat pool-size
-                  collect (let ((worker (make-actor-pool-worker-state
-                                         :id (make-actor-pool-worker-id)
-                                         :thread nil
-                                         :running-p t
-                                         :busy-p nil
-                                         :phase :starting
-                                         :leased-actor-id nil
-                                         :current-job-id nil
-                                         :completed-job-id nil
-                                         :last-error nil
-                                         :session-id (agent-session-id session))))
-                            (setf (actor-pool-worker-state-thread worker)
-                                  (sb-thread:make-thread
-                                   (lambda ()
-                                     (actor-thread-pool-worker-loop runtime worker))
-                                   :name (actor-pool-worker-state-id worker)))
-                            worker))))
-    runtime))
+  (with-actor-runtime-lifecycle-lock (session)
+    (let ((runtime (or (agent-session-actor-runtime-state session)
+                       (setf (agent-session-actor-runtime-state session)
+                             (make-actor-runtime-state-instance :pool-size pool-size)))))
+      (unless (actor-runtime-state-running-p runtime)
+        (setf (actor-runtime-state-pool-size runtime) pool-size
+              (actor-runtime-state-running-p runtime) t)
+        (setf (actor-runtime-state-workers runtime)
+              (loop repeat pool-size
+                    collect (let ((worker (make-actor-pool-worker-state
+                                           :id (make-actor-pool-worker-id)
+                                           :thread nil
+                                           :running-p t
+                                           :busy-p nil
+                                           :phase :starting
+                                           :leased-actor-id nil
+                                           :current-job-id nil
+                                           :completed-job-id nil
+                                           :last-error nil
+                                           :session-id (agent-session-id session))))
+                              (setf (actor-pool-worker-state-thread worker)
+                                    (spawn-concurrency-core-thread
+                                     (actor-pool-worker-state-id worker)
+                                     (lambda ()
+                                       (actor-thread-pool-worker-loop runtime worker))))
+                              worker))))
+      runtime)))
 
 (defun ensure-actor-thread-pool (session &key (pool-size *default-actor-thread-pool-size*))
   (let ((runtime (agent-session-actor-runtime-state session)))
@@ -457,32 +512,27 @@
         (start-actor-thread-pool session :pool-size pool-size))))
 
 (defun stop-actor-thread-pool (session)
-  (let ((runtime (agent-session-actor-runtime-state session)))
-    (when runtime
-      (sb-thread:with-mutex ((actor-runtime-state-lock runtime))
-        (setf (actor-runtime-state-running-p runtime) nil)
-        (sb-thread:condition-broadcast (actor-runtime-state-waitqueue runtime)))
-      (dolist (worker (actor-runtime-state-workers runtime))
-        (let ((thread (actor-pool-worker-state-thread worker)))
-          (when thread
-            (sb-thread:join-thread thread)
-            (setf (actor-pool-worker-state-thread worker) nil
-                  (actor-pool-worker-state-running-p worker) nil
-                  (actor-pool-worker-state-busy-p worker) nil
-                  (actor-pool-worker-state-leased-actor-id worker) nil
-                  (actor-pool-worker-state-current-job-id worker) nil))))
-      runtime)))
+  (with-actor-runtime-lifecycle-lock (session)
+    (let ((runtime (agent-session-actor-runtime-state session)))
+      (when runtime
+        (with-concurrency-core-gate ((actor-runtime-state-gate runtime))
+          (setf (actor-runtime-state-running-p runtime) nil)
+          (concurrency-core-gate-broadcast (actor-runtime-state-gate runtime)))
+        (dolist (worker (actor-runtime-state-workers runtime))
+          (let ((thread (actor-pool-worker-state-thread worker)))
+            (when thread
+              (join-concurrency-core-thread thread)
+              (setf (actor-pool-worker-state-thread worker) nil
+                    (actor-pool-worker-state-running-p worker) nil
+                    (actor-pool-worker-state-busy-p worker) nil
+                    (actor-pool-worker-state-leased-actor-id worker) nil
+                    (actor-pool-worker-state-current-job-id worker) nil))))
+        runtime))))
 
 (defun await-actor-execution-job (job)
-  (sb-thread:with-mutex ((actor-execution-job-lock job))
-    (loop until (actor-execution-job-done-p job)
-          do (sb-thread:condition-wait (actor-execution-job-waitqueue job)
-                                       (actor-execution-job-lock job))))
-  (if (actor-execution-job-error job)
-      (error "~A" (actor-execution-job-error job))
-      (actor-execution-job-result job)))
+  (await-concurrency-core-future (actor-execution-job-future job)))
 
-(defun submit-actor-execution-job (session actor-id thunk &key (max-concurrency 1) context)
+(defun enqueue-actor-execution-job (session actor-id thunk &key (max-concurrency 1) context)
   (let* ((runtime (ensure-actor-thread-pool session))
          (job (make-actor-execution-job
                :id (make-actor-execution-job-id)
@@ -491,22 +541,25 @@
                :session session
                :context context
                :thunk thunk
-               :lock (sb-thread:make-mutex :name "sbcl-agent-actor-job")
-               :waitqueue (sb-thread:make-waitqueue)
-               :done-p nil
-               :result nil
-               :error nil)))
+               :future (make-concurrency-core-future-instance))))
     (append-actor-execution-lifecycle-event session
                                             :actor-execution-submitted
                                             job
                                             :status :queued)
     (record-actor-runtime-history runtime job :status :queued)
-    (sb-thread:with-mutex ((actor-runtime-state-lock runtime))
-      (setf (actor-runtime-state-queue runtime)
-            (append (actor-runtime-state-queue runtime) (list job)))
+    (with-concurrency-core-gate ((actor-runtime-state-gate runtime))
+      (enqueue-actor-runtime-job runtime job)
       (incf (actor-runtime-state-submitted-job-count runtime))
-      (sb-thread:condition-broadcast (actor-runtime-state-waitqueue runtime)))
-    (await-actor-execution-job job)))
+      (concurrency-core-gate-broadcast (actor-runtime-state-gate runtime)))
+    job))
+
+(defun submit-actor-execution-job (session actor-id thunk &key (max-concurrency 1) context)
+  (await-actor-execution-job
+   (enqueue-actor-execution-job session
+                                actor-id
+                                thunk
+                                :max-concurrency max-concurrency
+                                :context context)))
 
 (defun actor-address-for-request-execution (session request)
   (or (and (desktop-task-request-actor-message request)
@@ -514,7 +567,13 @@
       (make-standard-actor-address (desktop-task-request-target request)
                                    :scope (agent-session-id session))))
 
-(defun call-with-actor-worker-for-request (session request thunk &key context)
+(defun current-actor-execution-reentrant-p (session actor-id)
+  (let ((job *current-actor-execution-job*))
+    (and job
+         (eq (actor-execution-job-session job) session)
+         (equal (actor-execution-job-actor-id job) actor-id))))
+
+(defun actor-request-execution-dispatch (session request thunk &key context)
   (let* ((actor-address (actor-address-for-request-execution session request))
          (definition (and (fboundp 'find-actor-definition-for-address)
                           (find-actor-definition-for-address session actor-address)))
@@ -524,17 +583,45 @@
                                (actor-execution-policy-model execution-policy)))
          (max-concurrency (or (and execution-policy
                                    (actor-execution-policy-max-concurrency execution-policy))
-                              1)))
+                              1))
+         (effective-context (or context
+                                (make-actor-execution-context
+                                 :actor-id (actor-address-id actor-address)
+                                 :capability (desktop-task-request-capability request)
+                                 :target (desktop-task-request-target request)
+                                 :operation (desktop-task-request-operation request)
+                                 :request-id (desktop-task-request-id request)))))
     (if (eq execution-model :thread-pool-worker)
-        (submit-actor-execution-job session
-                                    (actor-address-id actor-address)
-                                    thunk
-                                    :max-concurrency max-concurrency
-                                    :context (or context
-                                                 (make-actor-execution-context
-                                                  :actor-id (actor-address-id actor-address)
-                                                  :capability (desktop-task-request-capability request)
-                                                  :target (desktop-task-request-target request)
-                                                  :operation (desktop-task-request-operation request)
-                                                  :request-id (desktop-task-request-id request))))
-        (funcall thunk))))
+        (if (current-actor-execution-reentrant-p session (actor-address-id actor-address))
+            (list :mode :inline
+                  :thunk thunk
+                  :actor-address actor-address
+                  :context effective-context)
+            (list :mode :queued
+                  :job (enqueue-actor-execution-job session
+                                                    (actor-address-id actor-address)
+                                                    thunk
+                                                    :max-concurrency max-concurrency
+                                                    :context effective-context)
+                  :actor-address actor-address
+                  :context effective-context))
+        (list :mode :inline
+              :thunk thunk
+              :actor-address actor-address
+              :context effective-context))))
+
+(defun call-with-actor-worker-for-request-async (session request thunk &key context)
+  (actor-request-execution-dispatch session request thunk :context context))
+
+(defun call-with-actor-worker-for-request (session request thunk &key context)
+  (let* ((dispatch (actor-request-execution-dispatch session request thunk :context context))
+         (mode (getf dispatch :mode)))
+    (case mode
+      (:queued
+       (await-actor-execution-job (getf dispatch :job)))
+      (:inline
+       (let ((*current-session* session)
+             (*current-environment* (session-bound-environment session)))
+         (funcall (getf dispatch :thunk))))
+      (otherwise
+       (error "Unknown actor request execution mode ~S." mode)))))

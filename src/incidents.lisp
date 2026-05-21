@@ -15,6 +15,20 @@
   created-at
   metadata)
 
+(declaim (notinline incident-id
+                    incident-thread-id
+                    incident-turn-id
+                    incident-operation-id
+                    incident-work-item-id
+                    incident-workflow-record-id
+                    incident-kind
+                    incident-title
+                    incident-summary
+                    incident-status
+                    incident-condition-string
+                    incident-created-at
+                    incident-metadata))
+
 (defun plist-remove-keys (plist keys)
   (loop for (key value) on plist by #'cddr
         unless (member key keys :test #'eq)

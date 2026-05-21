@@ -66,20 +66,20 @@ flowchart LR
     Policy --> Runtime
 ```
 
-## Execution Kernel Architecture
+## Execution And Environment Architecture
 
-The kernel architecture below shows how that environment is operationalized: one environment contains the execution kernel, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.
+The architecture below shows how that environment is operationalized: one environment contains the shared execution substrate, the actor runtime, the core domains, the durable event and persistence spine, and the public services consumed by shell and desktop surfaces.
 
 ```mermaid
 flowchart TB
     React["React Surface Desktop"]
     Actor["Actor System"]
-    Kernel["Governed Kernel<br/>invoke / inspect / control"]
+    Core["Concurrency / Execution Core<br/>invoke / inspect / control"]
     Runtime["SBCL / Common Lisp"]
 
     React --> Actor
-    Actor --> Kernel
-    Kernel --> Runtime
+    Actor --> Core
+    Core --> Runtime
 ```
 
 ## The Three Truths
@@ -143,13 +143,13 @@ sequenceDiagram
     participant Chat as ContextChatActor
     participant Gov as GovernanceActor
     participant Runtime as RuntimeActor
-    participant Kernel as Governed Kernel
+    participant Core as Execution Services
 
     UI->>Chat: submit intent
     Chat->>Gov: RequestExecution
     Gov->>Runtime: AuthorizeRuntimeEvaluation
-    Runtime->>Kernel: invoke
-    Kernel-->>Runtime: result / evidence
+    Runtime->>Core: invoke
+    Core-->>Runtime: result / evidence
     Runtime-->>Chat: reply
     Chat-->>UI: project governed outcome
 ```
@@ -157,14 +157,14 @@ sequenceDiagram
 The older static PNG diagrams have been retired from the primary docs in favor of the Mermaid-backed architecture pages:
 
 - [Architecture and Design]({{ '/architecture.html' | relative_url }})
-- [Actor Runtime And Governed Kernel]({{ '/robust-actor-kernel-architecture.html' | relative_url }})
+- [Actor Runtime, Concurrency, And Governance]({{ '/robust-actor-kernel-architecture.html' | relative_url }})
 - [Actor System Surface]({{ '/actor-system-panel.html' | relative_url }})
 
 ## Current Maturity
 
 The present system should be understood as:
 
-- implemented enough to operate as a real shell, provider runtime, conversation runtime, compatibility kernel, desktop host, and governed workflow substrate
+- implemented enough to operate as a real shell, provider runtime, conversation runtime, desktop host, and governed workflow substrate over a shared execution core
 - architecturally environment-first, with `agent-session` compatibility retained only where adapter and persistence bridges still exist
 - beyond target-architecture gap closure, with current work focused on enhancement, hardening, QA depth, and backend realism
 

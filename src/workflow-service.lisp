@@ -3,14 +3,14 @@
 (defun workflow-record-associated-execution-summaries (session record)
   (let ((environment (session-bound-environment session)))
     (when environment
-      (let* ((direct (kernel-find-executions-by-target :workflow-record-id
+      (let* ((direct (find-execution-handles-by-target :workflow-record-id
                                                        (workflow-record-id record)
                                                        environment))
-             (via-work-item (kernel-find-executions-by-target :work-item-id
+             (via-work-item (find-execution-handles-by-target :work-item-id
                                                               (workflow-record-work-item-id record)
                                                               environment))
              (combined (append direct via-work-item)))
-        (mapcar #'kernel-execution-summary
+        (mapcar #'execution-handle-summary
                 (remove-duplicates combined
                                    :key #'execution-handle-execution-id
                                    :test #'string=))))))
@@ -65,11 +65,7 @@
                                 :workflow-record-id workflow-record-id
                                 :metadata (list :workflow-record-id workflow-record-id))
    (lambda ()
-     (command-kernel-invoke-service session
-                                    (format nil "Read workflow record ~A." workflow-record-id)
-                                    "workflow/record-detail"
-                                    :authority :operator
-                                    :payload (list :workflow-record-id workflow-record-id)))
+     (query-workflow-record-detail-service session workflow-record-id))
    :workflow/record-detail
    :workflow-record-detail-query
    :workflow-record-id workflow-record-id
